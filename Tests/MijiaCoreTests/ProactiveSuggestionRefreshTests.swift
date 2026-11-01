@@ -179,6 +179,28 @@ struct ProactiveSuggestionRefreshTests {
         #expect(store.lastProactiveRefreshSignature == nil, "a different home must refresh again")
     }
 
+    @Test("Switching homes invalidates the proactive signature for a fresh refresh")
+    func homeSwitchInvalidatesProactiveSignature() async throws {
+        let (store, _) = try await makeStore()
+        store.homeBackend = .xiaomiCloud
+        let content = #"{"suggestions":[{"device":"d1","op":"power","value":false,"confidence":85}]}"#
+        store.assistantResolverOverride = ModelIntentResolver(config: AssistantConfig(
+            baseURL: "http://127.0.0.1:9/v1", model: "glm-5.1", apiKey: "test"
+        ), transport: { request in
+            let data = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": content]]]])
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+
+        store.presentAssistantBar()
+        await store.proactiveRefreshTask?.value
+        #expect(store.lastProactiveRefreshSignature != nil)
+
+        // A different Mi Home with the same ambient signature must still be refreshed (#116 re-review).
+        store.selectMiHome("home-2")
+        #expect(store.lastProactiveRefreshSignature == nil)
+        #expect(store.maybeRefreshProactiveSuggestionsInBackground() != nil, "the new home's context is not yet served")
+    }
+
     @Test("Presenting the bar never clobbers a pending choice or a running command")
     func presentKeepsActiveAssistantState() async throws {
         let (store, _) = try await makeStore()
