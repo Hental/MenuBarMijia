@@ -755,9 +755,11 @@ struct SensorCardView: View {
         return .comfy
     }
 
-    private var tempColor: Color { DesignTokens.Orb.climate }
+    /// Metric tints for glyphs, rings and chart marks. The orb colours are badge-strength; on a
+    /// sensor card they glow, so readings use the calmer scheme-aware pair.
+    private var tempColor: Color { DesignTokens.Reading.temperature(colorScheme) }
 
-    private var humidityColor: Color { DesignTokens.Orb.fan }
+    private var humidityColor: Color { DesignTokens.Reading.humidity(colorScheme) }
 
     private func batterySymbol(_ b: Int) -> String {
         switch b {

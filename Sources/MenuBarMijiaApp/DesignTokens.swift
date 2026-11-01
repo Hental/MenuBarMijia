@@ -31,6 +31,23 @@ enum DesignTokens {
         static let sensor = Color(red: 0.00, green: 0.48, blue: 1.00)
     }
 
+    /// Data-mark tints for readings. The orb colours above are Control Center badges: at glyph,
+    /// ring and 24 pt reading scale on a card they read as a glow, so the sensor card draws its
+    /// marks from this calmer, scheme-aware pair instead.
+    enum Reading {
+        static func temperature(_ scheme: ColorScheme) -> Color {
+            scheme == .dark
+                ? Color(red: 0.45, green: 0.63, blue: 0.90)
+                : Color(red: 0.11, green: 0.36, blue: 0.75)
+        }
+
+        static func humidity(_ scheme: ColorScheme) -> Color {
+            scheme == .dark
+                ? Color(red: 0.31, green: 0.66, blue: 0.64)
+                : Color(red: 0.07, green: 0.46, blue: 0.44)
+        }
+    }
+
     /// Air-quality verdict tints in the air-purifier drawer and the fan-speed slider track.
     enum Purifier {
         static let good = Color(red: 0.16, green: 0.72, blue: 0.38)
