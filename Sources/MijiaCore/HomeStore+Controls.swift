@@ -2,6 +2,16 @@ import Foundation
 
 // Primary toggle and detail-drawer controls backed by optimistic state (#48).
 extension HomeStore {
+    /// Records manual card actions into the habit memory for the current time bucket (#113).
+    /// Returns the receipt so an undo banner can roll the record back; nil when learning is off.
+    func recordManualHabits(intents: [DeviceIntent]) -> UserHabitMemory.RecordingReceipt? {
+        guard isHabitLearningEnabled, !intents.isEmpty else { return nil }
+        var memory = userHabitMemory
+        let receipt = memory.record(utterance: nil, intents: intents, devices: devices, scenes: scenes)
+        userHabitMemory = memory
+        return receipt
+    }
+
     // MARK: - Primary Toggle & Manual Light Memory
 
     @discardableResult
@@ -80,15 +90,6 @@ extension HomeStore {
                 recordManualLightUse(device.id)
             }
             lockOptimistic(device.id, duration: .seconds(2.2))
-
-            var memory = userHabitMemory
-            memory.record(
-                utterance: nil,
-                intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))],
-                devices: devices,
-                scenes: scenes
-            )
-            if isHabitLearningEnabled { userHabitMemory = memory }
         }
 
         return Task {
@@ -96,6 +97,9 @@ extension HomeStore {
                 try await executeDeviceCommand(cmd)
                 if isMomentaryButton {
                     self.showToast(L10n.tr("已触发 \(device.name)", "Triggered \(device.name)"), isError: false)
+                } else {
+                    // Only a confirmed command counts as a habit; a failed toggle rolls back (#113).
+                    self.recordManualHabits(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
                 }
                 return true
             } catch {
@@ -135,7 +139,8 @@ extension HomeStore {
             key: "\(deviceId).brightness",
             deviceId: deviceId,
             fallback: previous,
-            command: .setLightBrightness(entityId: s.entityId, percent: percent)
+            command: .setLightBrightness(entityId: s.entityId, percent: percent),
+            habitIntents: [.init(targetId: deviceId, operation: .brightness(percent))]
         )
     }
 
@@ -154,7 +159,8 @@ extension HomeStore {
             key: "\(deviceId).colortemp",
             deviceId: deviceId,
             fallback: previous,
-            command: .setLightColorTemp(entityId: s.entityId, kelvin: kelvin)
+            command: .setLightColorTemp(entityId: s.entityId, kelvin: kelvin),
+            habitIntents: [.init(targetId: deviceId, operation: .colorTemperature(kelvin))]
         )
     }
 
@@ -167,20 +173,13 @@ extension HomeStore {
         devices[idx].kind = .light(s)
         lockOptimistic(deviceId, duration: .seconds(2.2))
 
-        var memory = userHabitMemory
-        memory.record(
-            utterance: nil,
-            intents: [DeviceIntent(targetId: deviceId, operation: .lightEffect(effect))],
-            devices: devices,
-            scenes: scenes
-        )
-        if isHabitLearningEnabled { userHabitMemory = memory }
         recordManualLightUse(deviceId)
 
         dispatchImmediate(
             deviceId: deviceId,
             fallback: previous,
-            command: .setLightEffect(entityId: s.entityId, effect: effect)
+            command: .setLightEffect(entityId: s.entityId, effect: effect),
+            habitIntents: [.init(targetId: deviceId, operation: .lightEffect(effect))]
         )
     }
 
@@ -197,7 +196,8 @@ extension HomeStore {
             key: "\(deviceId).temp",
             deviceId: deviceId,
             fallback: previous,
-            command: .setClimateTemperature(entityId: s.entityId, temperature: nextTemp)
+            command: .setClimateTemperature(entityId: s.entityId, temperature: nextTemp),
+            habitIntents: [.init(targetId: deviceId, operation: .targetTemperature(nextTemp))]
         )
     }
 
@@ -213,7 +213,8 @@ extension HomeStore {
         dispatchImmediate(
             deviceId: deviceId,
             fallback: previous,
-            command: .setClimateMode(entityId: s.entityId, hvacMode: mode)
+            command: .setClimateMode(entityId: s.entityId, hvacMode: mode),
+            habitIntents: [.init(targetId: deviceId, operation: .hvacMode(mode))]
         )
     }
 
@@ -228,7 +229,8 @@ extension HomeStore {
         dispatchImmediate(
             deviceId: deviceId,
             fallback: previous,
-            command: .setClimateFanMode(entityId: s.entityId, fanMode: fanMode)
+            command: .setClimateFanMode(entityId: s.entityId, fanMode: fanMode),
+            habitIntents: [.init(targetId: deviceId, operation: .fanSpeed(fanMode))]
         )
     }
 
@@ -264,7 +266,9 @@ extension HomeStore {
             key: "\(deviceId).fanpercent",
             deviceId: deviceId,
             fallback: previous,
-            command: .setFanPercentage(entityId: s.entityId, percent: clamped)
+            command: .setFanPercentage(entityId: s.entityId, percent: clamped),
+            habitIntents: s.availablePresetModes.first(where: { $0.caseInsensitiveCompare("Favorite") == .orderedSame })
+                .map { [DeviceIntent(targetId: deviceId, operation: .fanSpeed($0))] } ?? []
         )
     }
 
@@ -280,7 +284,8 @@ extension HomeStore {
         dispatchImmediate(
             deviceId: deviceId,
             fallback: previous,
-            command: .setFanPresetMode(entityId: s.entityId, presetMode: preset)
+            command: .setFanPresetMode(entityId: s.entityId, presetMode: preset),
+            habitIntents: [.init(targetId: deviceId, operation: .fanSpeed(preset))]
         )
     }
 
@@ -598,11 +603,13 @@ extension HomeStore {
     private func dispatchImmediate(
         deviceId: String,
         fallback: SmartDevice,
-        command: DeviceCommand
+        command: DeviceCommand,
+        habitIntents: [DeviceIntent] = []
     ) {
         Task {
             do {
                 try await executeDeviceCommand(command)
+                recordManualHabits(intents: habitIntents)
             } catch {
                 if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
                     self.devices[idx] = fallback
@@ -617,14 +624,16 @@ extension HomeStore {
         key: String,
         deviceId: String,
         fallback: SmartDevice,
-        command: DeviceCommand
+        command: DeviceCommand,
+        habitIntents: [DeviceIntent] = []
     ) {
         debounceTasks[key]?.cancel()
         debounceTasks[key] = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(280))
+            try? await Task.sleep(for: self?.controlDebounceInterval ?? .milliseconds(280))
             guard !Task.isCancelled, let self else { return }
             do {
                 try await self.executeDeviceCommand(command)
+                self.recordManualHabits(intents: habitIntents)
             } catch {
                 if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
                     self.devices[idx] = fallback

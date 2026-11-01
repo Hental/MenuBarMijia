@@ -9,6 +9,7 @@ import {
   ModelActionPolicy,
   ModelIntentResolver,
   UndoPhrase,
+  UserHabitMemory,
   assistantEndpointIdentity,
   buildAssistantContext,
   buildHabitSummary,
@@ -59,6 +60,7 @@ import {
   cloudRefreshDue,
   CLOUD_REFRESH_HIDDEN_MS,
   CLOUD_REFRESH_VISIBLE_MS,
+  type DeviceIntent,
   type ScheduledCommand,
   type SmartDevice,
 } from "../src/core/models.js";
@@ -1772,5 +1774,278 @@ describe("Windows update check (#39)", () => {
 
     const roundTrip = parseUpdateState(serializeUpdateState({ lastCheckedAtMs: 123, release: parsed }));
     assert.deepEqual(roundTrip.release, parsed);
+  });
+});
+
+describe("Cross-platform habit memory corpus (#113)", () => {
+  const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/habit_golden.json"), "utf8");
+  const corpus = JSON.parse(raw) as {
+    devices: SmartDevice[];
+    scenes: Array<{ id: string; name: string; entityId: string }>;
+    memoryCases: Array<{
+      name: string;
+      hour: number;
+      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      recordIntents: Array<{ targetId: string; kind: string; value: unknown }>;
+      expectReceipt: Array<{
+        bucket: string;
+        targetId: string;
+        operationKey: string;
+        previousCount: number | null;
+      }> | null;
+      entriesAfterRecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      expectUnrecord: boolean;
+      entriesAfterUnrecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+    }>;
+    topSuggestionCases: Array<{
+      name: string;
+      hour: number;
+      deviceIds: string[];
+      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      favoriteIds: string[];
+      environment: Array<{ roomName: string; temperature: number; humidity: number }>;
+      limit: number;
+      expected: Array<Array<{ targetId: string; kind: string; value: unknown }>>;
+    }>;
+  };
+
+  const toIntent = (item: { targetId: string; kind: string; value: unknown }): DeviceIntent => {
+    switch (item.kind) {
+      case "power": return { targetId: item.targetId, operation: { kind: "power", isOn: Boolean(item.value) } };
+      case "brightness": return { targetId: item.targetId, operation: { kind: "brightness", percent: Number(item.value) } };
+      case "colorTemperature": return { targetId: item.targetId, operation: { kind: "colorTemperature", kelvin: Number(item.value) } };
+      case "lightEffect": return { targetId: item.targetId, operation: { kind: "lightEffect", effect: String(item.value) } };
+      case "hvacMode": return { targetId: item.targetId, operation: { kind: "hvacMode", mode: String(item.value) } };
+      case "targetTemperature": return { targetId: item.targetId, operation: { kind: "targetTemperature", celsius: Number(item.value) } };
+      case "fanSpeed": return { targetId: item.targetId, operation: { kind: "fanSpeed", speed: String(item.value) } };
+      case "oscillation": return { targetId: item.targetId, operation: { kind: "oscillation", enabled: Boolean(item.value) } };
+      case "activateScene": return { targetId: item.targetId, operation: { kind: "activateScene" } };
+      case "brightnessStep": return { targetId: item.targetId, operation: { kind: "brightnessStep", delta: Number(item.value) } };
+      case "temperatureStep": return { targetId: item.targetId, operation: { kind: "temperatureStep", delta: Number(item.value) } };
+      default: throw new Error(`unknown operation kind: ${item.kind}`);
+    }
+  };
+
+  const encodeIntent = (intent: DeviceIntent) => {
+    const op = intent.operation;
+    const value =
+      (op as { isOn?: unknown }).isOn ??
+      (op as { percent?: unknown }).percent ??
+      (op as { kelvin?: unknown }).kelvin ??
+      (op as { effect?: unknown }).effect ??
+      (op as { mode?: unknown }).mode ??
+      (op as { celsius?: unknown }).celsius ??
+      (op as { speed?: unknown }).speed ??
+      (op as { enabled?: unknown }).enabled ??
+      (op as { delta?: unknown }).delta ??
+      true;
+    return { targetId: intent.targetId, kind: op.kind, value };
+  };
+
+  const memoryFrom = (entries: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>) =>
+    new UserHabitMemory(entries.map((e) => ({ ...e })));
+
+  it("matches record/unrecord semantics shared with MijiaCore UserHabitMemory", () => {
+    for (const item of corpus.memoryCases) {
+      const memory = memoryFrom(item.entriesBefore);
+      const now = new Date(2026, 9, 16, item.hour, 30);
+      const intents = item.recordIntents.map(toIntent);
+      const receipt = memory.record(intents, corpus.devices, corpus.scenes, now);
+      assert.deepEqual(receipt?.entries ?? null, item.expectReceipt, item.name);
+      assert.deepEqual(memory.entries, item.entriesAfterRecord, item.name);
+      if (item.expectUnrecord && receipt) {
+        memory.unrecord(receipt);
+        assert.deepEqual(memory.entries, item.entriesAfterUnrecord, item.name);
+      }
+    }
+  });
+
+  it("matches the Top-4 proactive engine shared with MijiaCore", () => {
+    for (const item of corpus.topSuggestionCases) {
+      const memory = memoryFrom(item.entriesBefore);
+      const now = new Date(2026, 9, 16, item.hour, 30);
+      const devices = item.deviceIds.map((id) => {
+        const dev = corpus.devices.find((d) => d.id === id);
+        assert.ok(dev, `${item.name}: unknown device ${id}`);
+        return dev;
+      });
+      const readings = item.environment.map((r) => ({
+        id: r.roomName,
+        label: r.roomName,
+        roomName: r.roomName,
+        temperature: r.temperature,
+        humidity: r.humidity,
+        battery: null,
+      }));
+      const suggestions = memory.topSuggestions({
+        now,
+        devices,
+        scenes: corpus.scenes,
+        limit: item.limit,
+        favoriteIds: item.favoriteIds,
+        environmentReadings: readings,
+      });
+      assert.deepEqual(
+        suggestions.map((s) => s.intents.map(encodeIntent)),
+        item.expected,
+        item.name,
+      );
+    }
+  });
+});
+
+describe("Proactive suggestion resolver (#113)", () => {
+  const ceiling: SmartDevice = {
+    id: "dev_ceiling",
+    name: "客厅吸顶灯",
+    roomId: "ke_ting",
+    roomName: "客厅",
+    model: "yeelink.light.ceiling20",
+    isOnline: true,
+    kind: {
+      kind: "light",
+      entityId: "light.ceiling",
+      isOn: true,
+      brightnessPercent: 80,
+      colorTempKelvin: 4000,
+      minKelvin: 2700,
+      maxKelvin: 6500,
+      currentEffect: null,
+      availableEffects: ["Day", "Night"],
+    },
+  };
+  const ac: SmartDevice = {
+    id: "dev_ac",
+    name: "客厅空调",
+    roomId: "ke_ting",
+    roomName: "客厅",
+    model: "xiaomi.aircondition.mt0",
+    isOnline: true,
+    kind: {
+      kind: "climate",
+      entityId: "climate.ac",
+      isOn: true,
+      hvacMode: "cool",
+      availableModes: ["off", "cool", "heat"],
+      targetTemperature: 25,
+      currentTemperature: 29.5,
+      minTemp: 16,
+      maxTemp: 30,
+      step: 1,
+      fanMode: null,
+      availableFanModes: [],
+    },
+  };
+  const devices = [ceiling, ac];
+  const context = buildAssistantContext({
+    now: new Date(2026, 9, 16, 21, 30),
+    readings: [{ id: "r1", label: "温湿度计", roomName: "客厅", temperature: 29.5, humidity: 60, battery: null }],
+    devices,
+  });
+
+  it("builds the proactive chat prompt and parses ranked suggestions", async () => {
+    const captured: Array<{ url: string; body: string }> = [];
+    const resolver = new ModelIntentResolver(
+      { baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "k" },
+      async (req) => {
+        captured.push({ url: req.url, body: req.body ?? "" });
+        const content = '{"suggestions":[{"device":"d1","op":"power","value":false,"confidence":0.9},{"device":"d2","op":"temperature","value":26,"confidence":85}]}';
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ choices: [{ message: { content } }] }),
+        };
+      },
+    );
+
+    const suggestions = await resolver.recommendProactiveSuggestions(devices, [], context);
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0]?.url, "https://api.deepseek.com/v1/chat/completions");
+    const body = JSON.parse(captured[0]?.body ?? "{}") as { messages: Array<{ role: string; content: string }> };
+    assert.equal(body.messages[0]?.role, "system");
+    assert.match(body.messages[0]?.content ?? "", /主动建议引擎/);
+    assert.match(body.messages[0]?.content ?? "", /catalog|设备/);
+    // Confidence 0.9 normalizes to 90 and ranks ahead of 85; temperature decodes to targetTemperature.
+    assert.deepEqual(
+      suggestions.map((s) => [s.confidencePercent, s.intents.map((i) => [i.targetId, i.operation.kind])]),
+      [[90, [["dev_ceiling", "power"]]], [85, [["dev_ac", "targetTemperature"]]]],
+    );
+  });
+
+  it("builds proactive SystemOne heads and parses ranked answers", async () => {
+    const captured: Array<{ url: string; body: string }> = [];
+    const resolver = new ModelIntentResolver(
+      { baseURL: "https://api.typesafe.ai", model: "jev-latest", apiKey: "k" },
+      async (req) => {
+        captured.push({ url: req.url, body: req.body ?? "" });
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            answers: {
+              dev_d2: { choice: "cool_26", probabilities: { cool_26: 0.9 } },
+              dev_d1: { choice: "none", probabilities: { power_off: 0.5 } },
+            },
+          }),
+        };
+      },
+    );
+
+    const suggestions = await resolver.recommendProactiveSuggestions(devices, [], context);
+
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0]?.url, "https://api.typesafe.ai/v1/systemone");
+    const body = JSON.parse(captured[0]?.body ?? "{}") as {
+      state: Record<string, unknown>;
+      questions: Record<string, { instructions: string }>;
+    };
+    assert.equal(body.state["environment"], "客厅 29.5°C 60%");
+    assert.equal(
+      body.state["active_devices"],
+      "客厅吸顶灯(开 亮度80% 可用模式:Day/Night)、客厅空调(cool 25°C 可用模式:off/cool/heat 温度范围:16-30°C)",
+    );
+    assert.match(body.questions["dev_d1"]?.instructions ?? "", /proactive adjustment/);
+    // cool_26 expands to mode + temperature; the none head still surfaces its runner-up.
+    assert.deepEqual(
+      suggestions.map((s) => [s.confidencePercent, s.intents.map((i) => [i.targetId, i.operation.kind])]),
+      [[90, [["dev_ac", "hvacMode"], ["dev_ac", "targetTemperature"]]], [50, [["dev_ceiling", "power"]]]],
+    );
+  });
+});
+
+describe("Habit-aware ambient summary (#113)", () => {
+  it("includes time-bucket habits in the Jev state summary", () => {
+    const light: SmartDevice = {
+      id: "dev_ceiling",
+      name: "客厅吸顶灯",
+      roomId: "ke_ting",
+      roomName: "客厅",
+      model: "yeelink.light.ceiling20",
+      isOnline: true,
+      kind: {
+        kind: "light",
+        entityId: "light.ceiling",
+        isOn: true,
+        brightnessPercent: 80,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [],
+      },
+    };
+    const memory = new UserHabitMemory([
+      { bucket: "夜晚", targetId: "dev_ceiling", operationKey: "power:off", count: 3 },
+    ]);
+    const summary = buildHabitSummary(
+      true,
+      [{ phrase: "有点热", reply: "已将主卧空调设为 25°C" }],
+      memory,
+      [light],
+      [],
+      new Date(2026, 9, 16, 21, 30),
+    );
+    assert.match(summary, /^夜晚常做：关闭客厅吸顶灯\(3次\)。个人口头禅：/);
   });
 });

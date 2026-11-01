@@ -1550,3 +1550,100 @@ describe("Air purifier support (#98)", () => {
     assert.equal(saved["appearance"], "dark");
   });
 });
+
+describe("Manual habit learning and proactive Top-4 (#113)", () => {
+  const settingsKey = "menumijia.windows.settings.v2";
+
+  function habitEntries(): Array<{ bucket: string; targetId: string; operationKey: string; count: number }> {
+    const parsed = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitEntries?: Array<{ bucket: string; targetId: string; operationKey: string; count: number }> };
+    return parsed.habitEntries ?? [];
+  }
+
+  it("records a time-bucket habit for a manual card toggle and rolls it back on undo", async () => {
+    startDemo();
+    await click('[data-toggle-device="light.living_ceiling"]');
+
+    const entries = habitEntries();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.targetId, "light.living_ceiling");
+    assert.equal(entries[0]?.operationKey, "power:off");
+    assert.equal(entries[0]?.count, 1);
+    assert.match(entries[0]?.bucket ?? "", /^(清晨|午间|下午|夜晚|深夜)$/);
+
+    await click("#btn-undo");
+    assert.equal(habitEntries().length, 0);
+  });
+
+  it("records every committed slider gesture with its final value", async () => {
+    startDemo();
+    await click('[data-expand-device="light.living_ceiling"]');
+    await setRange('[data-brightness="light.living_ceiling"]', "30");
+    await setRange('[data-brightness="light.living_ceiling"]', "42");
+
+    // Each `change` event is one committed gesture on Windows, so each trains one habit.
+    assert.deepEqual(habitEntries().map((e) => e.operationKey), ["brightness:30", "brightness:42"]);
+  });
+
+  it("shows four zero-delay proactive suggestions right after opening", async () => {
+    startDemo();
+    // Demo home: two lights on (全屋关灯), then running AC, plug, and camera power-offs.
+    const pills = [...document.querySelectorAll<HTMLElement>("[data-proactive-id]")];
+    assert.equal(pills.length, 4);
+    assert.match(pills[0]?.textContent ?? "", /全屋关灯/);
+  });
+
+  it("executes a proactive suggestion and records it as a habit", async () => {
+    startDemo();
+    await click('[data-proactive-id^="builtin:lightsOff"]');
+    await waitFor(() => habitEntries().length > 0);
+    assert.ok(habitEntries().every((e) => e.operationKey === "power:off"));
+    // The executed action disappears from the strip because the lights are off now.
+    await waitFor(() => document.querySelector('[data-proactive-id^="builtin:lightsOff"]') === null);
+  });
+
+  it("records a scene quick action through the natural command flow", async () => {
+    startDemo();
+    await click('[data-scene-cmd="关闭所有灯"]');
+    await waitFor(() => habitEntries().length > 0);
+
+    const entries = habitEntries();
+    assert.ok(entries.length >= 1);
+    assert.ok(entries.every((e) => e.operationKey === "power:off"));
+    assert.ok(entries.some((e) => e.targetId === "light.living_ceiling"));
+
+    await click("#btn-undo");
+    assert.equal(habitEntries().length, 0);
+  });
+
+  it("learns nothing when habit learning is disabled", async () => {
+    localStorage.setItem(settingsKey, JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      habitLearningEnabled: false,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-toggle-device="light.living_ceiling"]');
+    await click('[data-scene-cmd="关闭所有灯"]');
+    await setImmediate();
+    assert.equal(habitEntries().length, 0);
+  });
+});
+
+describe("Scene habit learning (#113 review fix)", () => {
+  const settingsKey = "menumijia.windows.settings.v2";
+
+  function habitEntries(): Array<{ targetId: string; operationKey: string; count: number }> {
+    const parsed = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitEntries?: Array<{ targetId: string; operationKey: string; count: number }> };
+    return parsed.habitEntries ?? [];
+  }
+
+  it("executes a typed scene command and records its habit", async () => {
+    startDemo();
+    await command("执行回家模式");
+    await waitFor(() => habitEntries().length > 0);
+
+    const entries = habitEntries();
+    assert.deepEqual(entries.map((e) => [e.targetId, e.operationKey]), [["scene.home", "scene:activate"]]);
+    assert.match(document.body.textContent ?? "", /已执行回家模式/);
+  });
+});

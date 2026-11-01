@@ -22,6 +22,7 @@ extension HomeStore {
         Task {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
+                recordManualHabits(intents: [.init(targetId: scene.id, operation: .activateScene)])
                 showToast(L10n.tr("已触发场景：\(scene.name)", "Activated scene: \(scene.name)"))
                 return true
             } catch {
@@ -31,17 +32,23 @@ extension HomeStore {
         }
     }
 
-    public func executeQuickAction(_ action: QuickAction, undoBannerDuration: TimeInterval? = nil) {
+    public func executeQuickAction(
+        _ action: QuickAction,
+        undoBannerDuration: TimeInterval? = nil,
+        recordsHabits: Bool = true
+    ) {
         let previousSnapshot = devices
         var commands: [DeviceCommand] = []
         var restoreCommands: [DeviceCommand] = []
         var affectedDeviceIds: Set<String> = []
+        var habitIntents: [DeviceIntent] = []
 
         switch action {
         case .lightsOff:
             for idx in devices.indices where devices[idx].isOnline {
                 guard case .light(var s) = devices[idx].kind, s.isOn else { continue }
                 affectedDeviceIds.insert(devices[idx].id)
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                 lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                 commands.append(.setLightPower(entityId: s.entityId, isOn: false))
                 restoreCommands.append(.setLightPower(entityId: s.entityId, isOn: true))
@@ -74,6 +81,8 @@ extension HomeStore {
             for idx in targetIndices {
                 guard case .light(var s) = devices[idx].kind else { continue }
                 affectedDeviceIds.insert(devices[idx].id)
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .brightness(15)))
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .colorTemperature(max(s.minKelvin, 2700))))
                 lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                 let prevOn = s.isOn
                 let prevBri = s.brightnessPercent ?? 80
@@ -99,6 +108,7 @@ extension HomeStore {
                 case .climate(var s) where s.isOn && s.hvacMode != "off":
                     let prevMode = s.hvacMode
                     affectedDeviceIds.insert(devices[idx].id)
+                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                     lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                     commands.append(.setClimatePower(entityId: s.entityId, isOn: false, fallbackMode: prevMode))
                     restoreCommands.append(.setClimatePower(entityId: s.entityId, isOn: true, fallbackMode: prevMode))
@@ -107,6 +117,7 @@ extension HomeStore {
                     devices[idx].kind = .climate(s)
                 case .fan(var s) where s.isOn:
                     affectedDeviceIds.insert(devices[idx].id)
+                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                     lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                     commands.append(.setFanPower(entityId: s.entityId, isOn: false))
                     restoreCommands.append(.setFanPower(entityId: s.entityId, isOn: true))
@@ -123,11 +134,13 @@ extension HomeStore {
             return
         }
 
+        let habitReceipt = recordsHabits ? recordManualHabits(intents: habitIntents) : nil
         scheduleUndoBanner(
             title: L10n.tr("已执行「\(action.title)」", "Executed \"\(action.title)\""),
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: affectedDeviceIds.count,
+            habitReceipt: habitReceipt,
             duration: undoBannerDuration
         )
 
@@ -221,20 +234,27 @@ extension HomeStore {
         let previousSnapshot = devices
         var offCommands: [DeviceCommand] = []
         var restoreCommands: [DeviceCommand] = []
+        var habitIntents: [DeviceIntent] = []
 
         for idx in devices.indices where targetIds.contains(devices[idx].id) {
             guard let change = Self.allOffChange(for: devices[idx]) else { continue }
+            // A vacuum returning home has no power op, so it executes but does not train a habit (#113).
+            if UserHabitMemory.isPowerToggleable(devices[idx]) {
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
+            }
             lockOptimistic(devices[idx].id, duration: .seconds(3.0))
             offCommands.append(change.off)
             restoreCommands.append(change.restore)
             devices[idx].kind = change.kind
         }
 
+        let habitReceipt = recordManualHabits(intents: habitIntents)
         scheduleUndoBanner(
             title: L10n.tr("已关闭 \(offCommands.count) 台设备", "Turned off \(offCommands.count) device(s)"),
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
-            deviceCount: targetIds.count
+            deviceCount: targetIds.count,
+            habitReceipt: habitReceipt
         )
 
         let context = controlContextID

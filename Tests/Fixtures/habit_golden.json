@@ -1,0 +1,576 @@
+{
+  "comment": "Cross-platform habit memory corpus shared by Tests/MijiaCoreTests/GoldenCorpusTests.swift and windows/tests/core.test.ts (#113). Operations use the same flat {targetId, kind, value} encoding as intent_golden.json; `hour` is interpreted in the machine's local time zone by both ends.",
+  "devices": [
+    {
+      "id": "dev_ceiling",
+      "name": "客厅吸顶灯",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "yeelink.light.ceiling20",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.ceiling",
+        "isOn": true,
+        "brightnessPercent": 80,
+        "colorTempKelvin": 4000,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": [
+          "Day",
+          "Night"
+        ]
+      }
+    },
+    {
+      "id": "dev_floor",
+      "name": "落地灯",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "yeelink.light.lamp1",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.floor",
+        "isOn": true,
+        "brightnessPercent": null,
+        "colorTempKelvin": null,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": []
+      }
+    },
+    {
+      "id": "dev_desk",
+      "name": "书房台灯",
+      "roomId": "shu_fang",
+      "roomName": "书房",
+      "model": "yeelink.light.lamp4",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.desk",
+        "isOn": false,
+        "brightnessPercent": null,
+        "colorTempKelvin": null,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": []
+      }
+    },
+    {
+      "id": "dev_ac",
+      "name": "客厅空调",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "xiaomi.aircondition.mt0",
+      "isOnline": true,
+      "kind": {
+        "kind": "climate",
+        "entityId": "climate.ac",
+        "isOn": true,
+        "hvacMode": "cool",
+        "availableModes": [
+          "off",
+          "cool",
+          "heat",
+          "dry",
+          "fan_only",
+          "auto"
+        ],
+        "targetTemperature": 25,
+        "currentTemperature": 29.5,
+        "minTemp": 16,
+        "maxTemp": 30,
+        "step": 1,
+        "fanMode": null,
+        "availableFanModes": [],
+        "swingMode": null,
+        "availableSwingModes": []
+      }
+    },
+    {
+      "id": "dev_plug",
+      "name": "路由器插座",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "chuangmi.plug.m3",
+      "isOnline": true,
+      "kind": {
+        "kind": "plug",
+        "switchEntityId": "switch.plug",
+        "isOn": true,
+        "powerWatts": null,
+        "energyKwh": null,
+        "childLockEntityId": null,
+        "isChildLocked": false
+      }
+    },
+    {
+      "id": "dev_sensor",
+      "name": "温湿度计",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "miaomiaoce.sensor_ht.t1",
+      "isOnline": true,
+      "kind": {
+        "kind": "sensor",
+        "temperature": 29.5,
+        "humidity": 60,
+        "battery": 80
+      }
+    }
+  ],
+  "scenes": [
+    {
+      "id": "scene_movie",
+      "name": "观影模式",
+      "entityId": "scene.movie"
+    }
+  ],
+  "memoryCases": [
+    {
+      "name": "first manual action creates a bucket entry and a receipt",
+      "hour": 21,
+      "entriesBefore": [],
+      "recordIntents": [
+        {
+          "targetId": "dev_ceiling",
+          "kind": "power",
+          "value": true
+        }
+      ],
+      "expectReceipt": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ceiling",
+          "operationKey": "power:on",
+          "previousCount": null
+        }
+      ],
+      "entriesAfterRecord": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ceiling",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "expectUnrecord": true,
+      "entriesAfterUnrecord": []
+    },
+    {
+      "name": "repeat actions increment and the receipt remembers the previous count",
+      "hour": 21,
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 2
+        }
+      ],
+      "recordIntents": [
+        {
+          "targetId": "dev_desk",
+          "kind": "power",
+          "value": true
+        }
+      ],
+      "expectReceipt": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "previousCount": 2
+        }
+      ],
+      "entriesAfterRecord": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 3
+        }
+      ],
+      "expectUnrecord": true,
+      "entriesAfterUnrecord": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "relative steps are never learned",
+      "hour": 21,
+      "entriesBefore": [],
+      "recordIntents": [
+        {
+          "targetId": "dev_ceiling",
+          "kind": "brightnessStep",
+          "value": -20
+        }
+      ],
+      "expectReceipt": null,
+      "entriesAfterRecord": [],
+      "expectUnrecord": false,
+      "entriesAfterUnrecord": []
+    },
+    {
+      "name": "records land in the matching time bucket",
+      "hour": 15,
+      "entriesBefore": [],
+      "recordIntents": [
+        {
+          "targetId": "dev_ac",
+          "kind": "power",
+          "value": true
+        }
+      ],
+      "expectReceipt": [
+        {
+          "bucket": "下午",
+          "targetId": "dev_ac",
+          "operationKey": "power:on",
+          "previousCount": null
+        }
+      ],
+      "entriesAfterRecord": [
+        {
+          "bucket": "下午",
+          "targetId": "dev_ac",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "expectUnrecord": false,
+      "entriesAfterUnrecord": []
+    }
+  ],
+  "topSuggestionCases": [
+    {
+      "name": "habits rank first and the engine pads to four",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug",
+        "dev_sensor"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "favoriteIds": [
+        "dev_desk"
+      ],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_desk",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_plug",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ]
+    },
+    {
+      "name": "favorites, environment trim, and the builtin pad an empty memory",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug",
+        "dev_sensor"
+      ],
+      "entriesBefore": [],
+      "favoriteIds": [
+        "dev_floor",
+        "dev_desk"
+      ],
+      "environment": [
+        {
+          "roomName": "客厅",
+          "temperature": 29.5,
+          "humidity": 60
+        }
+      ],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_desk",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "targetTemperature",
+            "value": 26
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ]
+    },
+    {
+      "name": "cold rooms suggest heating",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ac"
+      ],
+      "entriesBefore": [],
+      "favoriteIds": [],
+      "environment": [
+        {
+          "roomName": "客厅",
+          "temperature": 12,
+          "humidity": 40
+        }
+      ],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "targetTemperature",
+            "value": 22
+          }
+        ]
+      ]
+    },
+    {
+      "name": "no controllable devices means no suggestions",
+      "hour": 21,
+      "deviceIds": [],
+      "entriesBefore": [],
+      "favoriteIds": [],
+      "environment": [
+        {
+          "roomName": "客厅",
+          "temperature": 29.5,
+          "humidity": 60
+        }
+      ],
+      "limit": 4,
+      "expected": []
+    },
+    {
+      "name": "already-satisfied habits are filtered and the builtin backfills",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug",
+        "dev_sensor"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ceiling",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_plug",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ]
+    },
+    {
+      "name": "a color-temperature habit at the current kelvin is filtered and backfilled",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug",
+        "dev_sensor"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ceiling",
+          "operationKey": "ct:4000",
+          "count": 1
+        }
+      ],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_plug",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ]
+    },
+    {
+      "name": "the builtin backfills per-light power-offs up to the limit",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor"
+      ],
+      "entriesBefore": [],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ]
+    }
+  ]
+}

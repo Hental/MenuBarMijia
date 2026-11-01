@@ -110,6 +110,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Voice Interaction** | ✅ Menu bar hold / Hotkey hold / Hands-free | ⚠️ Hands-free only | macOS supports native Speech frameworks; Windows uses WebView speech recognition |
 | **Local Command Parsing** | ✅ Supported | ✅ Supported | Power, brightness, temp, fan speeds, and timers are parsed locally |
 | **Optional AI Assistant** | ✅ Supported | ✅ Supported | Connect Jev, DeepSeek, Ollama, etc. Actions with <80% confidence require confirmation |
+| **Proactive "For You" Suggestions** | ✅ Top 4 chips | ✅ Top 4 pills | Manual card actions train per-time-bucket habits (undo rolls them back); the panel opens with 4 zero-delay actionable picks (habits, starred favorites, running devices, all-lights-off, room climate), and a configured model silently refreshes the cache in the background |
 | **All-Off & Instant Undo** | ✅ Supported | ✅ Supported | A 0.6s hold confirms the action; plugs and vacuums are excluded by default; reversible actions show an undo banner for 10–15s |
 | **Mac Event Automation** | ✅ Supported | — Not yet | Event triggers on screen lock, sleep, wake, and external display connections |
 | **Apple Shortcuts (App Intents)** | ✅ Supported (4 actions) | — Not yet | Toggle Device, Run Scene, Voice Command, Query Room Climate |
@@ -201,7 +202,7 @@ MenuBarMijia is an independent open-source project, not an official Xiaomi app. 
 
 Account credentials and AI keys are stored in the macOS Keychain or Windows Credential Manager. macOS may ask for Keychain permission after an update. When migrating credentials from an older version, the plaintext copy is removed after the Keychain accepts it.
 
-Everyday commands are handled by local rules. You can also connect an AI service of your choice for more complex requests. The request includes your command, device and environment information, and any habit summary you have enabled. Speech recognition uses system services; on-device-only recognition is available for supported languages.
+Everyday commands are handled by local rules. You can also connect an AI service of your choice for more complex requests. The request includes your command, device and environment information, and any habit summary you have enabled. Manual card actions also train local time-bucket habit memories (used only for the "For You" suggestions); the habit learning toggle turns this off, learned entries can be reviewed and cleared, and undoing a banner rolls the matching records back. Speech recognition uses system services; on-device-only recognition is available for supported languages.
 
 To help prevent mistakes, low-confidence AI suggestions and actions such as turning on a heater, switching a plug, or starting a vacuum wait for your confirmation. URL controls also ask first by default, with an option to enable direct control.
 

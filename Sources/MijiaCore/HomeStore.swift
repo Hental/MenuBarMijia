@@ -141,6 +141,9 @@ public final class HomeStore {
         didSet { userDefaults.set(isHabitLearningEnabled, forKey: "assistant_habit_learning_enabled") }
     }
 
+    /// Test seam for the manual-control debounce window (sliders fire continuously, #113).
+    var controlDebounceInterval: Duration = .milliseconds(280)
+
     /// Ask macOS to keep speech recognition on this Mac (no audio sent to Apple) when the language supports it.
     /// Defaults on for privacy; an explicitly saved `false` still wins (#50).
     public var prefersOnDeviceSpeech: Bool = true {
@@ -430,6 +433,10 @@ public final class HomeStore {
     public internal(set) var pendingCloudConsent: PendingCloudConsent?
     public internal(set) var assistantSuggestions: [AssistantSuggestion] = []
     public internal(set) var isProactiveRecommending: Bool = false
+    /// Ambient signature (time bucket + rounded readings) the suggestion cache was built from (#113).
+    var lastProactiveRefreshSignature: String?
+    /// The running silent refresh, exposed so tests can await it.
+    var proactiveRefreshTask: Task<Void, Never>?
     var assistantResetTask: Task<Void, Never>?
     /// Test seam replacing the network resolver built from `assistantConfig`.
     var assistantResolverOverride: ModelIntentResolver?

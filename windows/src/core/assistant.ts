@@ -1379,18 +1379,345 @@ export function buildEnvironmentSummary(readings: readonly EnvironmentReading[])
 }
 
 /**
- * Windows' habit memory only stores phrase → action pairs (`learnedShortcuts`), not the
- * macOS time-bucket/frequency entries. TODO-#38: replace this with a full habit summary
- * once Windows tracks per-bucket counts; the `user_habits` field name must stay aligned
- * with macOS.
+ * Windows' habit memory mirrors macOS `UserHabitMemory` time-bucket entries (#113).
+ * Phrase → action pairs (`learnedShortcuts`) stay separate; the `user_habits` field
+ * name and bucket words must stay aligned with macOS (#38).
  */
 export function buildHabitSummary(
   enabled: boolean,
-  shortcuts: readonly HabitPhraseSummary[]
+  shortcuts: readonly HabitPhraseSummary[],
+  memory?: Readonly<{ entries: readonly HabitEntry[] }>,
+  devices: readonly SmartDevice[] = [],
+  scenes: readonly HomeScene[] = [],
+  now: Date = new Date(),
 ): string {
-  if (!enabled || shortcuts.length === 0) return "";
-  const top = shortcuts.slice(0, 4).map((shortcut) => `「${shortcut.phrase}」→${shortcut.reply}`);
-  return `个人口头禅：${top.join("；")}`;
+  if (!enabled) return "";
+  const parts: string[] = [];
+  if (memory && memory.entries.length > 0) {
+    const bucket = timeBucketLabel(now.getHours());
+    const topForBucket = memory.entries
+      .filter((entry) => entry.bucket === bucket)
+      .slice(0, 4)
+      .map((entry) => {
+        const operation = decodeHabitOperation(entry.operationKey);
+        if (!operation) return null;
+        const title = IntentReply.describe([{ targetId: entry.targetId, operation }], devices, scenes).replace(/^已/, "");
+        return `${title}(${entry.count}次)`;
+      })
+      .filter((v): v is string => v !== null);
+    if (topForBucket.length > 0) parts.push(`${bucket}常做：${topForBucket.join("、")}`);
+  }
+  if (shortcuts.length > 0) {
+    const top = shortcuts.slice(0, 4).map((shortcut) => `「${shortcut.phrase}」→${shortcut.reply}`);
+    parts.push(`个人口头禅：${top.join("；")}`);
+  }
+  return parts.join("。");
+}
+
+// MARK: - Full-Channel Habit Memory & Top-4 Engine (#113)
+
+/** One learned "in this time bucket, this device gets this operation" counter. */
+export interface HabitEntry {
+  bucket: string;
+  targetId: string;
+  operationKey: string;
+  count: number;
+}
+
+export interface HabitEntryChange {
+  readonly bucket: string;
+  readonly targetId: string;
+  readonly operationKey: string;
+  /** `null` means the entry was inserted by the call and should be removed on undo. */
+  readonly previousCount: number | null;
+}
+
+/** What one `record` call changed, so undoing the action can take the habit back (#34). */
+export interface HabitRecordingReceipt {
+  readonly entries: readonly HabitEntryChange[];
+}
+
+export const MAX_HABIT_ENTRIES = 60;
+
+/** Encodes an operation into the stable habit key; `null` for relative steps (never learned). */
+export function encodeHabitOperation(op: IntentOperation): string | null {
+  switch (op.kind) {
+    case "power": return op.isOn ? "power:on" : "power:off";
+    case "lightEffect": return `effect:${op.effect}`;
+    case "brightness": return `brightness:${op.percent}`;
+    case "colorTemperature": return `ct:${op.kelvin}`;
+    case "hvacMode": return `hvac:${op.mode}`;
+    case "targetTemperature": return `temp:${Math.round(op.celsius)}`;
+    case "activateScene": return "scene:activate";
+    case "fanSpeed": return `fan:${op.speed}`;
+    case "oscillation": return op.enabled ? "swing:on" : "swing:off";
+    case "brightnessStep":
+    case "temperatureStep": return null;
+  }
+}
+
+export function decodeHabitOperation(key: string): IntentOperation | null {
+  const sep = key.indexOf(":");
+  if (sep < 0) return null;
+  const head = key.slice(0, sep);
+  const value = key.slice(sep + 1);
+  switch (head) {
+    case "power": return value === "on" ? { kind: "power", isOn: true } : value === "off" ? { kind: "power", isOn: false } : null;
+    case "effect": return value ? { kind: "lightEffect", effect: value } : null;
+    case "brightness": return Number.isFinite(Number(value)) ? { kind: "brightness", percent: Number(value) } : null;
+    case "ct": return Number.isFinite(Number(value)) ? { kind: "colorTemperature", kelvin: Number(value) } : null;
+    case "hvac": return value ? { kind: "hvacMode", mode: value } : null;
+    case "temp": return Number.isFinite(Number(value)) ? { kind: "targetTemperature", celsius: Number(value) } : null;
+    case "scene": return value === "activate" ? { kind: "activateScene" } : null;
+    case "fan": return value ? { kind: "fanSpeed", speed: value } : null;
+    case "swing": return value === "on" ? { kind: "oscillation", enabled: true } : value === "off" ? { kind: "oscillation", enabled: false } : null;
+    default: return null;
+  }
+}
+
+/** Whether the intent's target is online and not already in the wanted state; mirrors macOS `isActionable`. */
+export function habitActionable(
+  intent: DeviceIntent,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): boolean {
+  const op = intent.operation;
+  if (op.kind === "activateScene") return scenes.some((s) => s.id === intent.targetId);
+  const dev = devices.find((d) => d.id === intent.targetId && d.isOnline);
+  if (!dev) return false;
+  const k = dev.kind;
+  switch (op.kind) {
+    case "power":
+      return isDeviceActiveOn(dev) !== op.isOn;
+    case "lightEffect":
+      return k.kind === "light" && (!k.isOn || (k.currentEffect ?? "").toLowerCase() !== op.effect.toLowerCase());
+    case "brightness":
+      return k.kind === "light" && (!k.isOn || Math.abs((k.brightnessPercent ?? 0) - op.percent) >= 10);
+    case "colorTemperature":
+      return k.kind === "light" && k.colorTempKelvin !== op.kelvin;
+    case "hvacMode":
+      return k.kind === "climate" && (!k.isOn || k.hvacMode !== op.mode);
+    case "targetTemperature":
+      return k.kind === "climate" && (!k.isOn || Math.abs(k.targetTemperature - op.celsius) >= 0.5);
+    case "fanSpeed":
+      if (k.kind === "fan") return !k.isOn || k.presetMode !== op.speed;
+      if (k.kind === "climate") return k.fanMode !== op.speed;
+      return false;
+    case "oscillation":
+      return k.kind === "fan" && (!k.isOn || k.isOscillating !== op.enabled);
+    default:
+      return false;
+  }
+}
+
+/** Devices whose `power` op is a real toggle the assistant can apply (#113). */
+function isPowerToggleable(device: SmartDevice): boolean {
+  const k = device.kind.kind;
+  return k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera";
+}
+
+function habitSuggestionTitle(
+  intent: DeviceIntent,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): string | null {
+  if (intent.operation.kind === "activateScene") {
+    const scene = scenes.find((s) => s.id === intent.targetId);
+    return scene ? scene.name : null;
+  }
+  if (!devices.some((d) => d.id === intent.targetId)) return null;
+  return IntentReply.describe([intent], devices, scenes).replace(/^已/, "");
+}
+
+/**
+ * Zero-delay Top-4 proactive engine (#113), mirroring macOS `UserHabitMemory.topSuggestions`:
+ * learned habits first, then deterministic padding — starred-favorite toggles,
+ * environment-driven climate trim, the 全屋关灯 builtin, and running-device power-off.
+ * Pinned by `Tests/Fixtures/habit_golden.json` on both ends.
+ */
+export class UserHabitMemory {
+  entries: HabitEntry[] = [];
+
+  constructor(entries: readonly HabitEntry[] = []) {
+    this.entries = [...entries];
+  }
+
+  record(
+    intents: readonly DeviceIntent[],
+    devices: readonly SmartDevice[],
+    scenes: readonly HomeScene[],
+    now: Date = new Date(),
+  ): HabitRecordingReceipt | null {
+    if (intents.length === 0) return null;
+    const bucket = timeBucketLabel(now.getHours());
+    const changes: HabitEntryChange[] = [];
+
+    for (const intent of intents) {
+      const opKey = encodeHabitOperation(intent.operation);
+      if (!opKey) continue;
+      const idx = this.entries.findIndex(
+        (e) => e.bucket === bucket && e.targetId === intent.targetId && e.operationKey === opKey,
+      );
+      if (idx >= 0) {
+        changes.push({ bucket, targetId: intent.targetId, operationKey: opKey, previousCount: this.entries[idx]!.count });
+        this.entries[idx]!.count += 1;
+      } else {
+        changes.push({ bucket, targetId: intent.targetId, operationKey: opKey, previousCount: null });
+        this.entries.push({ bucket, targetId: intent.targetId, operationKey: opKey, count: 1 });
+      }
+    }
+
+    this.entries.sort((a, b) => b.count - a.count);
+    if (this.entries.length > MAX_HABIT_ENTRIES) this.entries.length = MAX_HABIT_ENTRIES;
+
+    return changes.length > 0 ? { entries: changes } : null;
+  }
+
+  /** Undoes the exact changes from one `record` call, leaving earlier habits untouched (#34). */
+  unrecord(receipt: HabitRecordingReceipt): void {
+    for (const change of [...receipt.entries].reverse()) {
+      const idx = this.entries.findIndex(
+        (e) => e.bucket === change.bucket && e.targetId === change.targetId && e.operationKey === change.operationKey,
+      );
+      if (idx < 0) continue;
+      if (change.previousCount !== null) {
+        this.entries[idx]!.count = change.previousCount;
+      } else {
+        this.entries.splice(idx, 1);
+      }
+    }
+    this.entries.sort((a, b) => b.count - a.count);
+  }
+
+  topSuggestions(options: {
+    now?: Date;
+    devices: readonly SmartDevice[];
+    scenes: readonly HomeScene[];
+    limit?: number;
+    favoriteIds?: readonly string[];
+    environmentReadings?: readonly EnvironmentReading[];
+  }): AssistantSuggestion[] {
+    const limit = options.limit ?? 4;
+    const now = options.now ?? new Date();
+    const devices = options.devices;
+    const scenes = options.scenes;
+    const bucket = timeBucketLabel(now.getHours());
+    const bucketEntries = this.entries.filter((e) => e.bucket === bucket);
+    const candidates = bucketEntries.length > 0 ? bucketEntries : this.entries;
+
+    const results: AssistantSuggestion[] = [];
+    const seenTargets = new Set<string>();
+    const append = (id: string, title: string, intents: readonly DeviceIntent[]): void => {
+      if (results.length >= limit) return;
+      results.push({ id, title, confidencePercent: null, intents: [...intents] });
+    };
+
+    // Phase 1: learned habits for the current bucket (falls back to all buckets when empty).
+    for (const entry of candidates) {
+      if (results.length >= limit) break;
+      if (seenTargets.has(entry.targetId)) continue;
+      const op = decodeHabitOperation(entry.operationKey);
+      if (!op) continue;
+      const intent: DeviceIntent = { targetId: entry.targetId, operation: op };
+      if (!habitActionable(intent, devices, scenes)) continue;
+      const title = habitSuggestionTitle(intent, devices, scenes);
+      if (title === null) continue;
+      seenTargets.add(entry.targetId);
+      append(`habit:${entry.bucket}:${entry.targetId}:${entry.operationKey}`, title, [intent]);
+    }
+    if (results.length >= limit) return results;
+
+    const temperatures = (options.environmentReadings ?? [])
+      .map((r) => r.temperature)
+      .filter((t): t is number => t !== null);
+    const hottest = temperatures.length > 0 ? Math.max(...temperatures) : null;
+    const coldest = temperatures.length > 0 ? Math.min(...temperatures) : null;
+
+    // Phase 2: starred favorites toggle toward the opposite state. Only devices the
+    // assistant can actually power — a fridge or speaker power op is a dead chip (#113).
+    for (const id of options.favoriteIds ?? []) {
+      if (results.length >= limit) break;
+      if (seenTargets.has(id)) continue;
+      const dev = devices.find((d) => d.id === id && d.isOnline);
+      if (!dev || !isPowerToggleable(dev)) continue;
+      const intent: DeviceIntent = { targetId: id, operation: { kind: "power", isOn: !isDeviceActiveOn(dev) } };
+      if (!habitActionable(intent, devices, scenes)) continue;
+      const title = habitSuggestionTitle(intent, devices, scenes);
+      if (title === null) continue;
+      seenTargets.add(id);
+      append(`fav:${id}:${isDeviceActiveOn(dev) ? "off" : "on"}`, title, [intent]);
+    }
+    if (results.length >= limit) return results;
+
+    // Phase 3: hot rooms want cooling, cold rooms want heating — one trim on the first
+    // running climate that is not already at the target.
+    const padClimate = (temperature: number): void => {
+      if (results.length >= limit) return;
+      for (const dev of devices) {
+        const k = dev.kind;
+        if (!dev.isOnline || k.kind !== "climate" || !k.isOn || k.hvacMode === "off") continue;
+        const intent: DeviceIntent = { targetId: dev.id, operation: { kind: "targetTemperature", celsius: temperature } };
+        if (seenTargets.has(dev.id) || !habitActionable(intent, devices, scenes)) continue;
+        const title = habitSuggestionTitle(intent, devices, scenes);
+        if (title === null) continue;
+        seenTargets.add(dev.id);
+        append(`env:${dev.id}:temp:${Math.round(temperature)}`, title, [intent]);
+        return;
+      }
+    };
+    if (hottest !== null && hottest >= 28) padClimate(26);
+    if (coldest !== null && coldest <= 16) padClimate(22);
+    if (results.length >= limit) return results;
+
+    // Phase 4: 全屋关灯 builtin once two or more online lights are burning.
+    const builtinLightIds = new Set<string>();
+    const backfillTargets = new Set<string>();
+    const lightsOn = devices.filter(
+      (d) => d.isOnline && isDeviceActiveOn(d) && d.kind.kind === "light",
+    );
+    if (lightsOn.length >= 2 && lightsOn.some((d) => !seenTargets.has(d.id))) {
+      append(
+        "builtin:lightsOff",
+        "全屋关灯",
+        lightsOn.map((d) => ({ targetId: d.id, operation: { kind: "power" as const, isOn: false } })),
+      );
+      for (const d of lightsOn) {
+        seenTargets.add(d.id);
+        builtinLightIds.add(d.id);
+      }
+    }
+    if (results.length >= limit) return results;
+
+    // Phase 5: running devices the user probably wants off (excluding vacuums heading home
+    // and speakers, whose power op is not a real toggle).
+    for (const dev of devices) {
+      if (results.length >= limit) break;
+      if (!dev.isOnline || !isDeviceActiveOn(dev) || seenTargets.has(dev.id) || !isPowerToggleable(dev)) continue;
+      const intent: DeviceIntent = { targetId: dev.id, operation: { kind: "power", isOn: false } };
+      if (!habitActionable(intent, devices, scenes)) continue;
+      const title = habitSuggestionTitle(intent, devices, scenes);
+      if (title === null) continue;
+      seenTargets.add(dev.id);
+      append(`active:${dev.id}:off`, title, [intent]);
+    }
+
+    // Phase 6: last-resort backfill for the 全屋关灯 builtin — when nothing else can fill
+    // the remaining slots, per-light power-off is still actionable and better than fewer
+    // than `limit` candidates (#113).
+    if (builtinLightIds.size > 1) {
+      for (const dev of devices) {
+        if (results.length >= limit) break;
+        if (!builtinLightIds.has(dev.id) || backfillTargets.has(dev.id)) continue;
+        const intent: DeviceIntent = { targetId: dev.id, operation: { kind: "power", isOn: false } };
+        const title = habitSuggestionTitle(intent, devices, scenes);
+        if (title === null) continue;
+        backfillTargets.add(dev.id);
+        append(`active:${dev.id}:off`, title, [intent]);
+      }
+    }
+
+    return results;
+  }
 }
 
 /** Builds the ambient context macOS sends: time, indoor readings, running devices, habits. */
@@ -1727,6 +2054,177 @@ export function buildSystemOneRequestBody(options: {
   };
 }
 
+/** Proactive per-device decision heads; mirrors macOS `makeProactiveSystemOneRequest` (#113). */
+export function buildProactiveSystemOneRequestBody(options: {
+  readonly model: string;
+  readonly devices: readonly SmartDevice[];
+  readonly context: AssistantContext;
+  readonly catalog: IntentCatalog;
+}): SystemOneRequest {
+  const questions: Record<string, unknown> = {};
+  for (const { alias, device } of options.catalog.aliasDevices) {
+    questions[`dev_${alias}`] = {
+      type: "choice",
+      instructions:
+        `Given the current time, indoor temperature/humidity, active devices, and user habits, ` +
+        `what proactive adjustment would the user most likely want right now for ${device.name} ` +
+        `(${device.roomName})? Select none if current state is already ideal.`,
+      criteria: deviceSpecificCriteria(device),
+    };
+  }
+
+  const state: Record<string, unknown> = {
+    catalog: options.catalog.text,
+    time: options.context.timeSummary,
+    environment: options.context.environmentSummary,
+    active_devices: options.context.activeDevicesSummary,
+    user_habits: options.context.habitSummary,
+  };
+
+  return {
+    body: { model: options.model, state, questions },
+    catalog: options.catalog,
+  };
+}
+
+/** Proactive chat prompt; mirrors macOS `makeProactiveChatRequest` (#113). */
+export function buildProactiveChatRequestBody(
+  model: string,
+  context: AssistantContext,
+  catalog: IntentCatalog,
+): Record<string, unknown> {
+  const system = [
+    "你是智能家居主动建议引擎。根据当前时间、室内温湿度、开启中的设备与用户习惯，推荐最多 3 个最值得立即执行的设备调整建议，只输出 JSON，不要解释。",
+    catalog.text,
+    'schema: {"suggestions":[{"device":"id","op":"power|brightness|color_temp|effect|hvac_mode|temperature|fan_speed|oscillation|scene","value":...,"confidence":85}]}',
+    "规则：confidence 为 20-99 的整数置信度；如果当前环境已处于理想状态无需操作，输出 {\"suggestions\":[]}。只能使用上面列出的 id。",
+  ].join("\n");
+  const userState = `时间：${context.timeSummary}\n环境：${context.environmentSummary}\n开启中：${context.activeDevicesSummary}\n习惯：${context.habitSummary}`;
+  return {
+    model: model.trim(),
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: userState },
+    ],
+    temperature: 0,
+    max_tokens: 600,
+    stream: false,
+  };
+}
+
+function numberFromValue(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Best scored non-none probability in a decision head's `probabilities` map. */
+function bestNonNoneProbability(probabilities: Record<string, unknown>): { choice: string; prob: number } | null {
+  let best: { choice: string; prob: number } | null = null;
+  for (const [key, raw] of Object.entries(probabilities)) {
+    if (key === "none") continue;
+    const prob = numberFromValue(raw);
+    if (prob !== null && prob > (best?.prob ?? 0)) best = { choice: key, prob };
+  }
+  return best;
+}
+
+/** Parses SystemOne proactive answers into ranked suggestions; mirrors macOS `proactiveSuggestionsFromSystemOne` (#113). */
+export function proactiveSuggestionsFromSystemOne(
+  bodyText: string,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): AssistantSuggestion[] {
+  const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+  const answers = (parsed["answers"] ?? {}) as Record<string, Record<string, unknown>>;
+  const catalog = buildIntentCatalog(devices, scenes);
+  const scored: Array<{ prob: number; suggestion: AssistantSuggestion }> = [];
+
+  for (const { alias, device } of catalog.aliasDevices) {
+    const answer = answers[`dev_${alias}`];
+    if (!answer) continue;
+    const probabilities = (answer["probabilities"] ?? {}) as Record<string, unknown>;
+    const topChoice = String(answer["choice"] ?? "none");
+
+    let chosenKey: string;
+    let chosenProb: number;
+    if (topChoice !== "none") {
+      chosenKey = topChoice;
+      chosenProb = numberFromValue(probabilities[topChoice]) ?? numberFromValue(answer["confidence"]) ?? 0.65;
+    } else {
+      const runnerUp = bestNonNoneProbability(probabilities);
+      if (!runnerUp || runnerUp.prob < 0.18) continue;
+      chosenKey = runnerUp.choice;
+      chosenProb = runnerUp.prob;
+    }
+
+    const ops = IntentValidator.sanitize(
+      ModelIntentResolver.systemOneDeviceOperations(chosenKey).map((operation) => ({ targetId: device.id, operation })),
+      devices,
+      scenes,
+    );
+    const primary = ops[0];
+    if (!primary) continue;
+    const title = habitSuggestionTitle(primary, devices, scenes);
+    if (title === null) continue;
+    scored.push({
+      prob: chosenProb,
+      suggestion: {
+        id: `proactive:${device.id}:${chosenKey}`,
+        title,
+        confidencePercent: Math.max(18, Math.min(99, Math.round(chosenProb * 100))),
+        intents: ops,
+      },
+    });
+  }
+
+  return scored
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, 3)
+    .map((item) => item.suggestion);
+}
+
+/** Parses proactive chat output into ranked suggestions; mirrors macOS `proactiveSuggestionsFromChat` (#113). */
+export function proactiveSuggestionsFromChat(
+  content: string,
+  catalog: IntentCatalog,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): AssistantSuggestion[] {
+  const jsonSlice = ModelIntentResolver.extractFirstJSONObject(content);
+  if (!jsonSlice) throw new Error("AI 返回格式无法解析");
+  const payload = JSON.parse(jsonSlice) as Record<string, unknown>;
+  const items = (payload["suggestions"] as Array<Record<string, unknown>>) ?? (payload["actions"] as Array<Record<string, unknown>>) ?? [];
+
+  const scored: Array<{ pct: number; suggestion: AssistantSuggestion }> = [];
+  items.forEach((item, idx) => {
+    const alias = String(item["device"] ?? "");
+    const opName = String(item["op"] ?? "");
+    const op = ModelIntentResolver.decodeChatOp(opName, item["value"]);
+    if (!op) return;
+    const targetIds = catalog.aliasToIds.get(alias) ?? (alias ? [alias] : []);
+    const sanitized = IntentValidator.sanitize(
+      targetIds.map((targetId) => ({ targetId, operation: op })),
+      devices,
+      scenes,
+    );
+    const primary = sanitized[0];
+    if (!primary) return;
+    const title = habitSuggestionTitle(primary, devices, scenes);
+    if (title === null) return;
+    const rawConf = numberFromValue(item["confidence"]) ?? 80;
+    const normalizedConf = rawConf <= 1.0 ? Math.round(rawConf * 100) : Math.round(rawConf);
+    scored.push({
+      pct: Math.max(18, Math.min(99, normalizedConf)),
+      suggestion: { id: `chat:${primary.targetId}:${idx}`, title, confidencePercent: Math.max(18, Math.min(99, normalizedConf)), intents: [primary] },
+    });
+  });
+
+  return scored
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 3)
+    .map((item) => item.suggestion);
+}
+
 export class ModelIntentResolver {
   private readonly config: AssistantConfig;
   private readonly transport: HttpTransport;
@@ -1788,6 +2286,57 @@ export class ModelIntentResolver {
       return this.resolveViaSystemOne(utterance, devices, scenes, context);
     }
     return this.resolveViaChatCompletions(utterance, devices, scenes);
+  }
+
+  /**
+   * Proactive zero-input inference, mirroring macOS
+   * `ModelIntentResolver.recommendProactiveSuggestions` (#113): evaluates time, indoor
+   * climate, active devices and habit memory over both the SystemOne and chat transports.
+   */
+  async recommendProactiveSuggestions(
+    devices: readonly SmartDevice[],
+    scenes: readonly HomeScene[],
+    context: AssistantContext
+  ): Promise<AssistantSuggestion[]> {
+    const catalog = buildIntentCatalog(devices, scenes);
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.effectiveAPIKey()}`,
+    };
+    if (this.usesSystemOne) {
+      const url = this.endpointURL("/systemone");
+      const model = this.resolvedSystemOneModel(url);
+      const resp = await this.transport({
+        url,
+        method: "POST",
+        headers,
+        body: JSON.stringify(
+          buildProactiveSystemOneRequestBody({ model, devices, context, catalog }).body,
+        ),
+      });
+      if (resp.status !== 200) {
+        throw new Error(this.friendlyHttpError(resp.status));
+      }
+      return proactiveSuggestionsFromSystemOne(resp.body, devices, scenes);
+    }
+    const url = this.endpointURL("/chat/completions");
+    const resp = await this.transport({
+      url,
+      method: "POST",
+      headers,
+      body: JSON.stringify(buildProactiveChatRequestBody(this.config.model, context, catalog)),
+    });
+    if (resp.status !== 200) {
+      throw new Error(this.friendlyHttpError(resp.status));
+    }
+    const root = JSON.parse(resp.body) as Record<string, unknown>;
+    const choices = (root["choices"] as Array<Record<string, Record<string, unknown>>>) ?? [];
+    let content = String(choices[0]?.["message"]?.["content"] ?? "");
+    const closeThinkIdx = content.toLowerCase().lastIndexOf("</think>");
+    if (closeThinkIdx >= 0) {
+      content = content.slice(closeThinkIdx + "</think>".length);
+    }
+    return proactiveSuggestionsFromChat(content, catalog, devices, scenes);
   }
 
   private endpointURL(path: string): string {
@@ -1950,6 +2499,21 @@ export class ModelIntentResolver {
     }
   }
 
+  /** Compound SystemOne choices map to a mode plus a temperature (#38/#113). */
+  static systemOneDeviceOperations(choice: string): IntentOperation[] {
+    switch (choice) {
+      case "cool_24": return [{ kind: "hvacMode", mode: "cool" }, { kind: "targetTemperature", celsius: 24 }];
+      case "cool_25": return [{ kind: "hvacMode", mode: "cool" }, { kind: "targetTemperature", celsius: 25 }];
+      case "cool_26": return [{ kind: "hvacMode", mode: "cool" }, { kind: "targetTemperature", celsius: 26 }];
+      case "heat_22": return [{ kind: "hvacMode", mode: "heat" }, { kind: "targetTemperature", celsius: 22 }];
+      case "heat_24": return [{ kind: "hvacMode", mode: "heat" }, { kind: "targetTemperature", celsius: 24 }];
+      default: {
+        const op = this.decodeSystemOneOp(choice);
+        return op ? [op] : [];
+      }
+    }
+  }
+
   private async resolveViaChatCompletions(
     utterance: string,
     devices: readonly SmartDevice[],
@@ -2017,7 +2581,7 @@ export class ModelIntentResolver {
       const alias = String(act["device"] ?? "").trim();
       const opName = String(act["op"] ?? "").trim();
       const val = act["value"];
-      const op = this.decodeChatOp(opName, val);
+      const op = ModelIntentResolver.decodeChatOp(opName, val);
       const targetIds = aliasToIds.get(alias) ?? (alias ? [alias] : []);
       if (op) {
         for (const targetId of targetIds) {
@@ -2036,7 +2600,7 @@ export class ModelIntentResolver {
     return { intents, reply, source: "model", suggestions };
   }
 
-  private decodeChatOp(name: string, val: unknown): IntentOperation | null {
+  static decodeChatOp(name: string, val: unknown): IntentOperation | null {
     const numVal = typeof val === "number" ? val : typeof val === "string" ? Number(val.replace(/[%°CcKk\s]/g, "")) : NaN;
     const boolVal =
       typeof val === "boolean"

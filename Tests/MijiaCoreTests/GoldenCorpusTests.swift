@@ -794,4 +794,133 @@ struct GoldenCorpusTests {
         let bareQuestions = try #require(bareBody["questions"] as? [String: Any])
         #expect(Set(bareQuestions.keys) == Set(corpus.expected.questionsKeys))
     }
+
+    // MARK: - Habit Memory Corpus (#113)
+
+    private struct HabitCorpus: Decodable {
+        let devices: [CorpusDevice]
+        let scenes: [AIRequestScene]
+        let memoryCases: [HabitMemoryCase]
+        let topSuggestionCases: [HabitTopSuggestionCase]
+    }
+
+    private struct HabitEntryDTO: Decodable, Equatable {
+        let bucket: String
+        let targetId: String
+        let operationKey: String
+        let count: Int
+    }
+
+    private struct HabitReceiptEntry: Decodable, Equatable {
+        let bucket: String
+        let targetId: String
+        let operationKey: String
+        let previousCount: Int?
+    }
+
+    private struct HabitMemoryCase: Decodable {
+        let name: String
+        let hour: Int
+        let entriesBefore: [HabitEntryDTO]
+        let recordIntents: [ExpectedIntent]
+        let expectReceipt: [HabitReceiptEntry]?
+        let entriesAfterRecord: [HabitEntryDTO]
+        let expectUnrecord: Bool
+        let entriesAfterUnrecord: [HabitEntryDTO]
+    }
+
+    private struct HabitReadingDTO: Decodable {
+        let roomName: String
+        let temperature: Double
+        let humidity: Double
+    }
+
+    private struct HabitTopSuggestionCase: Decodable {
+        let name: String
+        let hour: Int
+        let deviceIds: [String]
+        let entriesBefore: [HabitEntryDTO]
+        let favoriteIds: [String]
+        let environment: [HabitReadingDTO]
+        let limit: Int
+        let expected: [[ExpectedIntent]]
+    }
+
+    private static func habitEntry(_ entry: UserHabitMemory.HabitEntry) -> HabitEntryDTO {
+        HabitEntryDTO(bucket: entry.bucket.rawValue, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
+    }
+
+    private static func habitReceiptChange(_ change: UserHabitMemory.RecordingReceipt.EntryChange) -> HabitReceiptEntry {
+        HabitReceiptEntry(bucket: change.bucket.rawValue, targetId: change.targetId, operationKey: change.operationKey, previousCount: change.previousCount)
+    }
+
+    private static func intent(from expected: ExpectedIntent) -> DeviceIntent? {
+        let target = expected.targetId
+        switch (expected.kind, expected.value) {
+        case ("power", .bool(let on)): return DeviceIntent(targetId: target, operation: .power(on))
+        case ("brightness", .number(let v)): return DeviceIntent(targetId: target, operation: .brightness(Int(v)))
+        case ("colorTemperature", .number(let v)): return DeviceIntent(targetId: target, operation: .colorTemperature(Int(v)))
+        case ("lightEffect", .string(let effect)): return DeviceIntent(targetId: target, operation: .lightEffect(effect))
+        case ("hvacMode", .string(let mode)): return DeviceIntent(targetId: target, operation: .hvacMode(mode))
+        case ("targetTemperature", .number(let v)): return DeviceIntent(targetId: target, operation: .targetTemperature(v))
+        case ("fanSpeed", .string(let speed)): return DeviceIntent(targetId: target, operation: .fanSpeed(speed))
+        case ("oscillation", .bool(let on)): return DeviceIntent(targetId: target, operation: .oscillation(on))
+        case ("activateScene", _): return DeviceIntent(targetId: target, operation: .activateScene)
+        case ("brightnessStep", .number(let v)): return DeviceIntent(targetId: target, operation: .brightnessStep(Int(v)))
+        case ("temperatureStep", .number(let v)): return DeviceIntent(targetId: target, operation: .temperatureStep(v))
+        default: return nil
+        }
+    }
+
+    @Test("Cross-platform habit memory corpus matches MijiaCore UserHabitMemory (#113)")
+    func habitGoldenCorpusParity() throws {
+        let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/habit_golden.json")
+        let corpus = try JSONDecoder().decode(HabitCorpus.self, from: Data(contentsOf: fixtureURL))
+        let allDevices = corpus.devices.map { $0.toSmartDevice() }
+        let scenes = corpus.scenes.map { $0.toHomeScene() }
+
+        for item in corpus.memoryCases {
+            let bucketEntries = try item.entriesBefore.map { entry -> UserHabitMemory.HabitEntry in
+                let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: entry.bucket), "\(item.name): unknown bucket")
+                return UserHabitMemory.HabitEntry(bucket: bucket, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
+            }
+            var memory = UserHabitMemory(entries: bucketEntries)
+            let date = try #require(Calendar.current.date(from: DateComponents(hour: item.hour, minute: 30)))
+            let intents = item.recordIntents.compactMap(Self.intent(from:))
+            #expect(intents.count == item.recordIntents.count, "\(item.name): unknown operation kind")
+
+            let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: date)
+            #expect(receipt?.entries.map(Self.habitReceiptChange) == item.expectReceipt, "\(item.name)")
+            #expect(memory.entries.map(Self.habitEntry) == item.entriesAfterRecord, "\(item.name)")
+            if item.expectUnrecord, let receipt {
+                memory.unrecord(receipt)
+                #expect(memory.entries.map(Self.habitEntry) == item.entriesAfterUnrecord, "\(item.name)")
+            }
+        }
+
+        for item in corpus.topSuggestionCases {
+            let bucketEntries = try item.entriesBefore.map { entry -> UserHabitMemory.HabitEntry in
+                let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: entry.bucket), "\(item.name): unknown bucket")
+                return UserHabitMemory.HabitEntry(bucket: bucket, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
+            }
+            let memory = UserHabitMemory(entries: bucketEntries)
+            let devices = try item.deviceIds.map { id in
+                try #require(allDevices.first { $0.id == id }, "\(item.name): unknown device \(id)")
+            }
+            let date = try #require(Calendar.current.date(from: DateComponents(hour: item.hour, minute: 30)))
+            let readings = item.environment.map {
+                EnvironmentReading(id: $0.roomName, label: $0.roomName, roomName: $0.roomName, temperature: $0.temperature, humidity: $0.humidity)
+            }
+            let suggestions = memory.topSuggestions(
+                for: date,
+                devices: devices,
+                scenes: scenes,
+                limit: item.limit,
+                favoriteIds: item.favoriteIds,
+                environmentReadings: readings
+            )
+            let actual = suggestions.map { $0.intents.map(Self.encodeIntent) }
+            #expect(actual == item.expected, "\(item.name)")
+        }
+    }
 }

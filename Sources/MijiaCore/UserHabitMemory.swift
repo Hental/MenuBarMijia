@@ -190,6 +190,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             }
         }
 
+        // Nothing was encoded (relative steps only): no receipt, nothing to undo (#113).
+        guard !receipt.entries.isEmpty || receipt.phrase != nil else { return nil }
         return receipt
     }
 
@@ -271,12 +273,17 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         }
     }
 
-    /// Returns personalized one-click habit suggestions for the current time bucket whose target isn't already in that state.
+    /// Zero-delay proactive engine (#113): learned habits first, then deterministic padding —
+    /// starred-favorite toggles, environment-driven climate trim, the 全屋关灯 builtin, and
+    /// running-device power-off — so the panel always has up to `limit` actionable suggestions.
+    /// Mirrored in `windows/src/core/assistant.ts` and pinned by `Tests/Fixtures/habit_golden.json`.
     public func topSuggestions(
         for now: Date = Date(),
         devices: [SmartDevice],
         scenes: [HomeScene],
-        limit: Int = 3
+        limit: Int = 4,
+        favoriteIds: [String] = [],
+        environmentReadings: [EnvironmentReading] = []
     ) -> [AssistantSuggestion] {
         let bucket = TimeBucket.from(date: now)
         let bucketEntries = entries.filter { $0.bucket == bucket }
@@ -285,7 +292,13 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         var results: [AssistantSuggestion] = []
         var seenTargets: Set<String> = []
 
-        for entry in candidates {
+        func append(_ id: String, _ title: String, _ intents: [DeviceIntent]) {
+            guard results.count < limit else { return }
+            results.append(AssistantSuggestion(id: id, title: title, confidencePercent: nil, intents: intents))
+        }
+
+        // Phase 1: learned habits for the current bucket (falls back to all buckets when empty).
+        for entry in candidates where results.count < limit {
             guard !seenTargets.contains(entry.targetId),
                   let op = Self.decodeOperation(entry.operationKey) else { continue }
             let intent = DeviceIntent(targetId: entry.targetId, operation: op)
@@ -294,17 +307,107 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                 continue
             }
             seenTargets.insert(entry.targetId)
-            results.append(
-                AssistantSuggestion(
-                    id: "habit:\(entry.bucket.rawValue):\(entry.targetId):\(entry.operationKey)",
-                    title: title,
-                    confidencePercent: nil,
-                    intents: [intent]
-                )
-            )
-            if results.count >= limit { break }
+            append("habit:\(entry.bucket.rawValue):\(entry.targetId):\(entry.operationKey)", title, [intent])
         }
+        guard results.count < limit else { return results }
+
+        let temperatures = environmentReadings.compactMap(\.temperature)
+        let hottest = temperatures.max()
+        let coldest = temperatures.min()
+
+        // Phase 2: starred favorites toggle toward the opposite state. Only devices the
+        // assistant can actually power — a fridge or speaker power op is a dead chip (#113).
+        for id in favoriteIds where results.count < limit {
+            guard !seenTargets.contains(id),
+                  let dev = devices.first(where: { $0.id == id && $0.isOnline }),
+                  Self.isPowerToggleable(dev) else { continue }
+            let intent = DeviceIntent(targetId: id, operation: .power(!dev.isActiveOn))
+            guard Self.isActionable(intent, devices: devices, scenes: scenes),
+                  let title = Self.suggestionTitle(for: intent, devices: devices, scenes: scenes) else { continue }
+            seenTargets.insert(id)
+            append("fav:\(id):\(dev.isActiveOn ? "off" : "on")", title, [intent])
+        }
+        guard results.count < limit else { return results }
+
+        // Phase 3: hot rooms want cooling, cold rooms want heating — one trim on the first
+        // running climate that is not already at the target.
+        if results.count < limit, let hottest, hottest >= 28 {
+            padClimate(devices: devices, scenes: scenes, seenTargets: &seenTargets, temperature: 26, append: append)
+        }
+        if results.count < limit, let coldest, coldest <= 16 {
+            padClimate(devices: devices, scenes: scenes, seenTargets: &seenTargets, temperature: 22, append: append)
+        }
+        guard results.count < limit else { return results }
+
+        // Phase 4: 全屋关灯 builtin once two or more online lights are burning.
+        var builtinLightIds: Set<String> = []
+        var backfillTargets: Set<String> = []
+        let lightsOn = devices.filter { dev in
+            guard dev.isOnline, dev.isActiveOn, case .light = dev.kind else { return false }
+            return true
+        }
+        if lightsOn.count >= 2, lightsOn.contains(where: { !seenTargets.contains($0.id) }) {
+            let intents = lightsOn.map { DeviceIntent(targetId: $0.id, operation: .power(false)) }
+            append("builtin:lightsOff", L10n.tr("全屋关灯", "Turn Off All Lights"), intents)
+            for dev in lightsOn {
+                seenTargets.insert(dev.id)
+                builtinLightIds.insert(dev.id)
+            }
+        }
+        guard results.count < limit else { return results }
+
+        // Phase 5: running devices the user probably wants off (excluding vacuums heading home
+        // and speakers, whose power op is not a real toggle).
+        for dev in devices where results.count < limit {
+            guard dev.isOnline, dev.isActiveOn, !seenTargets.contains(dev.id), Self.isPowerToggleable(dev) else { continue }
+            let intent = DeviceIntent(targetId: dev.id, operation: .power(false))
+            guard Self.isActionable(intent, devices: devices, scenes: scenes),
+                  let title = Self.suggestionTitle(for: intent, devices: devices, scenes: scenes) else { continue }
+            seenTargets.insert(dev.id)
+            append("active:\(dev.id):off", title, [intent])
+        }
+
+        // Phase 6: last-resort backfill for the 全屋关灯 builtin — when nothing else can fill
+        // the remaining slots, per-light power-off is still actionable and better than fewer
+        // than `limit` candidates (#113).
+        if builtinLightIds.count > 1 {
+            for dev in devices where results.count < limit {
+                guard builtinLightIds.contains(dev.id), !backfillTargets.contains(dev.id) else { continue }
+                let intent = DeviceIntent(targetId: dev.id, operation: .power(false))
+                guard let title = Self.suggestionTitle(for: intent, devices: devices, scenes: scenes) else { continue }
+                backfillTargets.insert(dev.id)
+                append("active:\(dev.id):off", title, [intent])
+            }
+        }
+
         return results
+    }
+
+    private func padClimate(
+        devices: [SmartDevice],
+        scenes: [HomeScene],
+        seenTargets: inout Set<String>,
+        temperature: Double,
+        append: (String, String, [DeviceIntent]) -> Void
+    ) {
+        for dev in devices {
+            guard dev.isOnline, case .climate(let spec) = dev.kind, spec.isOn, spec.hvacMode != "off" else { continue }
+            let intent = DeviceIntent(targetId: dev.id, operation: .targetTemperature(temperature))
+            guard !seenTargets.contains(dev.id),
+                  Self.isActionable(intent, devices: devices, scenes: scenes),
+                  let title = Self.suggestionTitle(for: intent, devices: devices, scenes: scenes) else { continue }
+            seenTargets.insert(dev.id)
+            append("env:\(dev.id):temp:\(Int(temperature.rounded()))", title, [intent])
+            return
+        }
+    }
+
+    /// Devices whose `.power` op is a real toggle the assistant can apply (#113).
+    static func isPowerToggleable(_ device: SmartDevice) -> Bool {
+        switch device.kind {
+        case .light, .climate, .fan, .plug, .camera, .tv: return true
+        case .vacuum, .speaker, .fridge, .sensor: return false
+        }
     }
 
     /// Compact natural-language summary of the user's habits injected into Jev's `state.user_habits`.
@@ -396,8 +499,9 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         case .brightness(let pct):
             guard case .light(let spec) = dev.kind else { return false }
             return !spec.isOn || abs((spec.brightnessPercent ?? 0) - pct) >= 10
-        case .colorTemperature:
-            return true
+        case .colorTemperature(let kelvin):
+            guard case .light(let spec) = dev.kind else { return false }
+            return spec.colorTempKelvin != kelvin
         case .hvacMode(let mode):
             guard case .climate(let spec) = dev.kind else { return false }
             return !spec.isOn || spec.hvacMode != mode
