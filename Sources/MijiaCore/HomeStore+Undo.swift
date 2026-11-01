@@ -11,6 +11,8 @@ extension HomeStore {
         pendingCloudConsent = nil
         assistantSuggestions = []
         optimisticLockUntil.removeAll()
+        // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
+        lastProactiveRefreshSignature = nil
         for task in debounceTasks.values { task.cancel() }
         debounceTasks.removeAll()
     }

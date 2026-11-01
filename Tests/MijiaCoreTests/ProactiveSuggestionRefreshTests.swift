@@ -169,6 +169,16 @@ struct ProactiveSuggestionRefreshTests {
         #expect(store.maybeRefreshProactiveSuggestionsInBackground() != nil, "retries after the cooldown")
     }
 
+    @Test("Switching homes invalidates the proactive signature")
+    func invalidateUndoContextResetsProactiveSignature() async throws {
+        let (store, _) = try await makeStore()
+        store.lastProactiveRefreshSignature = "夜晚|29/60"
+
+        store.invalidateUndoContext()
+
+        #expect(store.lastProactiveRefreshSignature == nil, "a different home must refresh again")
+    }
+
     @Test("Presenting the bar never clobbers a pending choice or a running command")
     func presentKeepsActiveAssistantState() async throws {
         let (store, _) = try await makeStore()

@@ -1533,6 +1533,9 @@ export class MenuMijiaWindowsApp {
     this.settings.selectedHomeId = id;
     this.isHomeMenuOpen = false;
     this.selectedRoom = "全部";
+    // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
+    this.aiProactiveSuggestions = null;
+    this.aiProactiveSignature = null;
     this.saveSettings();
     this.render();
     void this.refreshXiaomiDevices(false);
@@ -2046,13 +2049,16 @@ export class MenuMijiaWindowsApp {
       .then((suggestions) => {
         this.isRefreshingProactive = false;
         if (this.proactiveSignature() === signature) {
-          // The context counts as served only once a usable result landed (Codex #116 review);
-          // an empty result is a valid "home is ideal" answer and keeps the local ranking up.
+          // The context counts as served only once a usable result landed (Codex #116 review).
           this.aiProactiveSignature = signature;
           if (suggestions.length > 0) {
             this.aiProactiveSuggestions = suggestions;
-            if (!this.hasBlockingPanelInteraction()) this.render();
+          } else {
+            // An empty result is a valid "home is ideal" answer: drop any older cache so the
+            // local ranking takes over instead of stale suggestions (Codex #116 re-review).
+            this.aiProactiveSuggestions = null;
           }
+          if (!this.hasBlockingPanelInteraction()) this.render();
         }
       })
       .catch(() => {
