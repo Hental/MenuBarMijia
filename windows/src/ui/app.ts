@@ -6,14 +6,21 @@ import {
   LocalIntentParser,
   ModelIntentResolver,
   UndoPhrase,
+  UserHabitMemory,
   buildAssistantContext,
   buildHabitSummary,
+  habitActionable,
   inferAssistantPreset,
   assistantEndpointIdentity,
   endpointAllowsSendingSecrets,
   isLocalAssistantEndpoint,
+  timeBucketLabel,
   INSECURE_ENDPOINT_MESSAGE,
   ModelActionPolicy,
+  type HabitEntry,
+  type HabitLastAction,
+  type HabitRecordingReceipt,
+  type HabitSequenceEntry,
 } from "../core/assistant.js";
 import {
   type HttpRequest,
@@ -190,6 +197,8 @@ interface PersistedSettings {
   assistantModel: string;
   habitLearningEnabled: boolean;
   learnedShortcuts: LearnedShortcut[];
+  /** Time-bucket habit entries learned from manual card actions and local commands (#113). */
+  habitEntries: HabitEntry[];
   hasCompletedOnboarding: boolean;
   isCompactGridMode: boolean;
   cachedXiaomiDevices: SmartDevice[];
@@ -222,6 +231,8 @@ interface UndoAction {
   readonly summary: string;
   readonly steps: readonly UndoStep[];
   readonly expiresAtMs: number;
+  /** Habit records written while executing; undoing takes them back (#113). */
+  readonly habitReceipt?: HabitRecordingReceipt;
 }
 
 interface ReplyBannerState {
@@ -545,6 +556,15 @@ function loadSettings(): LoadedSettings {
           assistantModel: parsed.assistantModel ?? "~typesafe/jev-latest",
           habitLearningEnabled: parsed.habitLearningEnabled ?? true,
           learnedShortcuts: parsed.learnedShortcuts ?? [],
+          habitEntries: Array.isArray(parsed.habitEntries)
+            ? parsed.habitEntries.filter(
+                (e): e is HabitEntry =>
+                  typeof e?.bucket === "string" &&
+                  typeof e?.targetId === "string" &&
+                  typeof e?.operationKey === "string" &&
+                  typeof e?.count === "number",
+              )
+            : [],
           hasCompletedOnboarding: parsed.hasCompletedOnboarding ?? Boolean(miSession),
           isCompactGridMode: parsed.isCompactGridMode ?? true,
           cachedXiaomiDevices: Array.isArray(parsed.cachedXiaomiDevices)
@@ -604,6 +624,7 @@ function loadSettings(): LoadedSettings {
       assistantModel: "~typesafe/jev-latest",
       habitLearningEnabled: true,
       learnedShortcuts: [],
+      habitEntries: [],
       hasCompletedOnboarding: false,
       isCompactGridMode: true,
       cachedXiaomiDevices: [],
@@ -721,6 +742,14 @@ export class MenuMijiaWindowsApp {
   private pendingCloudConsent: { utterance: string; endpoint: string } | null = null;
   /** AI guesses that wait for a tap instead of running by themselves (#21). */
   private pendingSuggestions: AssistantSuggestion[] = [];
+  /** AI-ranked proactive suggestions for the current ambient signature (#113). */
+  private aiProactiveSuggestions: AssistantSuggestion[] | null = null;
+  private aiProactiveSignature: string | null = null;
+  private isRefreshingProactive = false;
+  /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
+  private proactiveRetryAfterMs: number | null = null;
+  /** Cooldown before a failed background refresh retries (Codex #116 review). */
+  private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   private isResolvingIntent = false;
   private isSyncingCloud = false;
   /** When the last Xiaomi cloud refresh started; paces background refreshes (#26). */
@@ -1128,6 +1157,9 @@ export class MenuMijiaWindowsApp {
         this.render();
       }
 
+      // Silent Top-4 AI enhancement: fires only when the time bucket or climate changed (#113).
+      this.maybeRefreshProactiveInBackground();
+
       const now = Date.now();
       let changed = false;
 
@@ -1504,6 +1536,9 @@ export class MenuMijiaWindowsApp {
     this.settings.selectedHomeId = id;
     this.isHomeMenuOpen = false;
     this.selectedRoom = "全部";
+    // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
+    this.aiProactiveSuggestions = null;
+    this.aiProactiveSignature = null;
     this.saveSettings();
     this.render();
     void this.refreshXiaomiDevices(false);
@@ -1526,7 +1561,12 @@ export class MenuMijiaWindowsApp {
       targetId: d.id,
       operation: { kind: "power", isOn: false },
     }));
-    await this.executeIntents(intents, t("已关闭 {count} 台开启中的设备", { count: targets.length }), t("一键全关"));
+    await this.executeIntents(
+      intents,
+      t("已关闭 {count} 台开启中的设备", { count: targets.length }),
+      t("一键全关"),
+      { recordHabits: true },
+    );
   }
 
   private async handleNaturalCommand(rawInput: string, fromScheduled = false): Promise<void> {
@@ -1577,7 +1617,8 @@ export class MenuMijiaWindowsApp {
       (s) => s.phrase.replace(/\s+/g, "") === trimmed.replace(/\s+/g, ""),
     );
     if (learnedMatch) {
-      await this.executeIntents(learnedMatch.intents, learnedMatch.reply, t("习惯记忆 0ms"));
+      // A timer firing a learned phrase is not a user action, so it never trains habits (#34/#113).
+      await this.executeIntents(learnedMatch.intents, learnedMatch.reply, t("习惯记忆 0ms"), { recordHabits: !fromScheduled });
       return;
     }
 
@@ -1636,7 +1677,13 @@ export class MenuMijiaWindowsApp {
           now: new Date(),
           readings,
           devices: aliasedDevices,
-          habitSummary: buildHabitSummary(this.settings.habitLearningEnabled, this.settings.learnedShortcuts),
+          habitSummary: buildHabitSummary(
+            this.settings.habitLearningEnabled,
+            this.settings.learnedShortcuts,
+            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+            this.devices,
+            this.scenes,
+          ),
         });
         plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
         sourceLabel = resolver.usesSystemOne ? "Jev SystemOne" : this.settings.assistantModel;
@@ -1650,7 +1697,9 @@ export class MenuMijiaWindowsApp {
       }
       const replyText =
         plan.reply || IntentReply.describe(sanitized, aliasedDevices, this.scenes);
-      const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel);
+      const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel, {
+        recordHabits: plan.source === "local" && !fromScheduled,
+      });
 
       if (
         succeeded &&
@@ -1769,9 +1818,15 @@ export class MenuMijiaWindowsApp {
     intents: readonly DeviceIntent[],
     replyText: string,
     sourceLabel: string,
+    options: { recordHabits?: boolean } = {},
   ): Promise<boolean> {
     const commands: Array<{ deviceId: string; command: DeviceCommand }> = [];
     for (const intent of intents) {
+      if (intent.operation.kind === "activateScene") {
+        const scene = this.scenes.find((s) => s.id === intent.targetId);
+        if (scene) commands.push({ deviceId: scene.id, command: { kind: "activateScene", entityId: scene.entityId } });
+        continue;
+      }
       const dev = this.devices.find((d) => d.id === intent.targetId);
       if (!dev) continue;
       for (const command of IntentValidator.commandsForIntent(intent, dev)) {
@@ -1785,6 +1840,16 @@ export class MenuMijiaWindowsApp {
     let failed = 0;
     let failureMessage = "";
     for (const { deviceId, command } of commands) {
+      // Scenes have no device row and no inverse; they simply run and count as applied (#113).
+      if (command.kind === "activateScene") {
+        if (await this.applyCommand(command)) {
+          succeeded += 1;
+        } else {
+          failed += 1;
+          failureMessage = this.replyBanner?.text ?? "设备未响应";
+        }
+        continue;
+      }
       const device = this.devices.find((d) => d.id === deviceId);
       if (!device) {
         failed += 1;
@@ -1802,10 +1867,16 @@ export class MenuMijiaWindowsApp {
       }
     }
     if (succeeded > 0) {
-      this.lastUndoAction = canUndo ? {
+      // Only explicit user asks train habits; model-inferred and scheduled runs do not (#34/#113).
+      const habitReceipt = options.recordHabits && failed === 0 ? this.recordHabits(intents) : null;
+      // Scene activations have no inverse: an undo action must exist only when at least one
+      // device step is restorable, otherwise Undo would report success without doing anything
+      // (Codex #116 re-review).
+      this.lastUndoAction = canUndo && steps.length > 0 ? {
         summary: replyText,
         steps,
         expiresAtMs: Date.now() + 10 * 60 * 1000,
+        habitReceipt: habitReceipt ?? undefined,
       } : null;
     }
     this.replyBanner = failed > 0
@@ -1819,16 +1890,185 @@ export class MenuMijiaWindowsApp {
     device: SmartDevice,
     command: DeviceCommand,
     summary: string,
+    intent?: DeviceIntent,
   ): Promise<void> {
     const inverseCommands = this.buildInverseCommand(device, command);
     if (!(await this.applyCommand(command))) return;
+    const habitReceipt = intent ? this.recordHabits([intent]) : null;
     this.lastUndoAction = inverseCommands.length > 0 ? {
       summary,
       steps: [{ deviceId: device.id, commands: inverseCommands }],
       expiresAtMs: Date.now() + 10 * 60 * 1000,
+      habitReceipt: habitReceipt ?? undefined,
     } : null;
     this.replyBanner = { text: summary, source: t("实时控制") };
     this.render();
+  }
+
+  /** Records manual card actions into the habit memory for the current time bucket (#113). */
+  private recordHabits(intents: readonly DeviceIntent[]): HabitRecordingReceipt | null {
+    if (!this.settings.habitLearningEnabled || intents.length === 0) return null;
+    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
+    const receipt = memory.record(intents, this.devices, this.scenes, new Date());
+    if (receipt) this.saveHabitMemory(memory);
+    return receipt;
+  }
+
+  /** Sequence entries and lastAction persist alongside the entries (ADR-0009). */
+  private habitSequences(): HabitSequenceEntry[] {
+    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as { sequences?: HabitSequenceEntry[]; lastAction?: HabitLastAction | null };
+      return Array.isArray(parsed.sequences) ? parsed.sequences : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private lastHabitAction(): HabitLastAction | null {
+    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { lastAction?: HabitLastAction | null };
+      return parsed.lastAction ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private saveHabitMemory(memory: UserHabitMemory): void {
+    this.settings.habitEntries = [...memory.entries];
+    this.saveSettings();
+    try {
+      localStorage.setItem("menumijia.windows.habit.sequences.v1", JSON.stringify({
+        sequences: memory.sequences,
+        lastAction: memory.lastAction,
+      }));
+    } catch {
+      // Quota errors only cost the sequence context, never the entries.
+    }
+  }
+
+  private unrecordHabits(receipt: HabitRecordingReceipt): void {
+    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
+    memory.unrecord(receipt);
+    this.saveHabitMemory(memory);
+  }
+
+  /** Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient signature (#113). */
+  private proactiveSignature(): string {
+    const bucket = timeBucketLabel(new Date().getHours());
+    const readings = this.computedEnvironmentReadings
+      .map(
+        (reading) =>
+          `${reading.temperature !== null ? Math.round(reading.temperature) : "-"}|${
+            reading.humidity !== null ? Math.round(reading.humidity / 5) * 5 : "-"
+          }`,
+      )
+      .join(",");
+    return `${bucket}|${readings}`;
+  }
+
+  /** The Top-4 zero-delay suggestions: the AI cache when fresh, otherwise ranked locally (#113). */
+  private currentProactiveSuggestions(): AssistantSuggestion[] {
+    if (this.pendingSuggestions.length > 0) return [];
+    const signature = this.proactiveSignature();
+    const aliasedDevices = withAliases(this.layout, this.devices);
+    if (this.aiProactiveSuggestions && this.aiProactiveSignature === signature) {
+      // Drop actions the home has already reached since the model answered; if nothing
+      // survives, fall back to the local ranking instead of an empty strip (#113).
+      const fresh = this.aiProactiveSuggestions.filter((suggestion) =>
+        suggestion.intents.every((intent) => habitActionable(intent, aliasedDevices, this.scenes)),
+      );
+      if (fresh.length > 0) return fresh;
+    }
+    return new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
+      devices: this.devices,
+      scenes: this.scenes,
+      environmentReadings: this.computedEnvironmentReadings,
+    });
+  }
+
+  private renderProactiveStrip(): string {
+    const suggestions = this.currentProactiveSuggestions();
+    if (suggestions.length === 0) return "";
+    return `
+      <section class="cc-quick-strip">
+        ${suggestions
+          .map(
+            (item) => `
+          <button class="cc-quick-pill tint-cyan" data-proactive-id="${this.escapeHtml(item.id)}" title="${this.escapeHtml(item.title)}">
+            <span class="cc-quick-icon">${SF_ICONS.sparkles}</span>
+            <span>${this.escapeHtml(item.title)}</span>
+          </button>
+        `,
+          )
+          .join("")}
+      </section>`;
+  }
+
+  /**
+   * Silent background AI refresh for the proactive strip (#113): fires only when the
+   * time bucket or room climate changed, never blocks the panel, never asks for consent,
+   * and keeps the previous cache when the request fails.
+   */
+  private maybeRefreshProactiveInBackground(): void {
+    if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
+    if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
+    const signature = this.proactiveSignature();
+    if (signature === this.aiProactiveSignature) return;
+    const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
+    if (!endpointAllowsSendingSecrets(baseURL)) return;
+    const apiKey = this.apiKeyFor(baseURL);
+    const isLoopback = isLocalAssistantEndpoint(baseURL);
+    if (!apiKey && !isLoopback) return;
+    if (!isLoopback) {
+      const endpoint = assistantEndpointIdentity(baseURL);
+      if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
+    }
+    this.isRefreshingProactive = true;
+    const resolver = new ModelIntentResolver(
+      { baseURL, model: this.settings.assistantModel, apiKey },
+      this.transport,
+    );
+    resolver
+      .recommendProactiveSuggestions(
+        this.devices,
+        this.scenes,
+        buildAssistantContext({
+          now: new Date(),
+          readings: this.computedEnvironmentReadings,
+          devices: this.devices,
+          habitSummary: buildHabitSummary(
+            this.settings.habitLearningEnabled,
+            this.settings.learnedShortcuts,
+            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+            this.devices,
+            this.scenes,
+          ),
+        }),
+      )
+      .then((suggestions) => {
+        this.isRefreshingProactive = false;
+        if (this.proactiveSignature() === signature) {
+          // The context counts as served only once a usable result landed (Codex #116 review).
+          this.aiProactiveSignature = signature;
+          if (suggestions.length > 0) {
+            this.aiProactiveSuggestions = suggestions;
+          } else {
+            // An empty result is a valid "home is ideal" answer: drop any older cache so the
+            // local ranking takes over instead of stale suggestions (Codex #116 re-review).
+            this.aiProactiveSuggestions = null;
+          }
+          if (!this.hasBlockingPanelInteraction()) this.render();
+        }
+      })
+      .catch(() => {
+        // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
+        this.isRefreshingProactive = false;
+        this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
+      });
   }
 
   private async performUndo(): Promise<void> {
@@ -1865,6 +2105,11 @@ export class MenuMijiaWindowsApp {
     this.lastUndoAction = failedSteps.length > 0
       ? { ...action, steps: failedSteps }
       : null;
+    // The habit records roll back only once every inverse command succeeded; a partially
+    // failed undo keeps them for the retry (Codex #116 re-review).
+    if (failedSteps.length === 0 && action.habitReceipt) {
+      this.unrecordHabits(action.habitReceipt);
+    }
     this.replyBanner = failedSteps.length > 0
       ? { text: t("撤销未完成，{count} 项待恢复。{message}", { count: failedSteps.length, message: failureMessage }), source: t("控制失败"), isError: true }
       : { text: t("已撤销：{summary}", { summary: action.summary }), source: t("已恢复") };
@@ -2471,6 +2716,8 @@ export class MenuMijiaWindowsApp {
           `,
           ).join("")}
         </section>
+
+        ${this.renderProactiveStrip()}
 
         <div class="cc-room-bar">
           <div class="cc-room-track">
@@ -3974,6 +4221,19 @@ export class MenuMijiaWindowsApp {
                   </div>`
                 : ""
             }
+            ${
+              this.settings.habitEntries.length > 0 || this.habitSequences().length > 0
+                ? `<div class="cc-timers-stack">
+                    <div class="cc-timer-row">
+                      <span>${t("已学习 {count} 条时段习惯、{sequences} 条先后习惯（用于猜你想控）", {
+                        count: this.settings.habitEntries.length,
+                        sequences: this.habitSequences().length,
+                      })}</span>
+                      <button class="cc-inline-pill" id="btn-clear-habits">${t("清空")}</button>
+                    </div>
+                  </div>`
+                : ""
+            }
           </div>
 
           ${!this.availableUpdate ? this.renderUpdateSection() : ""}
@@ -4217,6 +4477,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setClimateTemperature", entityId: k.entityId, temperature },
           t("已将{name}设为 {temp}", { name: dev.name, temp: formatTemperature(temperature) }),
+          { targetId: dev.id, operation: { kind: "targetTemperature", celsius: temperature } },
         );
       });
     });
@@ -4227,7 +4488,12 @@ export class MenuMijiaWindowsApp {
         const dev = this.devices.find((d) => d.id === raw.slice(0, i));
         if (!dev || dev.kind.kind !== "climate") return;
         const fanMode = raw.slice(i + 1);
-        void this.executeSingleCommand(dev, { kind: "setClimateFanMode", entityId: dev.kind.entityId, fanMode }, t("已将{name}风速设为 {speed}", { name: dev.name, speed: localizeFanMode(fanMode) }));
+        void this.executeSingleCommand(
+          dev,
+          { kind: "setClimateFanMode", entityId: dev.kind.entityId, fanMode },
+          t("已将{name}风速设为 {speed}", { name: dev.name, speed: localizeFanMode(fanMode) }),
+          { targetId: dev.id, operation: { kind: "fanSpeed", speed: fanMode } },
+        );
       });
     });
 
@@ -4372,7 +4638,7 @@ export class MenuMijiaWindowsApp {
         this.pendingSuggestions = this.pendingSuggestions.filter((s) => s.id !== suggestion.id);
         const aliasedDevices = withAliases(this.layout, this.devices);
         const intents = IntentValidator.sanitize(suggestion.intents, aliasedDevices, this.scenes);
-        void this.executeIntents(intents, IntentReply.describe(intents, aliasedDevices, this.scenes), t("已确认"));
+        void this.executeIntents(intents, IntentReply.describe(intents, aliasedDevices, this.scenes), t("已确认"), { recordHabits: true });
       });
     });
 
@@ -4407,6 +4673,17 @@ export class MenuMijiaWindowsApp {
       });
     });
 
+    this.root.querySelectorAll<HTMLElement>("[data-proactive-id]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const suggestion = this.currentProactiveSuggestions().find((s) => s.id === btn.dataset.proactiveId);
+        if (!suggestion) return;
+        const aliasedDevices = withAliases(this.layout, this.devices);
+        const intents = IntentValidator.sanitize(suggestion.intents, aliasedDevices, this.scenes);
+        if (intents.length === 0) return;
+        void this.executeIntents(intents, IntentReply.describe(intents, aliasedDevices, this.scenes), t("猜你想控"), { recordHabits: true });
+      });
+    });
+
     this.root.querySelectorAll<HTMLElement>("[data-room]").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.selectedRoom = btn.dataset.room ?? "全部";
@@ -4432,6 +4709,7 @@ export class MenuMijiaWindowsApp {
           dev,
           firstCmd,
           `已${nextOn ? t("打开") : t("关闭")}${dev.name}`,
+          { targetId: dev.id, operation: { kind: "power", isOn: nextOn } },
         );
       }
     };
@@ -4483,6 +4761,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setLightEffect", entityId: dev.kind.entityId, effect },
           t("已切换{name}灯光模式", { name: dev.name }),
+          { targetId: dev.id, operation: { kind: "lightEffect", effect } },
         );
       });
     });
@@ -4498,6 +4777,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setLightBrightness", entityId: dev.kind.entityId, percent },
           t("已将{name}亮度设为 {percent}%", { name: dev.name, percent: percent }),
+          { targetId: dev.id, operation: { kind: "brightness", percent } },
         );
       });
     });
@@ -4513,6 +4793,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setLightColorTemp", entityId: dev.kind.entityId, kelvin },
           t("已将{name}色温设为 {kelvin}K", { name: dev.name, kelvin: kelvin }),
+          { targetId: dev.id, operation: { kind: "colorTemperature", kelvin } },
         );
       });
     });
@@ -4529,6 +4810,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setClimateTemperature", entityId: dev.kind.entityId, temperature },
           t("已将{name}设为 {temp}", { name: dev.name, temp: formatTemperature(temperature) }),
+          { targetId: dev.id, operation: { kind: "targetTemperature", celsius: temperature } },
         );
       });
     });
@@ -4545,6 +4827,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setClimateMode", entityId: dev.kind.entityId, hvacMode },
           t("已切换{name}模式", { name: dev.name }),
+          { targetId: dev.id, operation: { kind: "hvacMode", mode: hvacMode } },
         );
       });
     });
@@ -4561,6 +4844,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setFanPresetMode", entityId: dev.kind.entityId, presetMode },
           t("已将{name}设为 {speed}", { name: dev.name, speed: IntentReply.fanSpeedLabel(presetMode) }),
+          { targetId: dev.id, operation: { kind: "fanSpeed", speed: presetMode } },
         );
       });
     });
@@ -4591,6 +4875,7 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setFanOscillating", entityId: dev.kind.entityId, oscillating: nextOsc },
           `已${nextOsc ? t("开启") : t("关闭")}${dev.name}摇头`,
+          { targetId: dev.id, operation: { kind: "oscillation", enabled: nextOsc } },
         );
       });
     });
@@ -4808,6 +5093,15 @@ export class MenuMijiaWindowsApp {
           this.render();
         }
       });
+    });
+
+    this.root.querySelector("#btn-clear-habits")?.addEventListener("click", () => {
+      this.settings.habitEntries = [];
+      localStorage.removeItem("menumijia.windows.habit.sequences.v1");
+      this.aiProactiveSuggestions = null;
+      this.aiProactiveSignature = null;
+      this.saveSettings();
+      this.render();
     });
 
     this.root.querySelectorAll<HTMLElement>("[data-ai-preset]").forEach((btn) => {
@@ -5161,7 +5455,7 @@ export class MenuMijiaWindowsApp {
         const percent = this.dimPreview.percent;
         this.dimPreview = null;
         if (dev && dev.kind.kind === "light") {
-          void this.executeSingleCommand(dev, { kind: "setLightBrightness", entityId: dev.kind.entityId, percent }, t("已将{name}亮度设为 {percent}%", { name: dev.name, percent: percent }));
+          void this.executeSingleCommand(dev, { kind: "setLightBrightness", entityId: dev.kind.entityId, percent }, t("已将{name}亮度设为 {percent}%", { name: dev.name, percent: percent }), { targetId: dev.id, operation: { kind: "brightness", percent } });
         }
       }
     });

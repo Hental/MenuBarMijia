@@ -17,13 +17,90 @@ extension HomeStore {
 
     public func presentAssistantBar(startVoice: Bool = false) {
         isShowingAssistantBar = true
-        if assistantSuggestions.isEmpty {
-            assistantSuggestions = userHabitMemory.topSuggestions(devices: devices, scenes: scenes, limit: 3)
+        if !assistantState.isUserActive {
+            if assistantSuggestions.isEmpty || proactiveRefreshSignature() != lastProactiveRefreshSignature {
+                // Zero delay: rank locally from habits, favorites, environment, and running
+                // devices; a configured model then refreshes the cache in the background (#113).
+                assistantSuggestions = localTopSuggestions()
+            }
         }
+        maybeRefreshProactiveSuggestionsInBackground()
         if startVoice {
             assistantVoiceRequest &+= 1
         } else {
             assistantFocusRequest &+= 1
+        }
+    }
+
+    /// The local zero-delay Top 4 (#113).
+    func localTopSuggestions() -> [AssistantSuggestion] {
+        userHabitMemory.topSuggestions(
+            for: Date(),
+            devices: devices,
+            scenes: scenes,
+            favoriteIds: favoriteOrder,
+            environmentReadings: environmentReadings
+        )
+    }
+
+    /// Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient
+    /// signature that decides when the suggestion cache is stale (#113).
+    func proactiveRefreshSignature(now: Date = Date()) -> String {
+        let bucket = UserHabitMemory.TimeBucket.from(date: now)
+        let readings = environmentReadings.map { reading -> String in
+            let temperature = reading.temperature.map { String(($0 / 1.0).rounded()) } ?? "-"
+            let humidity = reading.humidity.map { String((($0 / 5.0).rounded() * 5)) } ?? "-"
+            return "\(temperature)/\(humidity)"
+        }
+        return "\(bucket.rawValue)|\(readings.joined(separator: ","))"
+    }
+
+    /// Fires the silent background AI refresh when the ambient context changed since the
+    /// last successful one; returns the task (also stored in `proactiveRefreshTask`) or nil (#113).
+    /// The signature is recorded only when a refresh produces a usable result — a failed
+    /// attempt retries after `proactiveRetryCooldown` instead of being swallowed (Codex #116 review).
+    @discardableResult
+    public func maybeRefreshProactiveSuggestionsInBackground() -> Task<Void, Never>? {
+        let signature = proactiveRefreshSignature()
+        guard signature != lastProactiveRefreshSignature else { return nil }
+        if let retryAfter = proactiveRetryEarliest, Date() < retryAfter { return nil }
+        guard homeBackend != .demo,
+              !assistantState.isUserActive else { return nil }
+        let config = assistantConfig
+        guard !shouldRejectMissingAPIKey(for: config),
+              cloudConsentNeeded(for: config, utterance: nil) == nil else { return nil }
+        let task = Task { await self.refreshProactiveSuggestionsCache(signature: signature) }
+        proactiveRefreshTask = task
+        return task
+    }
+
+    /// Silent cache refresh: never blocks the panel, never asks for consent, never surfaces
+    /// errors — the previous cache simply survives a failed refresh (#113).
+    public func refreshProactiveSuggestionsCache(signature: String? = nil) async {
+        guard !isProactiveRecommending, homeBackend != .demo, !assistantState.isUserActive else { return }
+        let config = assistantConfig
+        guard !shouldRejectMissingAPIKey(for: config),
+              cloudConsentNeeded(for: config, utterance: nil) == nil else { return }
+        let attemptedSignature = signature ?? proactiveRefreshSignature()
+        let context = controlContextID
+        isProactiveRecommending = true
+        defer { isProactiveRecommending = false }
+        let resolver = makeAssistantResolver(config: config)
+        let assistantContext = buildAssistantContext()
+        do {
+            let inferred = try await resolver.recommendProactiveSuggestions(
+                devices: devices,
+                scenes: scenes,
+                context: assistantContext
+            )
+            guard context == controlContextID, !assistantState.isUserActive else { return }
+            // The context counts as served only once a usable result landed (Codex #116 review);
+            // an empty result is a valid "home is ideal" answer and falls back to the local
+            // ranking instead of stale suggestions (Codex #116 re-review).
+            lastProactiveRefreshSignature = attemptedSignature
+            assistantSuggestions = inferred.isEmpty ? localTopSuggestions() : inferred
+        } catch {
+            proactiveRetryEarliest = Date().addingTimeInterval(proactiveRetryCooldown)
         }
     }
 
@@ -88,7 +165,7 @@ extension HomeStore {
         guard !isProactiveRecommending else { return }
         guard homeBackend != .demo else {
             // 演示模式完全离线（#47）：只给基于本地习惯记忆的建议。
-            assistantSuggestions = userHabitMemory.topSuggestions(devices: devices, scenes: scenes, limit: 3)
+            assistantSuggestions = localTopSuggestions()
             setAssistantState(.done(L10n.tr("演示模式建议基于内置虚拟设备", "Demo suggestions are based on the built-in virtual home")))
             return
         }
@@ -534,11 +611,14 @@ extension HomeStore {
         var failedNames: [String] = []
         var offlineNames: [String] = []
         var appliedDeviceIds: Set<String> = []
+        var appliedSceneIds: Set<String> = []
         for outcome in outcomes {
             switch outcome {
             case .applied(let deviceId, let restore):
                 restoreCommands.append(contentsOf: restore)
                 if let deviceId { appliedDeviceIds.insert(deviceId) }
+            case .appliedScene(let sceneId):
+                appliedSceneIds.insert(sceneId)
             case .failed(let name):
                 if !failedNames.contains(name) { failedNames.append(name) }
             case .offline(let name):
@@ -550,7 +630,8 @@ extension HomeStore {
 
         // Only explicit user actions become habits; AI-inferred and timer executions do not (#34).
         var habitReceipt: UserHabitMemory.RecordingReceipt?
-        if origin.recordsHabits, isHabitLearningEnabled, failedNames.isEmpty, !appliedDeviceIds.isEmpty {
+        if origin.recordsHabits, isHabitLearningEnabled, failedNames.isEmpty,
+           !appliedDeviceIds.isEmpty || !appliedSceneIds.isEmpty {
             var memory = userHabitMemory
             habitReceipt = memory.record(utterance: recordedUtterance, intents: plan.intents, devices: devices, scenes: scenes)
             userHabitMemory = memory
@@ -582,7 +663,11 @@ extension HomeStore {
         if !failedNames.isEmpty {
             let sep = L10n.isEnglish ? ", " : "、"
             setAssistantState(.failed(L10n.tr("\(failedNames.joined(separator: sep)) 未响应", "\(failedNames.joined(separator: sep)) did not respond")))
-        } else if outcomes.allSatisfy({ if case .applied = $0 { return false } else { return true } }) {
+        } else if outcomes.allSatisfy({ outcome in
+            if case .applied = outcome { return false }
+            if case .appliedScene = outcome { return false }
+            return true
+        }) {
             let sep = L10n.isEnglish ? ", " : "、"
             let reason = offlineNames.isEmpty
                 ? L10n.tr("没有可执行的设备操作", "No matching device actions")
@@ -592,7 +677,7 @@ extension HomeStore {
             if !plan.suggestions.isEmpty {
                 assistantSuggestions = plan.suggestions
             } else {
-                assistantSuggestions = userHabitMemory.topSuggestions(devices: devices, scenes: scenes, limit: 3)
+                assistantSuggestions = localTopSuggestions()
             }
             let receipt = receiptStartedAt.map { start in
                 AssistantExecutionReceipt(
@@ -616,6 +701,8 @@ extension HomeStore {
 
     private enum AssistantApplyOutcome: Sendable {
         case applied(deviceId: String?, restore: [DeviceCommand])
+        /// A scene ran: it counts toward habit learning but offers no device undo (#113).
+        case appliedScene(sceneId: String)
         case failed(String)
         case offline(String)
         case skipped
@@ -635,7 +722,7 @@ extension HomeStore {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
                 guard context == controlContextID else { return .skipped }
-                return .applied(deviceId: nil, restore: [])
+                return .appliedScene(sceneId: intent.targetId)
             } catch {
                 return .failed(scene.name)
             }

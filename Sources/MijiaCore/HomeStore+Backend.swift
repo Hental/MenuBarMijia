@@ -155,7 +155,10 @@ extension HomeStore {
             }
             if rooms != nextRooms { rooms = nextRooms }
             if homes != snapshot.homes { homes = snapshot.homes }
-            if environmentReadings != snapshot.environmentReadings { environmentReadings = snapshot.environmentReadings }
+            if environmentReadings != snapshot.environmentReadings {
+                environmentReadings = snapshot.environmentReadings
+                maybeRefreshProactiveSuggestionsInBackground()
+            }
             if pendingLegacyMenuBarTargetMigration,
                let first = snapshot.environmentReadings.first(where: { $0.temperature != nil }) {
                 self.menuBarTargetId = "temp:\(first.id)"

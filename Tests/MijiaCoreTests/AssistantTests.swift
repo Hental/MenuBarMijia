@@ -373,11 +373,12 @@ struct AssistantTests {
         let suggestions = L10n.$overrideTemperatureUnit.withValue(.celsius) {
             memory.topSuggestions(for: eveningDate, devices: Self.devices, scenes: Self.scenes)
         }
-        #expect(suggestions.map(\.title) == ["书房吸顶灯·月光模式", "客厅空调·25°C"])
+        // Habits rank first; the engine pads the remaining slots with actionable defaults (#113).
+        #expect(suggestions.map(\.title) == ["书房吸顶灯·月光模式", "客厅空调·25°C", "关闭主卧床头灯"])
         let fahrenheitSuggestions = L10n.$overrideTemperatureUnit.withValue(.fahrenheit) {
             memory.topSuggestions(for: eveningDate, devices: Self.devices, scenes: Self.scenes)
         }
-        #expect(fahrenheitSuggestions.map(\.title) == ["书房吸顶灯·月光模式", "客厅空调·77°F"])
+        #expect(fahrenheitSuggestions.map(\.title) == ["书房吸顶灯·月光模式", "客厅空调·77°F", "关闭主卧床头灯"])
         #expect(fahrenheitSuggestions.map(\.intents) == suggestions.map(\.intents))
     }
 

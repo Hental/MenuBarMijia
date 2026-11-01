@@ -85,7 +85,7 @@ macOS 原生通知，覆盖四类情况：插座持续开启 45 分钟且**实�
 _Avoid_: Alarm（警报）、Push notification（远程推送）
 
 **ProactiveSuggestion（猜你想控推荐）**：
-结合用户全渠道操作习惯记忆（`UserHabitMemory`，涵盖手动卡片操作与语音/文本指令的时段频次）、当前环境温湿度与在线活跃设备，在面板打开时零延迟生成、并由远端大模型在后台/环境变化时异步增强的 Top 4 候选动作（`AssistantSuggestion`）。
+结合用户全渠道操作习惯记忆（`UserHabitMemory`，涵盖手动卡片操作与语音/文本指令的「时段 × 工作日/周末」频次、14 天半衰期时间衰减与「先后动作」一步序列，见 ADR-0009）、当前环境温湿度与在线活跃设备，在面板打开时零延迟生成、并由远端大模型在后台/环境变化时异步增强的 Top 4 候选动作（`AssistantSuggestion`）。
 _Avoid_: Static shortcut（静态快捷方式）、Random tip（随机提示）
 
 **GrokBall（AI 情绪表情球）**：

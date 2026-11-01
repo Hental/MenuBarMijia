@@ -64,6 +64,13 @@ public enum AssistantState: Equatable, Sendable {
     case failed(String)
     /// Nothing ran by itself; the user picks one of the suggestion chips (#21).
     case awaitingChoice(String)
+
+    /// The user is mid-interaction, so the proactive cache must not touch the UI (#113).
+    var isUserActive: Bool {
+        if case .thinking = self { return true }
+        if case .awaitingChoice = self { return true }
+        return false
+    }
 }
 
 /// How one assistant command was resolved and executed, shown next to its reply (#93).

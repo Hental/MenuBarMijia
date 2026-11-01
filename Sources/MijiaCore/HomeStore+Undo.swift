@@ -11,6 +11,8 @@ extension HomeStore {
         pendingCloudConsent = nil
         assistantSuggestions = []
         optimisticLockUntil.removeAll()
+        // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
+        lastProactiveRefreshSignature = nil
         for task in debounceTasks.values { task.cancel() }
         debounceTasks.removeAll()
     }
@@ -22,6 +24,7 @@ extension HomeStore {
         Task {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
+                recordManualHabits(intents: [.init(targetId: scene.id, operation: .activateScene)])
                 showToast(L10n.tr("已触发场景：\(scene.name)", "Activated scene: \(scene.name)"))
                 return true
             } catch {
@@ -31,17 +34,23 @@ extension HomeStore {
         }
     }
 
-    public func executeQuickAction(_ action: QuickAction, undoBannerDuration: TimeInterval? = nil) {
+    public func executeQuickAction(
+        _ action: QuickAction,
+        undoBannerDuration: TimeInterval? = nil,
+        recordsHabits: Bool = true
+    ) {
         let previousSnapshot = devices
         var commands: [DeviceCommand] = []
         var restoreCommands: [DeviceCommand] = []
         var affectedDeviceIds: Set<String> = []
+        var habitIntents: [DeviceIntent] = []
 
         switch action {
         case .lightsOff:
             for idx in devices.indices where devices[idx].isOnline {
                 guard case .light(var s) = devices[idx].kind, s.isOn else { continue }
                 affectedDeviceIds.insert(devices[idx].id)
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                 lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                 commands.append(.setLightPower(entityId: s.entityId, isOn: false))
                 restoreCommands.append(.setLightPower(entityId: s.entityId, isOn: true))
@@ -74,6 +83,8 @@ extension HomeStore {
             for idx in targetIndices {
                 guard case .light(var s) = devices[idx].kind else { continue }
                 affectedDeviceIds.insert(devices[idx].id)
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .brightness(15)))
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .colorTemperature(max(s.minKelvin, 2700))))
                 lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                 let prevOn = s.isOn
                 let prevBri = s.brightnessPercent ?? 80
@@ -99,6 +110,7 @@ extension HomeStore {
                 case .climate(var s) where s.isOn && s.hvacMode != "off":
                     let prevMode = s.hvacMode
                     affectedDeviceIds.insert(devices[idx].id)
+                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                     lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                     commands.append(.setClimatePower(entityId: s.entityId, isOn: false, fallbackMode: prevMode))
                     restoreCommands.append(.setClimatePower(entityId: s.entityId, isOn: true, fallbackMode: prevMode))
@@ -107,6 +119,7 @@ extension HomeStore {
                     devices[idx].kind = .climate(s)
                 case .fan(var s) where s.isOn:
                     affectedDeviceIds.insert(devices[idx].id)
+                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
                     lockOptimistic(devices[idx].id, duration: .seconds(3.0))
                     commands.append(.setFanPower(entityId: s.entityId, isOn: false))
                     restoreCommands.append(.setFanPower(entityId: s.entityId, isOn: true))
@@ -128,15 +141,26 @@ extension HomeStore {
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: affectedDeviceIds.count,
+            habitReceipt: nil,
             duration: undoBannerDuration
         )
+        guard let bannerId = undoBanner?.id else { return }
 
         let context = controlContextID
         Task {
+            var didFail = false
             for cmd in commands {
                 guard context == controlContextID else { return }
-                try? await executeDeviceCommand(cmd)
+                do {
+                    try await executeDeviceCommand(cmd)
+                } catch {
+                    didFail = true
+                }
             }
+            // Habits train only on confirmed success, and only while the banner this action
+            // created is still the live one (an undo or expiry cancels the learning) (#113).
+            guard context == controlContextID, !didFail, recordsHabits, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
         }
     }
 
@@ -221,9 +245,14 @@ extension HomeStore {
         let previousSnapshot = devices
         var offCommands: [DeviceCommand] = []
         var restoreCommands: [DeviceCommand] = []
+        var habitIntents: [DeviceIntent] = []
 
         for idx in devices.indices where targetIds.contains(devices[idx].id) {
             guard let change = Self.allOffChange(for: devices[idx]) else { continue }
+            // A vacuum returning home has no power op, so it executes but does not train a habit (#113).
+            if UserHabitMemory.isPowerToggleable(devices[idx]) {
+                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
+            }
             lockOptimistic(devices[idx].id, duration: .seconds(3.0))
             offCommands.append(change.off)
             restoreCommands.append(change.restore)
@@ -234,15 +263,25 @@ extension HomeStore {
             title: L10n.tr("已关闭 \(offCommands.count) 台设备", "Turned off \(offCommands.count) device(s)"),
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
-            deviceCount: targetIds.count
+            deviceCount: targetIds.count,
+            habitReceipt: nil
         )
+        guard let bannerId = undoBanner?.id else { return }
 
         let context = controlContextID
         Task {
+            var didFail = false
             for cmd in offCommands {
                 guard context == controlContextID else { return }
-                try? await executeDeviceCommand(cmd)
+                do {
+                    try await executeDeviceCommand(cmd)
+                } catch {
+                    didFail = true
+                }
             }
+            // Habits train only on confirmed success while this action's banner is live (#113).
+            guard context == controlContextID, !didFail, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
         }
     }
 
