@@ -129,7 +129,7 @@ MenuBarMijia 的 macOS 版本采用 Swift 6 原生开发，Windows 11 版本基�
 
 ### 1. 系统要求与安装
 
-- **macOS：** 支持 macOS 14 (Sonoma) 及以上系统。
+- **macOS：** 支持 macOS 14 (Sonoma) 及以上系统（Universal Binary 通用二进制，原生支持 Apple Silicon 与 Intel 芯片）。
 - **Windows：** 支持 Windows 11（64 位）。
 
 #### macOS 安装方式

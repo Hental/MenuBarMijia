@@ -47,10 +47,15 @@ if [ -n "$MACOS_CERT_SHA1" ] && ! printf '%s' "$MACOS_CERT_SHA1" | grep -Eq '^[0
     exit 1
 fi
 
-echo "▶ 正在编译 MenuBarMijiaApp $VERSION (Release)..."
-swift build -c release --product MenuBarMijiaApp
+echo "▶ 正在编译 MenuBarMijiaApp $VERSION (Release Universal: arm64 + x86_64)..."
+swift build -c release --product MenuBarMijiaApp --arch arm64 --arch x86_64
 
-BIN_PATH="$(swift build -c release --show-bin-path)/MenuBarMijiaApp"
+BIN_PATH="$(swift build -c release --product MenuBarMijiaApp --arch arm64 --arch x86_64 --show-bin-path)/MenuBarMijiaApp"
+ARCHS="$(lipo -archs "$BIN_PATH" 2>/dev/null || true)"
+if ! printf '%s' "$ARCHS" | grep -qw "arm64" || ! printf '%s' "$ARCHS" | grep -qw "x86_64"; then
+    echo "❌ MenuBarMijiaApp 未包含完整通用二进制架构（当前：${ARCHS:-<未知>}，期望：arm64 + x86_64）" >&2
+    exit 1
+fi
 APP_DIR="$ROOT/MenuBarMijia.app"
 rm -rf "$ROOT/米家控制中心.app" "$ROOT/MenuMijia.app"  # 清理旧名字产物
 
@@ -77,15 +82,20 @@ cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/MenuBarMijia_MijiaCore.bun
 
 GO2RTC_CACHED="$HOME/Library/Application Support/MenuBarMijia/bin/go2rtc"
 if [ -x "$GO2RTC_CACHED" ]; then
-    mkdir -p "$APP_DIR/Contents/Resources/bin"
-    cp "$GO2RTC_CACHED" "$APP_DIR/Contents/Resources/bin/go2rtc"
-    chmod +x "$APP_DIR/Contents/Resources/bin/go2rtc"
+    GO2RTC_ARCHS="$(lipo -archs "$GO2RTC_CACHED" 2>/dev/null || true)"
+    if printf '%s' "$GO2RTC_ARCHS" | grep -qw "arm64" && printf '%s' "$GO2RTC_ARCHS" | grep -qw "x86_64"; then
+        mkdir -p "$APP_DIR/Contents/Resources/bin"
+        cp "$GO2RTC_CACHED" "$APP_DIR/Contents/Resources/bin/go2rtc"
+        chmod +x "$APP_DIR/Contents/Resources/bin/go2rtc"
+    else
+        echo "ℹ️ 本机缓存的 go2rtc 仅含单架构（${GO2RTC_ARCHS:-未知}），跳过打入通用安装包（本机运行仍可直接使用缓存或 Homebrew 路径）"
+    fi
 fi
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/MenuBarMijiaApp"
 chmod +x "$APP_DIR/Contents/MacOS/MenuBarMijiaApp"
 strip -S -x "$APP_DIR/Contents/MacOS/MenuBarMijiaApp"
-if ! SYMBOL_TABLE="$(nm -ap "$APP_DIR/Contents/MacOS/MenuBarMijiaApp")"; then
+if ! SYMBOL_TABLE="$(nm -arch arm64 -ap "$APP_DIR/Contents/MacOS/MenuBarMijiaApp" && nm -arch x86_64 -ap "$APP_DIR/Contents/MacOS/MenuBarMijiaApp")"; then
     echo "❌ 无法读取 MenuBarMijiaApp 符号表，不能确认发布包是否泄露本机路径。" >&2
     exit 1
 fi

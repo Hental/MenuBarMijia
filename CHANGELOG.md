@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### 新功能与体验提升
+- **macOS 通用二进制（Universal Binary: `arm64` + `x86_64`）原生支持（[#118](https://github.com/jryang1997/MenuBarMijia/issues/118), [#119](https://github.com/jryang1997/MenuBarMijia/pull/119)）**：`scripts/build_app.sh` 与 `scripts/release.sh` 默认编译并校验 `arm64 + x86_64` 双架构通用二进制，并对全架构切片执行符号表路径泄露检查与 `go2rtc` 双架构守卫，使同一份 DMG 安装包、应用内自动更新与 Homebrew Cask 同时原生支持 Apple Silicon 与 Intel Mac。
 - **温湿度卡片读数配色收敛**：24pt 温度数字原用饱和蓝（`Orb.climate` #007AFF），暗色玻璃卡上会读成「发光的数字」，现改用主文本墨色；温度计图标、湿度水滴/百分比与湿度环改用新增的 `DesignTokens.Reading` 读数色（比设备徽标色低一档饱和度、按 4.5:1 以上对比度取样，浅色更深、深色更柔），暗色下不再发亮。
 - **暗色模式卡片墨色统一**：暗色下「开启」的卡片不再铺成近白亮板，改为比关闭态高一级的深色玻璃，卡内文字、数值、模式胶囊、图标统一使用白墨；修复展开抽屉里「80%」「4200K」等白字压在近白卡面（约 1.1:1）几乎不可见、模式胶囊白字压灰底的问题。浅色模式的亮白卡片与深色亮板上的墨色保持不变。
 - **全渠道操作习惯学习与零延迟 Top 4「猜你想控」推荐引擎（[#113](https://github.com/jryang1997/MenuBarMijia/issues/113)）**：

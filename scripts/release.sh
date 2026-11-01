@@ -101,6 +101,11 @@ else
 fi
 
 echo "▶ [5/5] 最终检查"
+APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/MenuBarMijiaApp" 2>/dev/null || true)"
+if ! printf '%s' "$APP_ARCHS" | grep -qw "arm64" || ! printf '%s' "$APP_ARCHS" | grep -qw "x86_64"; then
+    echo "❌ 发布二进制缺少通用架构支持（当前：${APP_ARCHS:-<未知>}，期望：arm64 + x86_64），已中止发布！" >&2
+    exit 1
+fi
 for file in "$APP/Contents/MacOS/MenuBarMijiaApp" "$DMG"; do
     if grep -aq "/Users/" "$file"; then
         echo "❌ 检测到 $(basename "$file") 内残留本机路径 (/Users/)，已中止发布！" >&2

@@ -129,7 +129,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 
 ### 1. Requirements & Installation
 
-- **macOS:** macOS 14 (Sonoma) or later.
+- **macOS:** macOS 14 (Sonoma) or later (Universal Binary: Apple Silicon & Intel).
 - **Windows:** Windows 11 (64-bit).
 
 #### Installing on macOS
