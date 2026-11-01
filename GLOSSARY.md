@@ -19,8 +19,12 @@ _Avoid_: Device（设备）、Card（卡片）
 _Avoid_: Data mapping（数据映射）、Parsing（解析）
 
 **HomeBackend（连接后端）**：
-驱动 `HomeStore` 的可切换底层数据源模式，支持局域网 `Home Assistant`（`HAWebSocketProvider`）与免网关的 `米家云端直连`（`MiCloudProvider`）双后端；演示模式由 `DemoHomeProvider` 提供。这套双后端只存在于 macOS 客户端——Windows 托盘版只有米家云与演示模式，没有 HA 后端。
+驱动 `HomeStore` 的底层数据源配置，支持局域网 `Home Assistant`（`HAWebSocketProvider`）与免网关的 `米家云端直连`（`MiCloudProvider`）；当 macOS 客户端同时配置并登录两端时自动并行连接并合并设备，仅配置一端时单源运行，演示模式由 `DemoHomeProvider` 提供。这套双源能力只存在于 macOS 客户端——Windows 托盘版只有米家云与演示模式，没有 HA 后端。
 _Avoid_: Server type（服务器类型）、Mode（模式）
+
+**DeviceDeduplication（跨源设备去重合并）**：
+当 Home Assistant 与米家云端同时生效时，按硬件标识（`xiaomi_home` 的 `<server>_<did>`、裸 `did`、MAC 地址）及同房间唯一同款/同名规则识别同一台物理设备，并按「在线状态优先 → 可控能力评分优先 → 同分 Home Assistant 优先」选出单一胜出数据源驱动该 `SmartDevice` 卡片的纯函数合并过程。
+_Avoid_: Cloud sync（云同步）、Entity bridge（实体桥接）
 
 **MiSession（米家云端会话）**：
 通过小米账号二维码扫码登录获取并持久化在钥匙串中的会话凭证（含 `userId`、`ssecurity`、`serviceToken` 与区域），用于签名与加解密 `/app/*` 请求。这里的 RC4 是小米云 `api.io.mi.com` 私有接口的**传输层**加密（`MIOT-ENCRYPT-ALGORITHM: ENCRYPT-RC4`），不是端到端加密：指令与状态经小米服务器中转，服务器可读明文。
@@ -80,6 +84,14 @@ _Avoid_: Mini card（迷你卡片）、Widget（小组件）
 macOS 原生通知，覆盖四类情况：插座持续开启 45 分钟且**实时功率超过 300 W**（没有功率读数就不触发）、空调或电暖器连续运行 4 小时、传感器或门锁电量低于 15%、星标设备意外离线。低电量同一设备 24 小时内不重复提醒，冷却时间持久化（重启不重置）；带关闭动作的提醒可在通知上直接执行。
 _Avoid_: Alarm（警报）、Push notification（远程推送）
 
+**ProactiveSuggestion（猜你想控推荐）**：
+结合用户全渠道操作习惯记忆（`UserHabitMemory`，涵盖手动卡片操作与语音/文本指令的时段频次）、当前环境温湿度与在线活跃设备，在面板打开时零延迟生成、并由远端大模型在后台/环境变化时异步增强的 Top 4 候选动作（`AssistantSuggestion`）。
+_Avoid_: Static shortcut（静态快捷方式）、Random tip（随机提示）
+
+**GrokBall（AI 情绪表情球）**：
+位于控制面板顶部的球面双目动态组件（基于 25 组 48 点眼环几何与 32 种 `emotionId` 状态机），实时注视鼠标光标并随全屋状态与 AI 生命周期切换情绪（深夜全关睡眠 `00`、待机好奇 `02/03`、聆听 `35`、思考光环 `30`、执行成功撒花 `33`、异常报错 `34`）；点击后居中展开星环舞台并在四周（左上、右上、左下、右下）径向弹出 4 项 `ProactiveSuggestion`。
+_Avoid_: Static icon（静态图标）、Chatbot avatar（聊天头像）
+
 **ViewPreference（本地视图偏好）**：
-仅作用于当前 Mac 客户端的展示配置（包括星标常用置顶、自定义分组 `DeviceGroup`、长按拖拽排序与分页面卡片尺寸 `TileSize`、隐藏特定设备、隐藏离线设备、面板高度 `PanelHeight`、菜单栏常驻指标选择），存储在本地且不回写远端数据源。
+仅作用于当前客户端的展示配置（包括星标常用置顶、自定义分组 `DeviceGroup`、长按拖拽排序、通过编辑态卡片右下角圆弧手柄拖拽或轻点调节的分页面卡片尺寸 `TileSize`、单设备固定数据源覆盖、隐藏特定设备、隐藏离线设备、面板高度 `PanelHeight`、菜单栏常驻指标选择），存储在本地且不回写远端数据源。
 _Avoid_: Device config（设备配置）、Profile（档案）

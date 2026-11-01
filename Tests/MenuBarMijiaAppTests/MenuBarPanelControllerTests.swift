@@ -720,6 +720,114 @@ struct MenuBarPanelControllerTests {
         #expect(panel.level.rawValue > NSWindow.Level.statusBar.rawValue)
     }
 
+    @Test("Long-pressing a light card enters edit mode without expanding its drawer and allows cycling half -> full -> panel -> half")
+    func longPressOnLightCardEntersEditModeWithoutExpandingAndCyclesTileSizes() async throws {
+        _ = NSApplication.shared
+        let previousLanguage = L10n.currentLanguage
+        L10n.currentLanguage = .zhHans
+        let previousAppearance = UserDefaults.standard.string(forKey: AppAppearance.storageKey)
+        UserDefaults.standard.set(AppAppearance.system.rawValue, forKey: AppAppearance.storageKey)
+
+        let suite = "MenuBarPanelTests-resize-\(UUID().uuidString)"
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            L10n.currentLanguage = previousLanguage
+            if let previousAppearance {
+                UserDefaults.standard.set(previousAppearance, forKey: AppAppearance.storageKey)
+            }
+        }
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(true, forKey: "has_completed_onboarding")
+        defaults.set(AppLanguagePreference.zhHans.rawValue, forKey: "app_language")
+        defaults.set(TemperatureUnitPreference.celsius.rawValue, forKey: TemperatureUnitPreference.storageKey)
+        defaults.set(false, forKey: "show_quick_actions_bar")
+        defaults.set(false, forKey: "automatically_checks_for_updates")
+        defaults.set(true, forKey: "compact_grid_mode")
+
+        let store = HomeStore(
+            provider: MockHomeProvider(snapshot: DemoHomeProvider.defaultHome(includeCamera: false)),
+            defaultsSuiteName: suite
+        )
+        for _ in 0..<200 where store.devices.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let light = try #require(store.devices.first { dev in
+            if case .light = dev.kind { return true }
+            return false
+        })
+        let initialIsOn = light.isActiveOn
+
+        let hosting = NSHostingView(
+            rootView: ControlCenterPanel(store: store)
+                .defaultAppStorage(defaults)
+                .environment(\.reduceMotionOverride, true)
+        )
+        hosting.frame = NSRect(x: 0, y: 0, width: 376, height: 560)
+        let window = NSWindow(
+            contentRect: NSRect(x: 60, y: 120, width: 376, height: 560),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.contentView = nil
+            window.orderOut(nil)
+        }
+        window.layoutIfNeeded()
+        hosting.layoutSubtreeIfNeeded()
+        hosting.displayIfNeeded()
+        window.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        Self.pumpMainRunLoop()
+
+        func sendMouse(_ type: NSEvent.EventType, at point: NSPoint) {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ) else { return }
+            NSApp.sendEvent(event)
+        }
+
+        // Long-press on the right-side detail/expand area of the compact light card (x: 115, y: 395).
+        let longPressPoint = NSPoint(x: 115, y: 395)
+        sendMouse(.leftMouseDown, at: longPressPoint)
+        try await Task.sleep(for: .milliseconds(550))
+        Self.pumpMainRunLoop()
+        sendMouse(.leftMouseUp, at: longPressPoint)
+        try await Task.sleep(for: .milliseconds(150))
+        Self.pumpMainRunLoop()
+
+        #expect(store.expandedDeviceId == nil, "Releasing long-press must not trigger the card's expand-drawer button")
+        #expect(store.devices.first(where: { $0.id == light.id })?.isActiveOn == initialIsOn)
+
+        // Click 1 on the top-trailing size badge of the half-width card: half -> full.
+        let badgeHalf = NSPoint(x: 179.5, y: 404)
+        func clickBadge(at point: NSPoint) async throws -> [String: TileSize] {
+            sendMouse(.leftMouseDown, at: point)
+            try await Task.sleep(for: .milliseconds(40))
+            Self.pumpMainRunLoop()
+            sendMouse(.leftMouseUp, at: point)
+            try await Task.sleep(for: .milliseconds(200))
+            Self.pumpMainRunLoop()
+            hosting.layoutSubtreeIfNeeded()
+            hosting.displayIfNeeded()
+            window.displayIfNeeded()
+            return DeviceLayoutPrefs.decode(defaults.string(forKey: DeviceLayoutPrefs.storageKey) ?? "{}")
+        }
+
+        let sizes1 = try await clickBadge(at: badgeHalf)
+        #expect(sizes1["all|\(light.id)"] == .full)
+
+        // Click 2 on the top-trailing size badge of the full-width card: full -> panel.
+        let badgeFull = NSPoint(x: 358, y: 404)
+        let sizes2 = try await clickBadge(at: badgeFull)
+        #expect(sizes2["all|\(light.id)"] == .panel)
+
+        // Click 3 on the top-trailing size badge of the panel card: panel -> half.
+        let sizes3 = try await clickBadge(at: badgeFull)
+        #expect(sizes3["all|\(light.id)"] == .half)
+    }
+
     private static func pumpMainRunLoop(_ seconds: TimeInterval = 0.05) {
         CFRunLoopRunInMode(.defaultMode, seconds, false)
     }

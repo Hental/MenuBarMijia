@@ -6,6 +6,7 @@ import MijiaCore
 struct ClimatePanelModule: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.effectiveReduceMotion) private var reduceMotion
+    @Environment(\.isEditingLayout) private var isEditingLayout
     @Namespace private var modeNamespace
     /// Observed so a temperature-unit change in Settings re-renders the strip (#52).
     @AppStorage(TemperatureUnitPreference.storageKey) private var temperatureUnitRaw = TemperatureUnitPreference.system.rawValue
@@ -28,7 +29,7 @@ struct ClimatePanelModule: View {
     private var fg: Color { surface.ink }
     private var muted: Color { surface.secondaryInk }
 
-    private var isExpanded: Bool { forceExpanded || store.expandedDeviceId == device.id }
+    private var isExpanded: Bool { forceExpanded || (!isEditingLayout && store.expandedDeviceId == device.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -64,6 +65,7 @@ struct ClimatePanelModule: View {
     private var strip: some View {
         HStack(spacing: 8) {
             Button {
+                guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
                 if device.isOnline { SoundFeedback.playSuccess() }
             } label: {
@@ -85,6 +87,7 @@ struct ClimatePanelModule: View {
             .panelHelp(isRunning ? L10n.tr("关闭空调", "Turn off") : L10n.tr("打开空调", "Turn on"))
 
             Button {
+                guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) { store.toggleExpanded(device.id) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -152,6 +155,7 @@ struct ClimatePanelModule: View {
 
     private func stepButton(symbol: String, delta: Double) -> some View {
         Button {
+            guard !isEditingLayout else { return }
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 store.stepClimateTemperature(device.id, delta: delta)
             }

@@ -125,28 +125,32 @@ struct LayoutEditable: ViewModifier {
     private var phase: Double { Double(abs(deviceId.hashValue % 97)) / 97 * .pi * 2 }
 
     func body(content: Content) -> some View {
-        jiggling(content.allowsHitTesting(!editing))
-            .scaleEffect(isDragging ? 1.05 : 1)
-            .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
-            .offset(dragOffset)
-            .zIndex(isDragging ? 10 : 0)
-            .overlay(alignment: .topTrailing) {
-                if editing && !isDragging {
-                    Button(action: onCycleSize) {
-                        Image(systemName: size.symbol)
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 20, height: 20)
-                            .background(Circle().fill(Color.accentColor))
-                            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                    }
-                    .buttonStyle(PressableCardButtonStyle(scaleAmount: 0.85))
-                    .accessibilityLabel(Text(L10n.tr("切换卡片大小，当前 \(size.title)", "Change card size, currently \(size.title)")))
-                    .panelHelp(L10n.tr("切换卡片大小：\(size.title)", "Card size: \(size.title)"))
-                    .offset(x: 5, y: -5)
-                    .transition(.scale.combined(with: .opacity))
+        ZStack(alignment: .topTrailing) {
+            jiggling(content.allowsHitTesting(!editing))
+                .scaleEffect(isDragging ? 1.05 : 1)
+                .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
+
+            if editing && !isDragging {
+                Button(action: onCycleSize) {
+                    Image(systemName: size.symbol)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color.accentColor))
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                        .padding(4)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(PressableCardButtonStyle(scaleAmount: 0.85))
+                .accessibilityLabel(Text(L10n.tr("切换卡片大小，当前 \(size.title)", "Change card size, currently \(size.title)")))
+                .panelHelp(L10n.tr("切换卡片大小：\(size.title)", "Card size: \(size.title)"))
+                .padding(.top, -9)
+                .padding(.trailing, -9)
+                .transition(.scale.combined(with: .opacity))
             }
+        }
+        .offset(dragOffset)
+        .zIndex(isDragging ? 10 : 0)
     }
 
     /// Angle is computed from the clock each frame, so a card rebuilt mid-edit keeps jiggling

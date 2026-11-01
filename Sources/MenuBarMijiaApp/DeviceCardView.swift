@@ -66,6 +66,7 @@ public struct DeviceCardView: View {
 
     private var isExpanded: Bool {
         if resolvedSize == .panel { return true }
+        if isEditingLayout { return false }
         return store.expandedDeviceId == device.id
     }
 
@@ -325,6 +326,7 @@ public struct DeviceCardView: View {
 
     private var bentoBody: some View {
         Button {
+            guard !isEditingLayout else { return }
             if case .camera(let cam) = device.kind {
                 if !cam.isOn {
                     withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
@@ -341,6 +343,7 @@ public struct DeviceCardView: View {
                     Spacer(minLength: 0)
                     if device.hasDetailDrawer {
                         Button {
+                            guard !isEditingLayout else { return }
                             withAnimation(AppleMotion.snappySpring) { store.toggleExpanded(device.id) }
                         } label: {
                             Image(systemName: "ellipsis")
@@ -378,6 +381,7 @@ public struct DeviceCardView: View {
     private var compactHeaderRow: some View {
         HStack(spacing: 8) {
             Button {
+                guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
                     if case .camera(let cam) = device.kind {
                         if !cam.isOn {
@@ -401,6 +405,7 @@ public struct DeviceCardView: View {
             )
 
             Button {
+                guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
                     if case .camera(let cam) = device.kind {
                         if !cam.isOn {
@@ -457,6 +462,7 @@ public struct DeviceCardView: View {
     private var headerRow: some View {
         HStack(spacing: 8) {
             Button {
+                guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
                     if case .camera(let cam) = device.kind {
                         if !cam.isOn {
@@ -518,6 +524,7 @@ public struct DeviceCardView: View {
                 }
                 if case .camera = device.kind {
                     Button {
+                        guard !isEditingLayout else { return }
                         store.openCameraLiveView(device.id)
                     } label: {
                         Image(systemName: "pip.enter")
@@ -534,6 +541,7 @@ public struct DeviceCardView: View {
 
                 if isHovered || isExpanded || isFavorite {
                     Button {
+                        guard !isEditingLayout else { return }
                         withAnimation(AppleMotion.snappySpring) {
                             store.toggleFavorite(device.id)
                         }
@@ -553,6 +561,7 @@ public struct DeviceCardView: View {
 
                 if device.hasDetailDrawer {
                     Button {
+                        guard !isEditingLayout else { return }
                         withAnimation(AppleMotion.snappySpring) {
                             store.toggleExpanded(device.id)
                         }

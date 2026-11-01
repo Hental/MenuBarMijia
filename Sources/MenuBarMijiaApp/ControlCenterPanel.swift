@@ -789,7 +789,10 @@ public struct ControlCenterPanel: View {
         }
         var sizes = liveSizes ?? DeviceLayoutPrefs.decode(tileSizesRaw)
         sizes[DeviceLayoutPrefs.scopedKey(id: device.id, scope: layoutScope)] = next
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { liveSizes = sizes }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+            store.expandedDeviceId = nil
+            liveSizes = sizes
+        }
         tileSizesRaw = DeviceLayoutPrefs.encode(sizes)
     }
 
@@ -828,7 +831,8 @@ public struct ControlCenterPanel: View {
         var result: [String: Int] = [:]
         for dev in devices {
             let size = tileSize(dev)
-            result[dev.id] = (size == .half && store.expandedDeviceId != dev.id) ? 3 : 6
+            let isTransientlyExpanded = !isEditingLayout && store.expandedDeviceId == dev.id
+            result[dev.id] = (size == .half && !isTransientlyExpanded) ? 3 : 6
         }
         return result
     }
