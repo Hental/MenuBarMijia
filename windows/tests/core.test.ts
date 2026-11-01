@@ -1,3 +1,4 @@
+import { HomeAssistantClient, HomeAssistantSynthesizer, haServiceCall, homeAssistantCommand, homeAssistantIdentity, parseCachedHAHome } from "../src/core/homeAssistant.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -18,6 +19,7 @@ import {
   buildTimeSummary,
   endpointAllowsSendingSecrets,
   inferAssistantPreset,
+  IntentValidator,
 } from "../src/core/assistant.js";
 import {
   MI_CLOUD_REGIONS,
@@ -2146,5 +2148,211 @@ describe("Habit-aware ambient summary (#113)", () => {
       new Date(2026, 9, 16, 21, 30),
     );
     assert.match(summary, /^夜晚常做：关闭客厅吸顶灯\(3次\)。个人口头禅：/);
+  });
+});
+
+describe("Home Assistant snapshot boundary", () => {
+  const fixture = JSON.parse(readFileSync(resolve("../Tests/Fixtures/ha_snapshot.json"), "utf8"));
+  const regressions = JSON.parse(readFileSync(resolve("../Tests/Fixtures/ha_regressions.json"), "utf8"));
+  it("honors explicit outlet metadata when its power entity has an auxiliary-looking name", () => {
+    const snapshot = structuredClone(fixture);
+    snapshot.devices.push({ id: "renamed-outlet", name: "书房插座", model: "cuco.plug.v3" });
+    snapshot.entities.push({ entity_id: "switch.indicator_lamp", device_id: "renamed-outlet" });
+    snapshot.states.push({ entity_id: "switch.indicator_lamp", state: "on", attributes: { device_class: "outlet" } });
+    const device = HomeAssistantSynthesizer.synthesize(snapshot).devices.find((item) => item.id === "renamed-outlet");
+    assert.ok(device?.kind.kind === "plug", "An explicit outlet must not disappear because of its entity name");
+    assert.equal(device.kind.switchEntityId, "switch.indicator_lamp");
+    assert.equal(device.kind.isOn, true);
+  });
+  for (const [entityId, deviceClass] of [["sensor.study_airp_index", "aqi"], ["sensor.study_airp_air_quality", "enum"], ["sensor.study_airp_air_quality", "air_quality"]]) {
+    it(`prefers the purifier's explicit ${deviceClass} air quality over the PM-derived category`, () => {
+      const next = structuredClone(regressions);
+      const entity = next.entities.find((entry: { entity_id: string }) => entry.entity_id === "sensor.study_airp_air_quality");
+      const state = next.states.find((entry: { entity_id: string }) => entry.entity_id === "sensor.study_airp_air_quality");
+      assert.ok(entity && state);
+      entity.entity_id = entityId;
+      state.entity_id = entityId;
+      state.attributes.device_class = deviceClass;
+      state.state = "Polluted";
+      const purifier = HomeAssistantSynthesizer.synthesize(next).devices.find((device) => device.id === "dev_airp_1");
+      assert.ok(purifier?.kind.kind === "fan");
+      assert.equal(purifier.kind.pm25Density, 18);
+      assert.equal(purifier.kind.airQuality, "Polluted");
+    });
+  }
+  it("keeps camera bearer URLs in memory and strips them from persisted HA cache copies", () => {
+    const next = structuredClone(fixture);
+    const snapshotPath = "/api/camera_proxy/camera.front?token=expiring-camera-bearer";
+    next.states.push({ entity_id: "camera.front", state: "idle", attributes: { entity_picture: snapshotPath } });
+    const home = HomeAssistantSynthesizer.synthesize(next);
+    const camera = home.devices.find((device) => device.kind.kind === "camera");
+    assert.ok(camera?.kind.kind === "camera");
+    assert.equal(camera.kind.snapshotPath, snapshotPath);
+    const settings = { cachedHAHome: { identity: homeAssistantIdentity("http://localhost:8123", "account"), home } };
+    const stored = sanitizeSettingsForStorage(settings);
+    const serialized = JSON.stringify(stored);
+    assert.equal(serialized.includes("expiring-camera-bearer"), false);
+    assert.equal(serialized.includes("camera_proxy"), false);
+    assert.equal(camera.kind.snapshotPath, snapshotPath, "Writing settings must not mutate the current camera");
+    const cached = parseCachedHAHome(stored.cachedHAHome);
+    assert.ok(cached);
+    const persistedCamera = cached.home.devices.find((device) => device.kind.kind === "camera");
+    assert.ok(persistedCamera?.kind.kind === "camera");
+    assert.equal(persistedCamera.kind.snapshotPath, null);
+    assert.equal(JSON.stringify(sanitizeSettingsForStorage(JSON.parse(JSON.stringify(settings)))).includes("expiring-camera-bearer"), false);
+  });
+  it("validates every persisted HA record and nested capability list", () => {
+    const identity = homeAssistantIdentity("http://localhost:8123", "token");
+    const home = HomeAssistantSynthesizer.synthesize(regressions);
+    assert.deepEqual(parseCachedHAHome({ identity, home, endpoint: "obsolete" }), { identity, home });
+    for (const key of ["devices", "rooms", "environmentReadings", "scenes"]) {
+      for (const invalid of [null, {}, [null], [{}], ["invalid"]]) {
+        assert.equal(parseCachedHAHome({ identity, home: { ...home, [key]: invalid } }), null, `${key}=${JSON.stringify(invalid)}`);
+      }
+    }
+    for (const key of ["availableModes", "availableFanModes"]) {
+      const device = home.devices.find((entry) => entry.kind.kind === "climate");
+      assert.ok(device);
+      for (const invalid of [null, {}, [3]]) {
+        assert.equal(parseCachedHAHome({ identity, home: { ...home, devices: [{ ...device, kind: { ...device.kind, [key]: invalid } }] } }), null);
+      }
+    }
+    assert.equal(parseCachedHAHome({ identity, home: { devices: [] } }), null);
+    assert.equal(homeAssistantIdentity("broken URL", "token"), null);
+    assert.equal(homeAssistantIdentity("file:///tmp/home", "token"), null);
+  });
+  it("synthesizes chuangmi cameras without a camera state and retains control targets", () => {
+    const camera = HomeAssistantSynthesizer.synthesize(regressions).devices.find((device) => device.id === "dev_cam_1");
+    assert.ok(camera);
+    assert.equal(camera.kind.kind, "camera");
+    if (camera.kind.kind !== "camera") assert.fail("Expected camera");
+    assert.equal(camera.kind.entityId, "switch.living_cam_power|select.living_cam_night_shot");
+    assert.equal(camera.kind.streamEntityId, null);
+    assert.equal(camera.kind.motionDetectionEntityId, "switch.living_cam_motion_detection");
+    assert.equal(camera.kind.nightShot, "Auto");
+    assert.deepEqual(haServiceCall({ kind: "setSelectOption", entityId: camera.kind.entityId, option: "On" }), { domain: "select", service: "select_option", entity_id: "select.living_cam_night_shot", data: { option: "On" } });
+    assert.deepEqual(haServiceCall({ kind: "setSwitch", entityId: camera.kind.entityId, isOn: false }), { domain: "switch", service: "turn_off", entity_id: "switch.living_cam_power", data: {} });
+  });
+  it("chooses heat for a heat-only climate and keeps it for inverse power", () => {
+    const home = HomeAssistantSynthesizer.synthesize(regressions);
+    const device = home.devices.find((item) => item.id === "heat-only");
+    assert.ok(device);
+    const intent = { targetId: device.id, operation: { kind: "power" as const, isOn: true } };
+    const original = IntentValidator.commandsForIntent(intent, device)[0];
+    assert.ok(original);
+    assert.deepEqual(original, { kind: "setClimatePower", entityId: "climate.study", isOn: true, resumeMode: "cool" });
+    const command = homeAssistantCommand(original, home.devices);
+    assert.deepEqual(command, { kind: "setClimatePower", entityId: "climate.study", isOn: true, resumeMode: "heat" });
+    assert.deepEqual(haServiceCall(command), { domain: "climate", service: "set_hvac_mode", entity_id: "climate.study", data: { hvac_mode: "heat" } });
+    assert.deepEqual(haServiceCall({ kind: "setClimatePower", entityId: "climate.study", isOn: false, resumeMode: "heat" }), { domain: "climate", service: "set_hvac_mode", entity_id: "climate.study", data: { hvac_mode: "off" } });
+  });
+  it("keeps purifier PM2.5 and air quality sensor values separate", () => {
+    const purifier = HomeAssistantSynthesizer.synthesize(regressions).devices.find((device) => device.id === "dev_airp_1");
+    assert.ok(purifier);
+    assert.equal(purifier.kind.kind, "fan");
+    if (purifier.kind.kind !== "fan") assert.fail("Expected fan");
+    assert.equal(purifier.kind.pm25Density, 18);
+    assert.equal(purifier.kind.airQuality, "Excellent");
+    assert.equal(purifier.kind.temperature, 24.5);
+    assert.equal(purifier.kind.humidity, 52);
+    assert.equal(purifier.kind.filterLifePercent, 86);
+  });
+  it("does not treat unknown or unavailable climate states as active", () => {
+    const next = structuredClone(regressions);
+    next.states[0].state = "unknown";
+    const unknown = HomeAssistantSynthesizer.synthesize(next).devices.find((device) => device.id === "heat-only");
+    assert.ok(unknown);
+    assert.equal(unknown.isOnline, false);
+    assert.equal(unknown.kind.kind, "climate");
+    if (unknown.kind.kind !== "climate") assert.fail("Expected climate");
+    assert.equal(unknown.kind.isOn, false);
+    next.states[0].state = "unavailable";
+    const unavailable = HomeAssistantSynthesizer.synthesize(next).devices.find((device) => device.id === "heat-only");
+    assert.ok(unavailable);
+    assert.equal(unavailable.isOnline, false);
+    if (unavailable.kind.kind !== "climate") assert.fail("Expected climate");
+    assert.equal(unavailable.kind.isOn, false);
+  });
+  it("combines registered entities and excludes hidden state fallbacks", () => {
+    const home = HomeAssistantSynthesizer.synthesize(fixture);
+    assert.deepEqual(home.devices.map((device) => device.id), ["study-light", "thermometer"]);
+    assert.equal(home.devices[0]?.kind.kind, "light");
+    assert.deepEqual(home.environmentReadings.map((reading) => [reading.temperature, reading.humidity]), [[23.5, 45]]);
+    assert.equal(home.rooms.length, 1);
+    assert.deepEqual(home.scenes.map((scene) => scene.entityId), ["scene.evening"]);
+  });
+  it("maps service targets without leaking credentials into packets", () => {
+    assert.deepEqual(haServiceCall({kind:"setLightBrightness",entityId:"light.study",percent:40}), {domain:"light",service:"turn_on",entity_id:"light.study",data:{brightness_pct:40}});
+    assert.deepEqual(haServiceCall({kind:"activateScene",entityId:"script.evening"}), {domain:"script",service:"turn_on",entity_id:"script.evening",data:{}});
+  });
+  it("propagates failed native services to the existing rollback caller", async () => {
+    const client = new HomeAssistantClient("http://localhost:8123", "test-token", async () => {throw new Error("Home Assistant request failed");});
+    await assert.rejects(client.execute({kind:"setLightPower",entityId:"light.study",isOn:false}), /request failed/);
+  });
+  it("rejects malformed snapshot data at the boundary", () => {
+    assert.throws(() => HomeAssistantSynthesizer.synthesize({areas:[],devices:[],entities:[],states:[{entity_id:3}]}), /Invalid Home Assistant/);
+  });
+  it("isolates cache by canonical origin and credential identity", () => {
+    assert.equal(homeAssistantIdentity("HTTP://localhost:8123/","first"),homeAssistantIdentity("http://localhost:8123","first"));
+    assert.notEqual(homeAssistantIdentity("http://localhost:8123","first"),homeAssistantIdentity("http://localhost:8123","second"));
+    assert.notEqual(homeAssistantIdentity("http://localhost:8123","first"),homeAssistantIdentity("http://localhost:8124","first"));
+    assert.ok(!homeAssistantIdentity("http://localhost:8123", "credential-value")?.includes("credential-value"));
+  });
+  it("does not revive disabled physical devices through state fallback", () => {
+    const next = structuredClone(fixture);
+    next.devices[0].disabled_by = "user";
+    const home = HomeAssistantSynthesizer.synthesize(next);
+    assert.deepEqual(home.devices.map((device) => device.id),["thermometer"]);
+  });
+  it("addresses camera night selection separately from its power entity", () => {
+    assert.deepEqual(haServiceCall({kind:"setSelectOption",entityId:"switch.camera|select.camera_night",option:"Auto"}),{domain:"select",service:"select_option",entity_id:"select.camera_night",data:{option:"Auto"}});
+    assert.deepEqual(haServiceCall({kind:"setSwitch",entityId:"switch.camera|select.camera_night",isOn:false}),{domain:"switch",service:"turn_off",entity_id:"switch.camera",data:{}});
+  });
+  it("falls through to entity_id sensor matching when device_class differs and separates plug power from energy", () => {
+    const next = structuredClone(regressions);
+    const filterState = next.states.find((entry: { entity_id: string }) => entry.entity_id === "sensor.study_airp_filter_life_level");
+    assert.ok(filterState);
+    filterState.attributes.device_class = "battery";
+    next.devices.push({ id: "smart-plug", name: "书房插座", area_id: "study", model: "cuco.plug.v3" });
+    next.entities.push(
+      { entity_id: "switch.smart_plug", device_id: "smart-plug" },
+      { entity_id: "sensor.smart_plug_power_consumption", device_id: "smart-plug" },
+      { entity_id: "sensor.smart_plug_electric_power", device_id: "smart-plug" },
+    );
+    next.states.push(
+      { entity_id: "switch.smart_plug", state: "on", attributes: { device_class: "outlet" } },
+      { entity_id: "sensor.smart_plug_power_consumption", state: "1.25", attributes: {} },
+      { entity_id: "sensor.smart_plug_electric_power", state: "42.5", attributes: {} },
+    );
+    const home = HomeAssistantSynthesizer.synthesize(next);
+    const purifier = home.devices.find((device) => device.id === "dev_airp_1");
+    assert.ok(purifier?.kind.kind === "fan");
+    assert.equal(purifier.kind.filterLifePercent, 86);
+    const plug = home.devices.find((device) => device.id === "smart-plug");
+    assert.ok(plug?.kind.kind === "plug");
+    assert.equal(plug.kind.powerWatts, 42.5);
+    assert.equal(plug.kind.energyKwh, 1.25);
+  });
+  it("orders environmentReadings by sensor > fan > climate and strips cached camera snapshotPath at parse boundary", () => {
+    const next = structuredClone(regressions);
+    next.devices.push({ id: "dedicated-th", name: "书房温湿度计", area_id: "study", model: "miaomiaoce.sensor_ht.t2" });
+    next.entities.push({ entity_id: "sensor.dedicated_temp", device_id: "dedicated-th" });
+    next.states.push({ entity_id: "sensor.dedicated_temp", state: "21.5", attributes: { device_class: "temperature" } });
+    next.states[0].attributes.current_temperature = 25;
+    const home = HomeAssistantSynthesizer.synthesize(next);
+    assert.deepEqual(
+      home.environmentReadings.map((reading) => reading.id),
+      ["dedicated-th", "dev_airp_1", "heat-only"],
+    );
+    const identity = homeAssistantIdentity("http://localhost:8123", "token");
+    const tampered = structuredClone(home);
+    const cam = tampered.devices.find((device) => device.kind.kind === "camera");
+    assert.ok(cam?.kind.kind === "camera");
+    (cam.kind as { snapshotPath: string | null }).snapshotPath = "C:\\Windows\\System32\\drivers\\etc\\hosts";
+    const parsed = parseCachedHAHome({ identity, home: tampered });
+    assert.ok(parsed);
+    const parsedCam = parsed.home.devices.find((device) => device.kind.kind === "camera");
+    assert.ok(parsedCam?.kind.kind === "camera");
+    assert.equal(parsedCam.kind.snapshotPath, null);
   });
 });

@@ -1,5 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod home_assistant;
+use home_assistant::{ha_execute, ha_snapshot};
+
+#[cfg(test)]
+static ORIGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use ring::digest::{digest, SHA256};
 use ring::signature::{UnparsedPublicKey, ED25519};
@@ -1475,6 +1481,8 @@ fn main() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            ha_snapshot,
+            ha_execute,
             native_http,
             set_allowed_origins,
             set_service_endpoints,
@@ -1725,6 +1733,7 @@ mod tests {
 
     #[test]
     fn frontend_cannot_grant_an_arbitrary_origin_and_then_request_it() {
+        let _guard = ORIGIN_TEST_LOCK.lock().unwrap();
         {
             let mut guard = EXTRA_ALLOWED_ORIGINS.write().expect("allowlist lock");
             guard.clear();

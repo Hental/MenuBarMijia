@@ -1,3 +1,6 @@
+import { EventEmitter, once } from "node:events";
+import { readFileSync } from "node:fs";
+import { HomeAssistantSynthesizer, homeAssistantIdentity } from "../src/core/homeAssistant.js";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { setImmediate } from "node:timers/promises";
@@ -1712,5 +1715,442 @@ describe("Scene habit learning (#113 review fix)", () => {
     const entries = habitEntries();
     assert.deepEqual(entries.map((e) => [e.targetId, e.operationKey]), [["scene.home", "scene:activate"]]);
     assert.match(document.body.textContent ?? "", /已执行回家模式/);
+  });
+});
+
+describe("Home Assistant source", () => {
+  const fixture = JSON.parse(readFileSync("../Tests/Fixtures/ha_snapshot.json", "utf8"));
+  function startHA(failedSnapshot = false, cached = failedSnapshot, token = "controlled-token"): { calls: string[]; failCommand: () => void } {
+    const calls: string[] = [];
+    let rejectCommand = false;
+    const invoke = async (name: string) => {
+      calls.push(name);
+      if (name === "secure_store_get") return token;
+      if (name === "ha_snapshot") {
+        if (failedSnapshot) throw new Error("Home Assistant disconnected");
+        return structuredClone(fixture);
+      }
+      if (name === "ha_execute" && rejectCommand) throw new Error("Home Assistant request failed");
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {value:{invoke},configurable:true});
+    localStorage.setItem("menumijia.windows.settings.v2",JSON.stringify({connectionMode:"homeAssistant",haBaseURL:"http://localhost:8123",hasCompletedOnboarding:true,cachedHAHome:cached ? {endpoint:"http://localhost:8123",identity:homeAssistantIdentity("http://localhost:8123","controlled-token"),home:HomeAssistantSynthesizer.synthesize(fixture)} : null}));
+    new MenuMijiaWindowsApp(element("#app"));
+    return {calls,failCommand:() => {rejectCommand = true;}};
+  }
+  it("patches remote light power changes and all-off availability while keeping focused card nodes", async () => {
+    let isOn = false;
+    let snapshots = 0;
+    let effects: string[] = [];
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        snapshots += 1;
+        const next = structuredClone(fixture);
+        next.states[0].state = isOn ? "on" : "off";
+        next.states[0].attributes.effect_list = effects;
+        return next;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+    await click('[data-expand-device="study-light"]');
+    const card = element('[data-tile-id="study-light"]');
+    const input = element('[data-brightness="study-light"]');
+    const commandInput = element("#command-input");
+    const scroll = element(".cc-scroll-area");
+    const order = [...document.querySelectorAll<HTMLElement>("[data-tile-id]")].map((node) => node.dataset.tileId);
+    scroll.scrollTop = 57;
+    input.focus();
+    assert.ok(!document.querySelector("#btn-all-off"));
+    for (const power of [true, false, true]) {
+      isOn = power;
+      const before = snapshots;
+      await click("#btn-refresh");
+      await waitFor(() => snapshots === before + 1);
+      assert.ok(element('[data-tile-id="study-light"]') === card, "Remote power must preserve the card node");
+      assert.ok(element('[data-brightness="study-light"]') === input, "Remote power must preserve the slider node");
+      assert.ok(element("#command-input") === commandInput);
+      assert.ok(document.activeElement === input, "The focused slider must stay focused");
+      assert.ok(element(".cc-scroll-area") === scroll);
+      assert.equal(scroll.scrollTop, 57);
+      assert.deepEqual([...document.querySelectorAll<HTMLElement>("[data-tile-id]")].map((node) => node.dataset.tileId), order);
+      assert.equal(!!document.querySelector("#btn-all-off"), power);
+      if (power) {
+        assert.match(textOf("#btn-all-off"), /全关.*\(1\)/);
+        assert.match(element("#btn-all-off").getAttribute("aria-label") ?? "", /1 台/);
+      }
+    }
+    element("#btn-all-off").dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+    await setImmediate();
+    assert.match(textOf(".cc-feedback-text"), /关闭这 1 台/);
+    effects = ["Day", "Night"];
+    await click("#btn-refresh");
+    assert.ok(document.querySelector('[data-lighteffect="study-light"][data-effect="Night"]'), "A genuine capability update must create its new controls");
+  });
+  it("keeps focused thermostat controls when remote heating mode changes", async () => {
+    let mode = "off";
+    const snapshot = JSON.parse(readFileSync("../Tests/Fixtures/ha_regressions.json", "utf8"));
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        const next = structuredClone(snapshot);
+        next.states[0].state = mode;
+        return next;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-tile-id="heat-only"]'));
+    const card = element('[data-tile-id="heat-only"]');
+    const power = element('.cc-climate-power[data-toggle-device="heat-only"]');
+    const step = element('[data-acstep="heat-only:1"]');
+    const commandInput = element("#command-input");
+    const scroll = element(".cc-scroll-area");
+    scroll.scrollTop = 41;
+    step.focus();
+    for (const nextMode of ["heat", "off", "heat"]) {
+      mode = nextMode;
+      await click("#btn-refresh");
+      assert.ok(element('[data-tile-id="heat-only"]') === card, "A mode value change must preserve the thermostat card");
+      assert.ok(element('.cc-climate-power[data-toggle-device="heat-only"]') === power);
+      assert.ok(element('[data-acstep="heat-only:1"]') === step);
+      assert.ok(element("#command-input") === commandInput);
+      assert.ok(document.activeElement === step);
+      assert.ok(element(".cc-scroll-area") === scroll);
+      assert.equal(scroll.scrollTop, 41);
+      assert.equal(power.getAttribute("aria-pressed"), String(mode === "heat"));
+      assert.match(card.textContent ?? "", mode === "heat" ? /制热/ : /已关闭/);
+    }
+  });
+  it("cleans old camera bearer URLs from current and legacy settings copies on startup and later writes", async () => {
+    const snapshot = structuredClone(fixture);
+    snapshot.states.push({ entity_id: "camera.front", state: "idle", attributes: { entity_picture: "/api/camera_proxy/camera.front?token=old-camera-bearer" } });
+    const settings = { connectionMode: "demo", hasCompletedOnboarding: true, cachedHAHome: { identity: homeAssistantIdentity("http://localhost:8123", "account"), home: HomeAssistantSynthesizer.synthesize(snapshot) } };
+    const credentialWrites: unknown[] = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+      if (name === "secure_store_set") credentialWrites.push(args);
+      return null;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    const keys = ["menumijia.windows.settings.v2", "menumijia.windows.settings.v1"];
+    for (const key of keys) localStorage.setItem(key, JSON.stringify(settings));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+    for (const key of keys) assert.equal(localStorage.getItem(key)?.includes("old-camera-bearer"), false);
+    await click("#btn-toggle-appearance");
+    for (const key of keys) assert.equal(localStorage.getItem(key)?.includes("camera_proxy"), false);
+    assert.deepEqual(credentialWrites, [], "An expiring camera URL does not belong in the credential vault");
+  });
+  for (const responseState of ["cached", "pending"]) {
+    it(`isolates ${responseState} proactive recommendations across matching HA entity IDs`, async () => {
+      const responses = new EventEmitter();
+      const ticks: Array<() => void> = [];
+      let modelRequests = 0;
+      let oldResponseReturned = false;
+      Object.defineProperty(window, "setInterval", { value: (handler: () => void) => { ticks.push(handler); return ticks.length; }, configurable: true });
+      const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+        if (name === "secure_store_get") return args.name === "ha_token" ? "controlled-token" : null;
+        if (name === "ha_snapshot") {
+          const source = String(args.baseUrl).endsWith("8124") ? "B" : "A";
+          return { areas: [], devices: [], entities: [], states: [{ entity_id: "light.study", state: "on", attributes: { friendly_name: `Source ${source} lamp` } }] };
+        }
+        if (name === "native_http") {
+          const request = ++modelRequests;
+          if (request === 1 && responseState === "pending") await once(responses, "old");
+          if (request === 2) await once(responses, "current");
+          if (request === 1) oldResponseReturned = true;
+          const content = JSON.stringify({ suggestions: [{ device: "d1", op: "power", value: false, confidence: 0.9 }] });
+          return { status: 200, headers: {}, body: JSON.stringify({ choices: [{ message: { content } }] }) };
+        }
+        return undefined;
+      };
+      Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
+      new MenuMijiaWindowsApp(element("#app"));
+      await waitFor(() => !!document.querySelector('[data-tile-id="light.study"]'));
+      for (const tick of ticks) tick();
+      await waitFor(() => modelRequests === 1);
+      if (responseState === "cached") await waitFor(() => !!document.querySelector('[data-proactive-id^="chat:"]'));
+      await click("#btn-settings");
+      const url = document.querySelector<HTMLInputElement>("#settings-ha-url");
+      assert.ok(url);
+      url.value = "http://localhost:8124";
+      await click("#btn-save-settings");
+      await waitFor(() => tile("light.study").includes("Source B lamp"));
+      assert.doesNotMatch(document.body.textContent ?? "", /Source A lamp/);
+      for (const tick of ticks) tick();
+      await setImmediate();
+      assert.equal(modelRequests, 2, "The new source must start its own recommendation request");
+      if (responseState === "pending") {
+        responses.emit("old");
+        await waitFor(() => oldResponseReturned);
+        await setImmediate();
+        assert.doesNotMatch(document.body.textContent ?? "", /Source A lamp/);
+        for (const tick of ticks) tick();
+        assert.equal(modelRequests, 2, "A stale completion must not unlock the current in-flight request");
+      }
+      responses.emit("current");
+      await waitFor(() => !!document.querySelector('[data-proactive-id^="chat:"]'));
+      assert.match(textOf('[data-proactive-id^="chat:"]'), /Source B lamp/);
+      assert.doesNotMatch(document.body.textContent ?? "", /Source A lamp/);
+    });
+  }
+  for (const outcome of ["action", "suggestion", "error", "same-source", "same-source-suggestion", "same-source-error"] as const) {
+    it(`binds a held model ${outcome} to its initiating HA source`, async () => {
+      const modelResponse = new EventEmitter();
+      let modelStarted = false;
+      let modelReturned = false;
+      const calls: Array<Record<string, unknown>> = [];
+      const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+        if (name === "secure_store_get") return args.name === "ha_token" ? "account-a" : null;
+        if (name === "ha_snapshot") {
+          const snapshot = structuredClone(fixture);
+          snapshot.states.push({ entity_id: "camera.front", state: "idle", attributes: { friendly_name: "Front camera" } });
+          return snapshot;
+        }
+        if (name === "ha_execute") calls.push(args);
+        if (name === "native_http") {
+          if (!String(args.body).includes("让这里适合观星")) return { status: 200, headers: {}, body: JSON.stringify({ choices: [{ message: { content: '{"suggestions":[]}' } }] }) };
+          modelStarted = true;
+          await once(modelResponse, "release");
+          modelReturned = true;
+          if (outcome.endsWith("error")) throw new Error("Late account A error");
+          const content = JSON.stringify({ actions: [{ device: outcome.endsWith("suggestion") ? "camera.front" : "d1", op: "power", value: false }], reply: "Account A model reply" });
+          return { status: 200, headers: {}, body: JSON.stringify({ choices: [{ message: { content } }] }) };
+        }
+        return undefined;
+      };
+      Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
+      new MenuMijiaWindowsApp(element("#app"));
+      await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+      await command("让这里适合观星");
+      await waitFor(() => modelStarted);
+      if (!outcome.startsWith("same-source")) {
+        await click("#btn-settings");
+        const url = document.querySelector<HTMLInputElement>("#settings-ha-url");
+        assert.ok(url);
+        url.value = "http://localhost:8124";
+        await click("#btn-save-settings");
+        await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+      }
+      const before = localStorage.getItem("menumijia.windows.settings.v2");
+      const bannerBefore = document.querySelector(".cc-feedback-text")?.textContent;
+      modelResponse.emit("release");
+      await waitFor(() => modelReturned);
+      await setImmediate();
+      if (outcome === "same-source") {
+        assert.equal(calls.length, 1);
+        assert.match(tile("study-light"), /已关闭/);
+        assert.ok(document.querySelector("#btn-undo"));
+        const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}");
+        assert.equal(saved.learnedShortcuts.length, 1);
+      } else if (outcome === "same-source-suggestion") {
+        assert.equal(calls.length, 0);
+        assert.ok(document.querySelector("[data-suggestion-id]"), "A current model suggestion must remain available");
+      } else if (outcome === "same-source-error") {
+        assert.equal(calls.length, 0);
+        assert.match(textOf(".cc-feedback-text"), /Late account A error/);
+      } else {
+        assert.equal(calls.length, 0, "An account A model response must never control account B's matching entity ID");
+        assert.ok(!document.querySelector("#btn-undo"), "A stale response must not install undo");
+        assert.ok(!document.querySelector("[data-suggestion-id]"), "A stale response must not publish suggestions");
+        assert.equal(localStorage.getItem("menumijia.windows.settings.v2"), before, "Late replies must not save learning or habit receipts");
+        assert.equal(document.querySelector(".cc-feedback-text")?.textContent, bannerBefore);
+        assert.doesNotMatch(document.body.textContent ?? "", /Account A model reply|Late account A error/);
+      }
+    });
+  }
+  it("uses heat-only capability for card power and same-source undo", async () => {
+    const snapshot = JSON.parse(readFileSync("../Tests/Fixtures/ha_regressions.json", "utf8"));
+    const modes: unknown[] = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") return snapshot;
+      if (name === "ha_execute") {
+        const call = args.command;
+        assert.ok(call && typeof call === "object" && "data" in call);
+        const data = call.data;
+        assert.ok(data && typeof data === "object" && "hvac_mode" in data);
+        modes.push(data.hvac_mode);
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-toggle-device="heat-only"]'));
+    await click('[data-toggle-device="heat-only"]');
+    assert.deepEqual(modes, ["heat"]);
+    await click('[data-toggle-device="heat-only"]');
+    await click("#btn-undo");
+    assert.deepEqual(modes, ["heat", "off", "heat"]);
+  });
+  it("retains cached cards and clears the independent HA error on reconnect", async () => {
+    let failing = true;
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        if (failing) throw new Error("Connection lost");
+        return fixture;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, cachedHAHome: { identity: homeAssistantIdentity("http://localhost:8123", "controlled-token"), home: HomeAssistantSynthesizer.synthesize(fixture) } }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector("[data-ha-error]"));
+    await click("#btn-toggle-assistant");
+    assert.match(textOf("[data-ha-error]"), /Connection lost/);
+    assert.match(tile("study-light"), /书房灯/);
+    failing = false;
+    await click("#btn-refresh");
+    await waitFor(() => !document.querySelector("[data-ha-error]"));
+    assert.match(tile("study-light"), /书房灯/);
+    assert.equal(document.querySelector("#command-input"), null);
+  });
+  it("rejects malformed cached HA homes and refreshes into an empty state", async () => {
+    let snapshots = 0;
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") { snapshots += 1; return structuredClone(fixture); }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, cachedHAHome: { identity: homeAssistantIdentity("http://localhost:8123", "controlled-token"), home: { devices: {}, rooms: [], environmentReadings: [], scenes: [] } } }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+    assert.equal(snapshots, 1);
+  });
+  for (const delayed of [false, true]) {
+    it(`discards ${delayed ? "in-flight" : "completed"} undo and habit writes after an HA account change`, async () => {
+      const calls: Array<Record<string, unknown>> = [];
+      let finish: () => void = () => {};
+      const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+        if (name === "secure_store_get") return "account-a";
+        if (name === "ha_snapshot") return structuredClone(fixture);
+        if (name === "ha_execute") {
+          calls.push(args);
+          if (delayed) await new Promise<void>((resolve) => { finish = resolve; });
+        }
+        return undefined;
+      };
+      Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true }));
+      new MenuMijiaWindowsApp(element("#app"));
+      await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+      await command("关闭书房灯");
+      await waitFor(() => calls.length === 1);
+      await click("#btn-settings");
+      const token = document.querySelector<HTMLInputElement>("#settings-ha-token");
+      assert.ok(token);
+      token.value = "account-b";
+      await click("#btn-save-settings");
+      if (delayed) { finish(); await setImmediate(); }
+      await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+      const before = localStorage.getItem("menumijia.windows.settings.v2");
+      await command("撤销");
+      assert.equal(calls.length, 1, "Undo must not send account A's inverse to account B");
+      assert.equal(localStorage.getItem("menumijia.windows.settings.v2"), before, "Undo must not unrecord another source's habits");
+      if (delayed) {
+        const stored = JSON.parse(before ?? "{}");
+        assert.deepEqual(stored.habitEntries, []);
+      }
+    });
+  }
+  it("connects without Xiaomi requests and keeps credentials out of settings", async () => {
+    const {calls} = startHA();
+    await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+    assert.match(tile("study-light"), /书房灯/);
+    assert.equal(calls.filter((call) => call === "ha_snapshot").length,1);
+    assert.equal(calls.includes("native_http"),false);
+    assert.equal(localStorage.getItem("menumijia.windows.settings.v2")?.includes("controlled-token"),false);
+    assert.match(textOf('[data-ha-scene="scene.evening"]'), /晚安/);
+    await click('[data-ha-scene="scene.evening"]');
+    assert.ok(calls.includes("ha_execute"));
+  });
+  it("retains cached cards when a refresh fails", async () => {
+    startHA(true);
+    await waitFor(() => (document.body.textContent ?? "").includes("Home Assistant disconnected"));
+    assert.match(tile("study-light"), /书房灯/);
+  });
+  it("shows HA refresh errors outside the hidden assistant bar", async () => {
+    startHA(true);
+    await click("#btn-toggle-assistant");
+    await waitFor(() => !!document.querySelector("[data-ha-error]"));
+    assert.match(textOf("[data-ha-error]"), /Home Assistant disconnected/);
+  });
+  it("keeps the confirmed light state after a failed service", async () => {
+    const state = startHA();
+    await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+    state.failCommand();
+    await command("关闭书房灯");
+    await waitFor(() => (document.body.textContent ?? "").includes("Home Assistant request failed"));
+    assert.ok(state.calls.includes("ha_execute"));
+    assert.match(tile("study-light"), /开启|50%|50 %/);
+  });
+  it("shows an empty HA home on initial failure without demo fallback", async () => {
+    startHA(true, false);
+    await waitFor(() => (document.body.textContent ?? "").includes("Home Assistant disconnected"));
+    assert.equal(document.querySelectorAll("[data-body-device]").length,0);
+  });
+  it("does not show a previous account cache under a different token", async () => {
+    startHA(true, true, "different-account-token");
+    await waitFor(() => (document.body.textContent ?? "").includes("Home Assistant disconnected"));
+    assert.equal(document.querySelectorAll("[data-body-device]").length,0);
+  });
+  it("does not apply an old HA snapshot after switching to demo", async () => {
+    let complete: (value: unknown) => void = () => assert.fail("Snapshot has not started");
+    let snapshots = 0;
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") { snapshots += 1; return new Promise((resolve) => {complete = resolve;}); }
+      return undefined;
+    };
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{invoke},configurable:true});
+    localStorage.setItem("menumijia.windows.settings.v2",JSON.stringify({connectionMode:"homeAssistant",haBaseURL:"http://localhost:8123",hasCompletedOnboarding:true}));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => snapshots === 1);
+    await click("#btn-refresh");
+    assert.equal(snapshots,1);
+    await click("#btn-settings");
+    await click('[data-conn-mode="demo"]');
+    complete(fixture);
+    await setImmediate();
+    await click("#btn-close-settings");
+    assert.equal(document.querySelector('[data-body-device="study-light"]'),null);
+    assert.ok(document.querySelector('[data-body-device="light.living_ceiling"]'));
+    assert.equal(snapshots,1);
+  });
+  it("patches HA value-only refreshes without replacing focused controls", async () => {
+    let snapshots = 0;
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        snapshots += 1;
+        const next = structuredClone(fixture);
+        if (snapshots > 1) next.states[0].attributes.brightness = 200;
+        return next;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{invoke},configurable:true});
+    localStorage.setItem("menumijia.windows.settings.v2",JSON.stringify({connectionMode:"homeAssistant",haBaseURL:"http://localhost:8123",hasCompletedOnboarding:true}));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
+    const input = element("#command-input");
+    input.focus();
+    const card = element('[data-body-device="study-light"]');
+    await click("#btn-refresh");
+    assert.equal(snapshots,2);
+    assert.equal(element('[data-body-device="study-light"]'),card);
+    assert.equal(document.activeElement,input);
+    assert.match(tile("study-light"),/78%|78 %/);
   });
 });

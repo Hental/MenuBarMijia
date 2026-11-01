@@ -1,3 +1,5 @@
+import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand, parseCachedHAHome } from "../core/homeAssistant.js";
+import type { SynthesizedHome } from "../core/models.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
   DelayPhrase,
@@ -202,6 +204,7 @@ interface PersistedSettings {
   hasCompletedOnboarding: boolean;
   isCompactGridMode: boolean;
   cachedXiaomiDevices: SmartDevice[];
+  cachedHAHome: { identity: string; home: SynthesizedHome } | null;
   cachedModelTypes: Record<string, string>;
   skin: AppSkin;
   appearance: AppAppearance;
@@ -514,6 +517,7 @@ function upgradeCachedDevices(devices: SmartDevice[]): SmartDevice[] {
 }
 
 
+
 function loadSettings(): LoadedSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
@@ -524,7 +528,7 @@ function loadSettings(): LoadedSettings {
       const hasLegacyCredentials =
         (parsed.miSession !== undefined && parsed.miSession !== null) || rawHaToken !== "" || rawApiKey !== "";
       const miSession = parseMiSession(parsed.miSession);
-      const mode: ConnectionMode = parsed.connectionMode === "demo" || parsed.connectionMode === "xiaomiCloud"
+      const mode: ConnectionMode = parsed.connectionMode === "demo" || parsed.connectionMode === "xiaomiCloud" || parsed.connectionMode === "homeAssistant"
         ? parsed.connectionMode
         : miSession ? "xiaomiCloud" : "demo";
       return {
@@ -570,6 +574,7 @@ function loadSettings(): LoadedSettings {
           cachedXiaomiDevices: Array.isArray(parsed.cachedXiaomiDevices)
             ? upgradeCachedDevices(parsed.cachedXiaomiDevices)
             : [],
+          cachedHAHome: parseCachedHAHome(parsed.cachedHAHome),
           cachedModelTypes:
             parsed.cachedModelTypes && typeof parsed.cachedModelTypes === "object"
               ? parsed.cachedModelTypes
@@ -628,6 +633,7 @@ function loadSettings(): LoadedSettings {
       hasCompletedOnboarding: false,
       isCompactGridMode: true,
       cachedXiaomiDevices: [],
+      cachedHAHome: null,
       cachedModelTypes: {},
       skin: "classic",
       appearance: "system",
@@ -738,6 +744,7 @@ export class MenuMijiaWindowsApp {
   private activeSheet: "none" | "onboarding" | "settings" = "none";
   private onboardingStep = 0;
   private replyBanner: ReplyBannerState | null = null;
+  private haConnectionError: string | null = null;
   /** A command waiting for the user to allow sending it to a cloud AI service (#20). */
   private pendingCloudConsent: { utterance: string; endpoint: string } | null = null;
   /** AI guesses that wait for a tap instead of running by themselves (#21). */
@@ -752,12 +759,13 @@ export class MenuMijiaWindowsApp {
   private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   private isResolvingIntent = false;
   private isSyncingCloud = false;
-  /** When the last Xiaomi cloud refresh started; paces background refreshes (#26). */
+  private syncGeneration = 0;
   private lastCloudRefreshAt: number | null = null;
-  /** Bumped whenever a local command succeeds, so an older in-flight snapshot cannot replace it. */
   private localControlRevision = 0;
+  private sourceRevision = 0;
   /** A silent cloud result that is waiting for the user to finish interacting. */
   private pendingCloudRender = false;
+  private endpointSubmission: Promise<unknown> = Promise.resolve();
   private pointerIsDown = false;
   private isListeningVoice = false;
   private scheduledCommands: ScheduledCommand[] = [];
@@ -826,11 +834,12 @@ export class MenuMijiaWindowsApp {
 
     this.applyInterfaceLanguage();
     this.applyTemperatureSetting();
-    this.devices =
-      this.settings.connectionMode === "xiaomiCloud"
-        ? structuredClone(this.settings.cachedXiaomiDevices)
-        : demoDevices();
-    this.scenes = this.settings.connectionMode === "xiaomiCloud" ? [] : demoScenes();
+    const haCache = this.settings.cachedHAHome?.identity === homeAssistantIdentity(this.settings.haBaseURL, this.settings.haToken) ? this.settings.cachedHAHome.home : null;
+    this.devices = this.settings.connectionMode === "xiaomiCloud"
+      ? structuredClone(this.settings.cachedXiaomiDevices)
+      : this.settings.connectionMode === "homeAssistant" ? structuredClone(haCache?.devices ?? []) : demoDevices();
+    this.scenes = this.settings.connectionMode === "homeAssistant" ? structuredClone(haCache?.scenes ?? []) : this.settings.connectionMode === "demo" ? demoScenes() : [];
+    this.environmentReadings = this.settings.connectionMode === "homeAssistant" ? structuredClone(haCache?.environmentReadings ?? []) : [];
     this.initializeCredentials();
     this.submitServiceEndpoints();
 
@@ -851,7 +860,7 @@ export class MenuMijiaWindowsApp {
     this.render();
 
     if (this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) {
-      void this.refreshXiaomiDevices();
+      void this.refreshDevices();
     }
     // At most one GitHub request per local day, and only inside the packaged app (#39).
     void this.checkForAppUpdate(false);
@@ -895,11 +904,23 @@ export class MenuMijiaWindowsApp {
       this.submitServiceEndpoints();
       writeSettingsForStorage(this.settings);
       if (this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) {
-        void this.refreshXiaomiDevices(true);
+        void this.refreshDevices(true);
+      }
+      if (this.settings.connectionMode === "homeAssistant") {
+        const cache = this.settings.cachedHAHome;
+        if (cache?.identity === homeAssistantIdentity(this.settings.haBaseURL, this.settings.haToken)) {
+          this.devices = structuredClone(cache.home.devices);
+          this.scenes = structuredClone(cache.home.scenes);
+          this.environmentReadings = structuredClone(cache.home.environmentReadings);
+        }
       }
       this.render();
+      if (this.settings.connectionMode === "homeAssistant") void this.refreshHADevices();
     } catch {
-      // A locked or unavailable credential store must not stop demo mode.
+      if (this.settings.connectionMode === "homeAssistant") {
+        this.haConnectionError = "Home Assistant credentials could not be loaded. Check Windows Credential Manager.";
+        this.render();
+      }
     }
   }
 
@@ -943,10 +964,7 @@ export class MenuMijiaWindowsApp {
     this.lastSubmittedEndpoints = serialized;
     const invoke = window.__TAURI_INTERNALS__?.invoke;
     if (!invoke) return;
-    void invoke("set_service_endpoints", { assistantUrl, haUrl }).then(
-      () => undefined,
-      () => undefined,
-    );
+    this.endpointSubmission = invoke("set_service_endpoints", { assistantUrl, haUrl }).catch(() => undefined);
   }
 
   /** Restores the last known release so an update found yesterday still shows after a restart. */
@@ -1157,7 +1175,6 @@ export class MenuMijiaWindowsApp {
         this.render();
       }
 
-      // Silent Top-4 AI enhancement: fires only when the time bucket or climate changed (#113).
       this.maybeRefreshProactiveInBackground();
 
       const now = Date.now();
@@ -1185,16 +1202,14 @@ export class MenuMijiaWindowsApp {
         this.render();
       }
 
-      // Cloud refresh: every 6 s with the panel open, every 60 s while it sits in the tray (#26).
       if (
-        this.settings.connectionMode === "xiaomiCloud" &&
-        this.settings.miSession &&
+        (this.settings.connectionMode === "homeAssistant" || this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) &&
         this.activeSheet === "none" &&
         !this.isSyncingCloud &&
         !this.isPollingQR &&
         cloudRefreshDue(now, this.lastCloudRefreshAt, this.isPanelVisible())
       ) {
-        void this.refreshXiaomiDevices(true);
+        void this.refreshDevices(true);
       }
     }, 1000);
   }
@@ -1280,12 +1295,14 @@ export class MenuMijiaWindowsApp {
     return out.map((item) => item.reading);
   }
 
-  private async refreshXiaomiDevices(silent = false): Promise<void> {
+  private async refreshDevices(silent = false): Promise<void> {
+    if (this.settings.connectionMode === "homeAssistant") return this.refreshHADevices(silent);
     if (!this.settings.miSession || this.settings.connectionMode !== "xiaomiCloud" || this.isSyncingCloud) return;
     const session = this.settings.miSession;
     const previousPresentation = this.cloudPresentationFingerprint();
     const previousStructure = this.cloudPanelStructureFingerprint();
     const stateRevisionAtStart = this.localControlRevision;
+    const syncGen = ++this.syncGeneration;
     let presentationChanged = false;
     this.isSyncingCloud = true;
     this.lastCloudRefreshAt = Date.now();
@@ -1380,15 +1397,70 @@ export class MenuMijiaWindowsApp {
         };
       }
     } finally {
-      this.isSyncingCloud = false;
-      if (!silent) {
-        this.render();
-      } else if (presentationChanged) {
-        if (
-          this.cloudPanelStructureFingerprint() !== previousStructure ||
-          !this.patchCloudPresentation()
-        ) {
-          this.queueBackgroundRender();
+      if (this.syncGeneration === syncGen) {
+        this.isSyncingCloud = false;
+        if (!silent) {
+          this.render();
+        } else if (presentationChanged) {
+          if (
+            this.cloudPanelStructureFingerprint() !== previousStructure ||
+            !this.patchCloudPresentation()
+          ) {
+            this.queueBackgroundRender();
+          }
+        }
+      }
+    }
+  }
+
+  private async refreshHADevices(silent = false): Promise<void> {
+    if (this.settings.connectionMode !== "homeAssistant" || this.isSyncingCloud) return;
+    const endpoint = this.settings.haBaseURL;
+    const token = this.settings.haToken;
+    const revision = this.localControlRevision;
+    const syncGen = ++this.syncGeneration;
+    const previousPresentation = this.cloudPresentationFingerprint();
+    const previousStructure = this.cloudPanelStructureFingerprint();
+    let failed = false;
+    let shouldUpdateView = false;
+    this.isSyncingCloud = true;
+    this.lastCloudRefreshAt = Date.now();
+    if (!silent && this.devices.length === 0) this.render();
+    try {
+      await this.endpointSubmission;
+      const home = await new HomeAssistantClient(endpoint, token).snapshot();
+      const identity = homeAssistantIdentity(endpoint, token);
+      if (!identity) throw new Error("Invalid Home Assistant URL");
+      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
+      this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
+      this.scenes = home.scenes;
+      const readingPriorityById = new Map(
+        home.devices.map((device) => [device.id, environmentReadingPriority(device.kind)]),
+      );
+      this.environmentReadings = applyOrder(
+        this.environmentReadings.map((reading) => reading.id),
+        home.environmentReadings,
+      ).sort(
+        (a, b) => (readingPriorityById.get(a.id) ?? 0) - (readingPriorityById.get(b.id) ?? 0),
+      );
+      const hadValidCache = this.settings.cachedHAHome?.identity === identity;
+      const presentationChanged =
+        this.cloudPresentationFingerprint() !== previousPresentation || this.haConnectionError !== null;
+      this.settings.cachedHAHome = {identity,home:{...home,devices:this.devices,environmentReadings:this.environmentReadings}};
+      if (this.haConnectionError !== null) failed = true;
+      this.haConnectionError = null;
+      if (presentationChanged || !hadValidCache) this.saveSettings();
+      shouldUpdateView = !silent || presentationChanged;
+    } catch (error) {
+      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
+      failed = true;
+      shouldUpdateView = true;
+      this.haConnectionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (this.syncGeneration === syncGen) {
+        this.isSyncingCloud = false;
+        if (shouldUpdateView) {
+          if (failed || this.devices.length === 0 || this.cloudPanelStructureFingerprint() !== previousStructure || !this.patchCloudPresentation()) this.queueBackgroundRender();
         }
       }
     }
@@ -1399,6 +1471,7 @@ export class MenuMijiaWindowsApp {
     return JSON.stringify({
       homes: this.homes,
       devices: this.devices,
+      scenes: this.scenes,
       environmentReadings: this.environmentReadings,
     });
   }
@@ -1411,11 +1484,11 @@ export class MenuMijiaWindowsApp {
     );
   }
 
-  /** Structure the existing DOM only when its interactive nodes and capabilities are unchanged. */
   private cloudPanelStructureFingerprint(): string {
     return JSON.stringify({
       homes: this.homes,
-      allOffTargets: this.allOffTargets.map((device) => device.id),
+      scenes: this.scenes,
+      allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
       devices: this.devices.map((device) => {
         const kind = device.kind;
         const capabilities =
@@ -1447,7 +1520,6 @@ export class MenuMijiaWindowsApp {
     });
   }
 
-  /** Applies value-only cloud changes in place; anything structural falls back to a full render. */
   private patchCloudPresentation(): boolean {
     if (
       this.isEditingLayout ||
@@ -1483,6 +1555,18 @@ export class MenuMijiaWindowsApp {
       }
     }
     for (const patch of tilePatches) morphMatchingDom(patch.current, patch.desired);
+    if (this.settings.connectionMode === "homeAssistant") {
+      const current = this.root.querySelector<HTMLElement>("#btn-all-off");
+      const desired = parseSingleElement(this.renderAllOffControl());
+      if (current && desired) {
+        morphMatchingDom(current, desired);
+      } else if (current) {
+        current.remove();
+      } else if (desired) {
+        this.root.querySelector("#btn-hide-panel")?.before(desired);
+        this.bindAllOffControl();
+      }
+    }
 
     const envHTML = this.renderEnvironmentStrip();
     const currentEnv = this.root.querySelector<HTMLElement>(".cc-env-strip");
@@ -1512,7 +1596,7 @@ export class MenuMijiaWindowsApp {
               user: maskedMiUserId(this.settings.miSession.userId),
               count: this.devices.length,
             })
-          : t("演示模式 · 未连接米家云");
+          : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云");
     }
     return true;
   }
@@ -1541,7 +1625,7 @@ export class MenuMijiaWindowsApp {
     this.aiProactiveSignature = null;
     this.saveSettings();
     this.render();
-    void this.refreshXiaomiDevices(false);
+    void this.refreshDevices(false);
   }
 
   private get homeTitle(): string {
@@ -1552,6 +1636,45 @@ export class MenuMijiaWindowsApp {
   /** Devices 全关 would switch off: on screen (current room), on, and taking part (#23). */
   private get allOffTargets(): SmartDevice[] {
     return allOffTargets(this.filteredDevices, this.settings.allOffOverrides);
+  }
+
+  private renderAllOffControl(): string {
+    if (this.isEditingLayout) return `<button class="cc-all-off-pill is-done" id="btn-done-editing" aria-label="${t("完成布局编辑")}">${t("完成")}</button>`;
+    const count = this.allOffTargets.length;
+    if (count === 0) return "";
+    return `<button class="cc-all-off-pill is-hold" id="btn-all-off" title="${t("按住 0.6 秒关闭这 {count} 台（插座、扫地机默认不参与，可在设置里调整）", { count })}" aria-label="${t("全关，关闭 {count} 台设备，按住 0.6 秒确认", { count })}">
+      <span class="cc-hold-fill"></span>
+      ${SF_ICONS.power}
+      <span>${this.selectedRoom === "全部" ? t("全关") : t("全关·{room}", { room: this.escapeHtml(this.selectedRoom) })} (${count})</span>
+    </button>`;
+  }
+
+  private bindAllOffControl(): void {
+    const allOff = this.root.querySelector<HTMLElement>("#btn-all-off");
+    if (!allOff) return;
+    let holdTimer: number | undefined;
+    let fired = false;
+    allOff.addEventListener("pointerdown", () => {
+      fired = false;
+      allOff.classList.add("is-holding");
+      holdTimer = window.setTimeout(() => {
+        fired = true;
+        allOff.classList.remove("is-holding");
+        void this.turnAllOff();
+      }, 600);
+    });
+    const cancel = () => {
+      window.clearTimeout(holdTimer);
+      allOff.classList.remove("is-holding");
+    };
+    allOff.addEventListener("pointerup", () => {
+      cancel();
+      if (!fired) {
+        this.replyBanner = { text: t("按住 0.6 秒关闭这 {count} 台（插座、扫地机默认不参与）", { count: this.allOffTargets.length }), source: t("提示") };
+        this.render();
+      }
+    });
+    allOff.addEventListener("pointerleave", cancel);
   }
 
   private async turnAllOff(): Promise<void> {
@@ -1572,6 +1695,7 @@ export class MenuMijiaWindowsApp {
   private async handleNaturalCommand(rawInput: string, fromScheduled = false): Promise<void> {
     const trimmed = rawInput.trim();
     if (!trimmed) return;
+    const sourceRevision = this.sourceRevision;
     // A new command replaces any question still waiting for cloud consent, and old suggestions.
     this.pendingCloudConsent = null;
     this.pendingSuggestions = [];
@@ -1686,6 +1810,7 @@ export class MenuMijiaWindowsApp {
           ),
         });
         plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
+        if (sourceRevision !== this.sourceRevision) return;
         sourceLabel = resolver.usesSystemOne ? "Jev SystemOne" : this.settings.assistantModel;
       }
 
@@ -1700,6 +1825,7 @@ export class MenuMijiaWindowsApp {
       const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel, {
         recordHabits: plan.source === "local" && !fromScheduled,
       });
+      if (sourceRevision !== this.sourceRevision) return;
 
       if (
         succeeded &&
@@ -1710,6 +1836,7 @@ export class MenuMijiaWindowsApp {
         this.learnShortcut(trimmed, replyText, sanitized);
       }
     } catch (err) {
+      if (sourceRevision !== this.sourceRevision) return;
       const msg = err instanceof Error ? err.message : String(err);
       this.replyBanner = {
         text: msg,
@@ -1717,8 +1844,10 @@ export class MenuMijiaWindowsApp {
         isError: true,
       };
     } finally {
-      this.isResolvingIntent = false;
-      this.render();
+      if (sourceRevision === this.sourceRevision) {
+        this.isResolvingIntent = false;
+        this.render();
+      }
     }
   }
 
@@ -1820,6 +1949,7 @@ export class MenuMijiaWindowsApp {
     sourceLabel: string,
     options: { recordHabits?: boolean } = {},
   ): Promise<boolean> {
+    const sourceRevision = this.sourceRevision;
     const commands: Array<{ deviceId: string; command: DeviceCommand }> = [];
     for (const intent of intents) {
       if (intent.operation.kind === "activateScene") {
@@ -1840,6 +1970,7 @@ export class MenuMijiaWindowsApp {
     let failed = 0;
     let failureMessage = "";
     for (const { deviceId, command } of commands) {
+      if (sourceRevision !== this.sourceRevision) return false;
       // Scenes have no device row and no inverse; they simply run and count as applied (#113).
       if (command.kind === "activateScene") {
         if (await this.applyCommand(command)) {
@@ -1866,6 +1997,7 @@ export class MenuMijiaWindowsApp {
         failureMessage = this.replyBanner?.text ?? "设备未响应";
       }
     }
+    if (sourceRevision !== this.sourceRevision) return false;
     if (succeeded > 0) {
       // Only explicit user asks train habits; model-inferred and scheduled runs do not (#34/#113).
       const habitReceipt = options.recordHabits && failed === 0 ? this.recordHabits(intents) : null;
@@ -1892,8 +2024,10 @@ export class MenuMijiaWindowsApp {
     summary: string,
     intent?: DeviceIntent,
   ): Promise<void> {
+    const sourceRevision = this.sourceRevision;
     const inverseCommands = this.buildInverseCommand(device, command);
     if (!(await this.applyCommand(command))) return;
+    if (sourceRevision !== this.sourceRevision) return;
     const habitReceipt = intent ? this.recordHabits([intent]) : null;
     this.lastUndoAction = inverseCommands.length > 0 ? {
       summary,
@@ -2008,11 +2142,6 @@ export class MenuMijiaWindowsApp {
       </section>`;
   }
 
-  /**
-   * Silent background AI refresh for the proactive strip (#113): fires only when the
-   * time bucket or room climate changed, never blocks the panel, never asks for consent,
-   * and keeps the previous cache when the request fails.
-   */
   private maybeRefreshProactiveInBackground(): void {
     if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
     if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
@@ -2027,6 +2156,7 @@ export class MenuMijiaWindowsApp {
       const endpoint = assistantEndpointIdentity(baseURL);
       if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
     }
+    const sourceRevision = this.sourceRevision;
     this.isRefreshingProactive = true;
     const resolver = new ModelIntentResolver(
       { baseURL, model: this.settings.assistantModel, apiKey },
@@ -2050,6 +2180,7 @@ export class MenuMijiaWindowsApp {
         }),
       )
       .then((suggestions) => {
+        if (sourceRevision !== this.sourceRevision) return;
         this.isRefreshingProactive = false;
         if (this.proactiveSignature() === signature) {
           // The context counts as served only once a usable result landed (Codex #116 review).
@@ -2065,10 +2196,26 @@ export class MenuMijiaWindowsApp {
         }
       })
       .catch(() => {
+        if (sourceRevision !== this.sourceRevision) return;
         // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
         this.isRefreshingProactive = false;
         this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
       });
+  }
+
+  private invalidateSourceControl(): void {
+    this.sourceRevision += 1;
+    this.syncGeneration += 1;
+    this.isSyncingCloud = false;
+    this.isResolvingIntent = false;
+    this.aiProactiveSuggestions = null;
+    this.aiProactiveSignature = null;
+    this.isRefreshingProactive = false;
+    this.proactiveRetryAfterMs = null;
+    this.haConnectionError = null;
+    this.lastUndoAction = null;
+    this.pendingCloudConsent = null;
+    this.pendingSuggestions = [];
   }
 
   private async performUndo(): Promise<void> {
@@ -2082,6 +2229,7 @@ export class MenuMijiaWindowsApp {
       return;
     }
     const action = this.lastUndoAction;
+    const sourceRevision = this.sourceRevision;
     const failedSteps: UndoStep[] = [];
     const blockedDevices = new Set<string>();
     let failureMessage = "";
@@ -2092,6 +2240,7 @@ export class MenuMijiaWindowsApp {
       }
       let failed = false;
       for (const command of step.commands) {
+        if (sourceRevision !== this.sourceRevision) return;
         if (!(await this.applyCommand(command))) {
           failed = true;
           failureMessage = this.replyBanner?.text ?? "设备未响应";
@@ -2102,6 +2251,7 @@ export class MenuMijiaWindowsApp {
         blockedDevices.add(step.deviceId);
       }
     }
+    if (sourceRevision !== this.sourceRevision) return;
     this.lastUndoAction = failedSteps.length > 0
       ? { ...action, steps: failedSteps }
       : null;
@@ -2117,9 +2267,12 @@ export class MenuMijiaWindowsApp {
   }
 
   private async applyCommand(command: DeviceCommand): Promise<boolean> {
+    const sourceRevision = this.sourceRevision;
     try {
+      if (this.settings.connectionMode === "homeAssistant") command = homeAssistantCommand(command, this.devices);
       await this.dispatchCloudCommand(command);
     } catch (error) {
+      if (sourceRevision !== this.sourceRevision) return false;
       this.replyBanner = {
         text: error instanceof Error ? error.message : String(error),
         source: t("控制失败"),
@@ -2128,6 +2281,7 @@ export class MenuMijiaWindowsApp {
       this.render();
       return false;
     }
+    if (sourceRevision !== this.sourceRevision) return false;
     this.localControlRevision += 1;
     for (const dev of this.devices) {
       const k = dev.kind;
@@ -2169,7 +2323,9 @@ export class MenuMijiaWindowsApp {
           break;
         case "setClimateTemperature":
           if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.isOn = true;
+            if (this.settings.connectionMode !== "homeAssistant" || k.hvacMode !== "off") {
+              k.isOn = true;
+            }
             k.targetTemperature = command.temperature;
           }
           break;
@@ -2246,9 +2402,16 @@ export class MenuMijiaWindowsApp {
   }
 
   private async dispatchCloudCommand(command: DeviceCommand): Promise<void> {
+    const sourceRevision = this.sourceRevision;
     if (this.settings.connectionMode === "demo") return;
-    if (this.settings.connectionMode !== "xiaomiCloud") throw new Error(t("Windows 端暂不支持 Home Assistant 连接"));
+    if (this.settings.connectionMode === "homeAssistant") {
+      const client = new HomeAssistantClient(this.settings.haBaseURL, this.settings.haToken);
+      await this.endpointSubmission;
+      if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
+      return client.execute(command);
+    }
     if (!this.settings.miSession) throw new Error(t("请先扫码登录米家"));
+    const session = this.settings.miSession;
     const dev = this.devices.find((d) => {
       const k = d.kind;
       if (k.kind === "plug") return k.switchEntityId === command.entityId || k.childLockEntityId === command.entityId;
@@ -2266,7 +2429,8 @@ export class MenuMijiaWindowsApp {
       specType: null,
     });
     const mapped = MiotCommandMapper.map(command, spec);
-    const client = new MiCloudClient(this.settings.miSession, this.transport);
+    if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
+    const client = new MiCloudClient(session, this.transport);
     if (mapped.kind === "setProps") {
       await client.setProps(mapped.writes);
     } else {
@@ -2338,6 +2502,7 @@ export class MenuMijiaWindowsApp {
       this.render();
 
       const session = await login.waitForScan(ticket);
+      this.invalidateSourceControl();
       // The account-level passToken is never persisted (#27).
       this.settings.miSession = sessionWithoutPassToken(session);
       this.settings.miCloudRegion = normalizeMiCloudRegion(session.region);
@@ -2358,7 +2523,7 @@ export class MenuMijiaWindowsApp {
       };
       this.render();
 
-      await this.refreshXiaomiDevices(false);
+      await this.refreshDevices(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.qrStatusText = t("扫码未完成：{message}", { message: msg });
@@ -2380,6 +2545,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private get statusSummaryText(): string {
+    if (this.settings.connectionMode === "homeAssistant") return this.isSyncingCloud ? "Home Assistant · Connecting" : `Home Assistant · ${this.onlineDeviceCount} online`;
     if (this.settings.connectionMode === "xiaomiCloud") {
       if (this.isSyncingCloud && this.devices.length === 0) {
         return t("正在从小米云端同步真实设备...");
@@ -2566,17 +2732,7 @@ export class MenuMijiaWindowsApp {
               >
                 ${SF_ICONS.sparkles}
               </button>
-              ${
-                this.isEditingLayout
-                  ? `<button class="cc-all-off-pill is-done" id="btn-done-editing" aria-label="${t("完成布局编辑")}">${t("完成")}</button>`
-                  : this.allOffTargets.length > 0
-                  ? `<button class="cc-all-off-pill is-hold" id="btn-all-off" title="${t("按住 0.6 秒关闭这 {count} 台（插座、扫地机默认不参与，可在设置里调整）", { count: this.allOffTargets.length })}" aria-label="${t("全关，关闭 {count} 台设备，按住 0.6 秒确认", { count: this.allOffTargets.length })}">
-                      <span class="cc-hold-fill"></span>
-                      ${SF_ICONS.power}
-                      <span>${this.selectedRoom === "全部" ? t("全关") : t("全关·{room}", { room: this.escapeHtml(this.selectedRoom) })} (${this.allOffTargets.length})</span>
-                    </button>`
-                  : ""
-              }
+              ${this.renderAllOffControl()}
               <button
                 class="cc-circle-btn"
                 id="btn-hide-panel"
@@ -2706,6 +2862,8 @@ export class MenuMijiaWindowsApp {
             : ""
         }
 
+        ${this.haConnectionError ? `<div class="cc-feedback-card is-error" role="alert" data-ha-error><span class="cc-feedback-badge">Home Assistant</span><span class="cc-feedback-text">${this.escapeHtml(this.haConnectionError)}</span></div>` : ""}
+
         <section class="cc-quick-strip">
           ${quickActions().map(
             (act) => `
@@ -2715,6 +2873,7 @@ export class MenuMijiaWindowsApp {
             </button>
           `,
           ).join("")}
+          ${this.settings.connectionMode === "homeAssistant" ? this.scenes.map((scene) => `<button class="cc-quick-pill tint-blue" data-ha-scene="${this.escapeHtml(scene.id)}"><span class="cc-quick-icon">${SF_ICONS.sparkles}</span><span>${this.escapeHtml(scene.name)}</span></button>`).join("") : ""}
         </section>
 
         ${this.renderProactiveStrip()}
@@ -2758,12 +2917,12 @@ export class MenuMijiaWindowsApp {
 
         <footer class="cc-footer">
           <div class="cc-footer-status">
-            <span class="cc-status-dot ${this.isSyncingCloud ? "is-syncing" : isDemo ? "is-demo" : "is-online"}"></span>
+            <span class="cc-status-dot ${this.isSyncingCloud ? "is-syncing" : this.settings.connectionMode === "homeAssistant" ? (this.haConnectionError || !this.settings.haBaseURL || !this.settings.haToken ? "is-demo" : "is-online") : isDemo ? "is-demo" : "is-online"}"></span>
             <span class="cc-footer-label">
               ${
                 this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession
                   ? t("米家账号 {user} · {count} 台设备", { user: maskedMiUserId(this.settings.miSession.userId), count: this.devices.length })
-                  : t("演示模式 · 未连接米家云")
+                  : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云")
               }
             </span>
           </div>
@@ -2777,7 +2936,7 @@ export class MenuMijiaWindowsApp {
                 : ""
             }
             ${
-              !this.settings.miSession || isDemo
+              this.settings.connectionMode !== "homeAssistant" && (!this.settings.miSession || isDemo)
                 ? `<button class="cc-footer-pill is-accent" id="btn-footer-qr" title="${t("用手机米家 App 扫码直连真实设备")}">
                     ${SF_ICONS.qrcode}
                     <span>${t("扫码直连")}</span>
@@ -2872,6 +3031,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderDeviceGrid(): string {
+    if (this.settings.connectionMode === "homeAssistant" && this.devices.length === 0) return `<div class="cc-empty-state"><div class="cc-empty-title">Home Assistant</div><div class="cc-empty-subtitle">${this.isSyncingCloud ? "Connecting…" : "No connected devices. Check the saved URL, token and endpoint permission."}</div><button class="cc-btn-secondary" id="btn-empty-settings">Settings</button></div>`;
     if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length === 0) {
       if (this.isSyncingCloud) {
         return `
@@ -3119,7 +3279,7 @@ export class MenuMijiaWindowsApp {
         ${badge}
         <div class="cc-climate-strip">
           <button class="cc-climate-power ${running ? "is-on" : ""}" data-toggle-device="${id}" title="${running ? t("关闭空调") : t("打开空调")}" aria-label="${running ? t("关闭 {name}", { name: this.escapeHtml(dev.name) }) : t("打开 {name}", { name: this.escapeHtml(dev.name) })}" aria-pressed="${running}">
-            ${k.hvacMode === "heat" ? "🔥" : SF_ICONS.snowflake}
+            <span aria-hidden="true" ${k.hvacMode === "heat" ? "" : "hidden"}>🔥</span><span aria-hidden="true" ${k.hvacMode === "heat" ? "hidden" : ""}>${SF_ICONS.snowflake}</span>
           </button>
           <button class="cc-climate-name" data-expand-device="${id}" aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(subtitle)}" aria-expanded="${open}">
             <span class="cc-tile-name">${this.escapeHtml(dev.name)}</span>
@@ -4089,6 +4249,7 @@ export class MenuMijiaWindowsApp {
               >
                 米家云真实设备
               </button>
+              <button class="cc-seg-pill ${this.settings.connectionMode === "homeAssistant" ? "is-active" : ""}" data-conn-mode="homeAssistant">Home Assistant</button>
               <button
                 class="cc-seg-pill ${this.settings.connectionMode === "demo" ? "is-active" : ""}"
                 data-conn-mode="demo"
@@ -4096,6 +4257,12 @@ export class MenuMijiaWindowsApp {
                 演示设备预览
               </button>
             </div>
+          </div>
+          <div class="cc-field">
+            <label for="settings-ha-url">Home Assistant URL</label>
+            <input id="settings-ha-url" class="cc-input" type="url" value="${this.escapeHtml(this.settings.haBaseURL)}" placeholder="http://homeassistant.local:8123" />
+            <label for="settings-ha-token">Home Assistant access token</label>
+            <input id="settings-ha-token" class="cc-input" type="password" autocomplete="off" value="${this.escapeHtml(this.settings.haToken)}" />
           </div>
 
           <div class="cc-field">
@@ -4323,33 +4490,7 @@ export class MenuMijiaWindowsApp {
       }
     });
 
-    // Every skin asks for a 0.6 s hold (#23).
-    const allOff = this.root.querySelector<HTMLElement>("#btn-all-off");
-    if (allOff) {
-      let holdTimer: number | undefined;
-      let fired = false;
-      allOff.addEventListener("pointerdown", () => {
-        fired = false;
-        allOff.classList.add("is-holding");
-        holdTimer = window.setTimeout(() => {
-          fired = true;
-          allOff.classList.remove("is-holding");
-          void this.turnAllOff();
-        }, 600);
-      });
-      const cancel = () => {
-        window.clearTimeout(holdTimer);
-        allOff.classList.remove("is-holding");
-      };
-      allOff.addEventListener("pointerup", () => {
-        cancel();
-        if (!fired) {
-          this.replyBanner = { text: t("按住 0.6 秒关闭这 {count} 台（插座、扫地机默认不参与）", { count: this.allOffTargets.length }), source: t("提示") };
-          this.render();
-        }
-      });
-      allOff.addEventListener("pointerleave", cancel);
-    }
+    this.bindAllOffControl();
 
     this.root.querySelector("#btn-done-editing")?.addEventListener("click", () => this.stopEditing());
 
@@ -4602,8 +4743,8 @@ export class MenuMijiaWindowsApp {
     });
 
     this.root.querySelector("#btn-refresh")?.addEventListener("click", () => {
-      if (this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) {
-        void this.refreshXiaomiDevices(false);
+      if (this.settings.connectionMode === "homeAssistant" || this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) {
+        void this.refreshDevices(false);
       } else {
         this.render();
       }
@@ -4616,7 +4757,7 @@ export class MenuMijiaWindowsApp {
     });
 
     this.root.querySelector("#btn-empty-resync")?.addEventListener("click", () => {
-      void this.refreshXiaomiDevices(false);
+      void this.refreshDevices(false);
     });
 
     this.root.querySelector("#btn-empty-settings")?.addEventListener("click", () => {
@@ -4670,6 +4811,15 @@ export class MenuMijiaWindowsApp {
       btn.addEventListener("click", () => {
         const cmd = btn.dataset.sceneCmd;
         if (cmd) void this.handleNaturalCommand(cmd);
+      });
+    });
+
+    this.root.querySelectorAll<HTMLElement>("[data-ha-scene]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const scene = this.scenes.find((item) => item.id === button.dataset.haScene);
+        if (!scene) return;
+        const intents: DeviceIntent[] = [{targetId:scene.id,operation:{kind:"activateScene"}}];
+        void this.executeIntents(intents, IntentReply.describe(intents, this.devices, this.scenes), t("0ms 本地直达"), {recordHabits:true});
       });
     });
 
@@ -5067,6 +5217,11 @@ export class MenuMijiaWindowsApp {
       btn.addEventListener("click", () => {
         const mode = btn.dataset.connMode as ConnectionMode | undefined;
         if (!mode) return;
+        this.localControlRevision += 1;
+        this.invalidateSourceControl();
+        this.environmentReadings = [];
+        this.homes = [];
+        this.replyBanner = null;
         this.settings.connectionMode = mode;
         this.selectedRoom = "全部";
         if (mode === "demo") {
@@ -5076,7 +5231,16 @@ export class MenuMijiaWindowsApp {
           this.devices = structuredClone(this.settings.cachedXiaomiDevices);
           this.scenes = [];
           if (this.settings.miSession) {
-            void this.refreshXiaomiDevices(false);
+            void this.refreshDevices(false);
+          }
+        } else if (mode === "homeAssistant") {
+          const cache = this.settings.cachedHAHome;
+          const matches = cache?.identity === homeAssistantIdentity(this.settings.haBaseURL, this.settings.haToken);
+          this.devices = matches && cache ? structuredClone(cache.home.devices) : [];
+          this.scenes = matches && cache ? structuredClone(cache.home.scenes) : [];
+          this.environmentReadings = matches && cache ? structuredClone(cache.home.environmentReadings) : [];
+          if (this.settings.haBaseURL && this.settings.haToken) {
+            void this.refreshHADevices(false);
           }
         }
         this.saveSettings();
@@ -5135,6 +5299,32 @@ export class MenuMijiaWindowsApp {
       const apiKeyEl = this.root.querySelector<HTMLInputElement>("#settings-api-key");
       const modelEl = this.root.querySelector<HTMLInputElement>("#settings-model");
       const habitEl = this.root.querySelector<HTMLInputElement>("#settings-habit");
+      const haUrl = this.root.querySelector<HTMLInputElement>("#settings-ha-url");
+      const haToken = this.root.querySelector<HTMLInputElement>("#settings-ha-token");
+      if (haUrl) {
+        let endpoint = haUrl.value.trim();
+        if (endpoint && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(endpoint)) {
+          endpoint = `http://${endpoint}`;
+        }
+        endpoint = endpoint.replace(/\/api\/websocket\/?$/i, "").replace(/\/+$/, "");
+        if (endpoint !== this.settings.haBaseURL) {
+          this.invalidateSourceControl();
+          this.settings.cachedHAHome = null;
+          this.localControlRevision += 1;
+          if (this.settings.connectionMode === "homeAssistant") { this.devices = []; this.scenes = []; this.environmentReadings = []; }
+        }
+        this.settings.haBaseURL = endpoint;
+      }
+      if (haToken) {
+        const token = haToken.value.trim();
+        if (token !== this.settings.haToken) {
+          this.invalidateSourceControl();
+          this.settings.cachedHAHome = null;
+          this.localControlRevision += 1;
+          if (this.settings.connectionMode === "homeAssistant") { this.devices = []; this.scenes = []; this.environmentReadings = []; }
+        }
+        this.settings.haToken = token;
+      }
       if (baseEl) this.settings.assistantBaseURL = baseEl.value.trim() || "https://openrouter.ai/api/v1";
       if (apiKeyEl) this.settings.openRouterApiKey = apiKeyEl.value.trim();
       this.settings.assistantKeyEndpoint = this.settings.openRouterApiKey
@@ -5145,6 +5335,7 @@ export class MenuMijiaWindowsApp {
       if (modelEl) this.settings.assistantModel = modelEl.value.trim() || fallbackModel;
       if (habitEl) this.settings.habitLearningEnabled = habitEl.checked;
       this.saveSettings(true);
+      if (this.settings.connectionMode === "homeAssistant") void this.refreshHADevices();
       this.activeSheet = "none";
       this.isRecordingHotkey = false;
       this.hotkeyNeedsHint = false;

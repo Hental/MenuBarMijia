@@ -37,11 +37,28 @@ export function hasCredentials(credentials: CredentialSnapshot): boolean {
 
 /**
  * Returns a copy of `settings` without the fields that hold secrets.
- * The rest of the settings (URLs, model names, cached device names) stays local.
  */
 export function sanitizeSettingsForStorage<T extends object>(settings: T): Record<string, unknown> {
   const copy = { ...settings } as Record<string, unknown>;
   for (const field of CREDENTIAL_SETTINGS_FIELDS) delete copy[field];
+  const cache = copy.cachedHAHome;
+  if (cache && typeof cache === "object" && "home" in cache) {
+    const home = cache.home;
+    if (home && typeof home === "object" && "devices" in home && Array.isArray(home.devices)) {
+      copy.cachedHAHome = {
+        ...cache,
+        home: {
+          ...home,
+          devices: home.devices.map((device: unknown) => {
+            if (!device || typeof device !== "object" || !("kind" in device)) return device;
+            const kind = device.kind;
+            if (!kind || typeof kind !== "object" || !("kind" in kind) || kind.kind !== "camera") return device;
+            return { ...device, kind: { ...kind, snapshotPath: null } };
+          }),
+        },
+      };
+    }
+  }
   return copy;
 }
 

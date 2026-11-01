@@ -19,7 +19,7 @@ _Avoid_: Device（设备）、Card（卡片）
 _Avoid_: Data mapping（数据映射）、Parsing（解析）
 
 **HomeBackend（连接后端）**：
-驱动 `HomeStore` 的底层数据源配置，支持局域网 `Home Assistant`（`HAWebSocketProvider`）与免网关的 `米家云端直连`（`MiCloudProvider`）；当 macOS 客户端同时配置并登录两端时自动并行连接并合并设备，仅配置一端时单源运行，演示模式由 `DemoHomeProvider` 提供。这套双源能力只存在于 macOS 客户端——Windows 托盘版只有米家云与演示模式，没有 HA 后端。
+驱动 `HomeStore` 的底层数据源配置，支持局域网 `Home Assistant`（`HAWebSocketProvider`）与免网关的 `米家云端直连`（`MiCloudProvider`）；当 macOS 客户端同时配置并登录两端时自动并行连接并合并设备，仅配置一端时单源运行，演示模式由 `DemoHomeProvider` 提供。Windows 采用互斥数据源选择，HA 通过原生 `ha_snapshot`、`ha_execute` 与 `HomeAssistantClient` 接入，不进行双源合并。
 _Avoid_: Server type（服务器类型）、Mode（模式）
 
 **DeviceDeduplication（跨源设备去重合并）**：

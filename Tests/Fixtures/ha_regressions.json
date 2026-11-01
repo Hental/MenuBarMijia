@@ -1,0 +1,32 @@
+{
+  "areas": [{"area_id":"study","name":"书房"}],
+  "devices": [
+    {"id":"heat-only","name":"书房空调","area_id":"study","model":"test.heater"},
+    {"id":"dev_cam_1","name":"客厅摄像机","area_id":"study","model":"chuangmi.camera.81ac1"},
+    {"id":"dev_airp_1","name":"米家空气净化器 4 Lite","area_id":"study","model":"zhimi.airp.rma3"}
+  ],
+  "entities": [
+    {"entity_id":"climate.study","device_id":"heat-only"},
+    {"entity_id":"switch.living_cam_power","device_id":"dev_cam_1"},
+    {"entity_id":"switch.living_cam_motion_detection","device_id":"dev_cam_1"},
+    {"entity_id":"select.living_cam_night_shot","device_id":"dev_cam_1"},
+    {"entity_id":"fan.study_airp","device_id":"dev_airp_1"},
+    {"entity_id":"sensor.study_airp_pm2_5_density","device_id":"dev_airp_1"},
+    {"entity_id":"sensor.study_airp_air_quality","device_id":"dev_airp_1"},
+    {"entity_id":"sensor.study_airp_temperature","device_id":"dev_airp_1"},
+    {"entity_id":"sensor.study_airp_relative_humidity","device_id":"dev_airp_1"},
+    {"entity_id":"sensor.study_airp_filter_life_level","device_id":"dev_airp_1"}
+  ],
+  "states": [
+    {"entity_id":"climate.study","state":"off","attributes":{"hvac_modes":["off","heat"],"temperature":22}},
+    {"entity_id":"switch.living_cam_power","state":"on","attributes":{}},
+    {"entity_id":"switch.living_cam_motion_detection","state":"on","attributes":{}},
+    {"entity_id":"select.living_cam_night_shot","state":"Auto","attributes":{"options":["Off","On","Auto"]}},
+    {"entity_id":"fan.study_airp","state":"on","attributes":{"percentage":50,"preset_mode":"Auto","preset_modes":["Auto","Sleep","Favorite"]}},
+    {"entity_id":"sensor.study_airp_pm2_5_density","state":"18","attributes":{}},
+    {"entity_id":"sensor.study_airp_air_quality","state":"Excellent","attributes":{}},
+    {"entity_id":"sensor.study_airp_temperature","state":"24.5","attributes":{}},
+    {"entity_id":"sensor.study_airp_relative_humidity","state":"52","attributes":{}},
+    {"entity_id":"sensor.study_airp_filter_life_level","state":"86","attributes":{}}
+  ]
+}

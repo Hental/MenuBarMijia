@@ -104,7 +104,7 @@ MenuBarMijia 的 macOS 版本采用 Swift 6 原生开发，Windows 11 版本基�
 | 功能维度 | macOS 原生版 (14+) | Windows 11 托盘版 | 说明 |
 | :--- | :---: | :---: | :--- |
 | **米家云端扫码直连** | ✅ 支持 | ✅ 支持 | 手机米家 App 扫码登录，支持中/欧/美/俄/新加坡多区域服务器 |
-| **Home Assistant 接入** | ✅ 支持 | — 暂不支持 | macOS 支持局域网 WebSocket 直连与官方 `xiaomi_home` 聚合 |
+| **Home Assistant 接入** | ✅ 支持 | ✅ 支持 | 双端支持局域网原生 WebSocket 直连与官方 `xiaomi_home` 物理设备聚合 |
 | **键盘搜索与设备控制** | ✅ 支持 | — 暂不支持 | macOS 支持拼音首字母（如 `sftd`）与设备名搜索，以及方向键控制 |
 | **全局快捷键呼出** | ✅ `⌥M`（支持自定义） | ✅ `Alt+M`（支持自定义） | 1.1.4 Windows 版已补齐自定义热键录制与占用冲突检测 |
 | **语音控制方式** | ✅ 菜单栏按住 / 快捷键按住 / 免提 | ⚠️ 仅免提听写 | macOS 支持系统原生听写与按住说话；Windows 使用 WebView 听写 |
@@ -161,8 +161,8 @@ brew install --cask jryang1997/tap/menubarmijia
 
 - **方式一：米家云端扫码直连（推荐）：**<br>
   在设置中选择「米家云端直连」，屏幕上将显示登录二维码。使用手机「米家」App 扫码并确认登录，全屋家庭、房间与设备将自动同步到面板中。
-- **方式二：接入已有 Home Assistant（macOS 专属）：**<br>
-  选择「Home Assistant」模式，填写局域网地址（如 `http://192.168.1.100:8123`）与长期访问令牌。应用会把支持的开关、传感器等实体整理成设备卡片。
+- **方式二：接入已有 Home Assistant：**<br>
+  选择「Home Assistant」，填写实例根地址（如 `http://192.168.1.100:8123`）与长期访问令牌。Windows 保存设置后需在原生对话框允许该来源，令牌保存在 Windows 凭据管理器。拒绝授权或连接失败不会切换到演示模式。Windows 支持现有灯、温控、风扇、插座、扫地机、摄像机控制和传感器卡片，以及场景和脚本。macOS 独有设备类型与 HA 摄像机实时流不在本次 Windows 后端范围内。
 - **方式三：离线演示模式（Demo Home）：**<br>
   无需账号即可使用虚拟设备体验界面和控制操作。
 
@@ -199,7 +199,7 @@ brew install --cask jryang1997/tap/menubarmijia
 
 ## 安全、隐私与限制
 
-MenuBarMijia 是独立开源项目，并非小米官方客户端。米家云直连需要联网；如果你已经有 Home Assistant，也可以在 macOS 上连接自己的实例。
+MenuBarMijia 是独立开源项目，并非小米官方客户端。米家云直连需要联网；已有 Home Assistant 时，可在 macOS 或 Windows 上连接自己的实例。
 
 账号凭据和 AI 密钥保存在 macOS 钥匙串或 Windows 凭据管理器中。macOS 更新后系统可能询问一次钥匙串授权；旧版凭据迁移成功后，原有明文副本才会删除。
 

@@ -104,7 +104,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | Feature Area | macOS Native (14+) | Windows 11 Tray | Details |
 | :--- | :---: | :---: | :--- |
 | **Mi Home Direct QR Connect** | ✅ Supported | ✅ Supported | Scan with Mi Home app; supports CN, SG, DE, US, and RU regional servers |
-| **Home Assistant Integration** | ✅ Supported | — Not yet | macOS connects via local WebSocket and synthesizes official `xiaomi_home` entities |
+| **Home Assistant Integration** | ✅ Supported | ✅ Supported | Native WebSocket connection with `xiaomi_home` entity synthesis and physical-device grouping |
 | **Keyboard Search & Control** | ✅ Supported | — Not yet | On macOS, search by device name or pinyin initials and use arrow keys to control devices |
 | **Global Activation Hotkey** | ✅ `⌥M` (Customizable) | ✅ `Alt+M` (Customizable) | Windows 1.1.4 adds custom key recording with collision detection |
 | **Voice Interaction** | ✅ Menu bar hold / Hotkey hold / Hands-free | ⚠️ Hands-free only | macOS supports native Speech frameworks; Windows uses WebView speech recognition |
@@ -161,8 +161,8 @@ Click the menu bar icon to reveal the panel, then open Settings `⚙️`:
 
 - **Option A: Mi Home Direct Cloud Connect (Recommended):**<br>
   Select "Mi Cloud Connect" in Settings. A QR code appears on screen. Scan it with the official Mi Home app on your phone to link your account. All your homes, rooms, and supported devices sync instantly.
-- **Option B: Home Assistant Local Connection (macOS Only):**<br>
-  Select "Home Assistant" and enter your local instance URL (e.g. `http://192.168.1.100:8123`) and Long-Lived Access Token. The synthesizer groups supported sensor and switch entities into device cards.
+- **Option B: Home Assistant local connection:**<br>
+  Select "Home Assistant" and enter your instance origin, such as `http://192.168.1.100:8123`, and Long-Lived Access Token. On Windows, save settings and approve the endpoint in the native dialog. The token stays in Windows Credential Manager. A rejected or failed connection never switches to demo. Windows supports the existing light, climate, fan, plug, vacuum, camera-control, and sensor card models, plus scenes and scripts. macOS-only device types and HA camera live streams are outside this Windows backend.
 - **Option C: Offline Demo Home:**<br>
   Explore the interface and controls without an account using simulated devices.
 
@@ -199,7 +199,7 @@ These phrases are parsed locally **without any AI API key** or cloud model token
 
 ## Safety, Privacy & Limitations
 
-MenuBarMijia is an independent open-source project, not an official Xiaomi app. Mi Home cloud control needs an internet connection. If you already use Home Assistant, you can connect your own instance on macOS.
+MenuBarMijia is an independent open-source project, not an official Xiaomi app. Mi Home cloud control needs an internet connection. You can connect your own Home Assistant instance on macOS or Windows.
 
 Account credentials and AI keys are stored in the macOS Keychain or Windows Credential Manager. macOS may ask for Keychain permission after an update. When migrating credentials from an older version, the plaintext copy is removed after the Keychain accepts it.
 
