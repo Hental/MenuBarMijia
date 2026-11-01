@@ -56,31 +56,32 @@ extension HomeStore {
     }
 
     /// Fires the silent background AI refresh when the ambient context changed since the
-    /// last one; returns the task (also stored in `proactiveRefreshTask`) or nil (#113).
-    /// The signature is recorded only when a refresh actually runs, so configuring the
-    /// model (or granting consent) later still gets a first refresh.
+    /// last successful one; returns the task (also stored in `proactiveRefreshTask`) or nil (#113).
+    /// The signature is recorded only when a refresh produces a usable result — a failed
+    /// attempt retries after `proactiveRetryCooldown` instead of being swallowed (Codex #116 review).
     @discardableResult
     public func maybeRefreshProactiveSuggestionsInBackground() -> Task<Void, Never>? {
         let signature = proactiveRefreshSignature()
         guard signature != lastProactiveRefreshSignature else { return nil }
+        if let retryAfter = proactiveRetryEarliest, Date() < retryAfter { return nil }
         guard homeBackend != .demo,
               !assistantState.isUserActive else { return nil }
         let config = assistantConfig
         guard !shouldRejectMissingAPIKey(for: config),
               cloudConsentNeeded(for: config, utterance: nil) == nil else { return nil }
-        lastProactiveRefreshSignature = signature
-        let task = Task { await self.refreshProactiveSuggestionsCache() }
+        let task = Task { await self.refreshProactiveSuggestionsCache(signature: signature) }
         proactiveRefreshTask = task
         return task
     }
 
     /// Silent cache refresh: never blocks the panel, never asks for consent, never surfaces
     /// errors — the previous cache simply survives a failed refresh (#113).
-    public func refreshProactiveSuggestionsCache() async {
+    public func refreshProactiveSuggestionsCache(signature: String? = nil) async {
         guard !isProactiveRecommending, homeBackend != .demo, !assistantState.isUserActive else { return }
         let config = assistantConfig
         guard !shouldRejectMissingAPIKey(for: config),
               cloudConsentNeeded(for: config, utterance: nil) == nil else { return }
+        let attemptedSignature = signature ?? proactiveRefreshSignature()
         let context = controlContextID
         isProactiveRecommending = true
         defer { isProactiveRecommending = false }
@@ -93,11 +94,14 @@ extension HomeStore {
                 context: assistantContext
             )
             guard context == controlContextID, !assistantState.isUserActive else { return }
+            // The context counts as served only once a usable result landed (Codex #116 review);
+            // an empty result is a valid "home is ideal" answer.
+            lastProactiveRefreshSignature = attemptedSignature
             if !inferred.isEmpty {
                 assistantSuggestions = inferred
             }
         } catch {
-            // Silent: keep the last known suggestions.
+            proactiveRetryEarliest = Date().addingTimeInterval(proactiveRetryCooldown)
         }
     }
 

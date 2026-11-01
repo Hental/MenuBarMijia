@@ -743,6 +743,10 @@ export class MenuMijiaWindowsApp {
   private aiProactiveSuggestions: AssistantSuggestion[] | null = null;
   private aiProactiveSignature: string | null = null;
   private isRefreshingProactive = false;
+  /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
+  private proactiveRetryAfterMs: number | null = null;
+  /** Cooldown before a failed background refresh retries (Codex #116 review). */
+  private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   private isResolvingIntent = false;
   private isSyncingCloud = false;
   /** When the last Xiaomi cloud refresh started; paces background refreshes (#26). */
@@ -2002,6 +2006,7 @@ export class MenuMijiaWindowsApp {
    */
   private maybeRefreshProactiveInBackground(): void {
     if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
+    if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
     const signature = this.proactiveSignature();
     if (signature === this.aiProactiveSignature) return;
     const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
@@ -2014,7 +2019,6 @@ export class MenuMijiaWindowsApp {
       if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
     }
     this.isRefreshingProactive = true;
-    this.aiProactiveSignature = signature;
     const resolver = new ModelIntentResolver(
       { baseURL, model: this.settings.assistantModel, apiKey },
       this.transport,
@@ -2038,15 +2042,20 @@ export class MenuMijiaWindowsApp {
       )
       .then((suggestions) => {
         this.isRefreshingProactive = false;
-        if (suggestions.length > 0 && this.proactiveSignature() === signature) {
-          this.aiProactiveSuggestions = suggestions;
+        if (this.proactiveSignature() === signature) {
+          // The context counts as served only once a usable result landed (Codex #116 review);
+          // an empty result is a valid "home is ideal" answer and keeps the local ranking up.
           this.aiProactiveSignature = signature;
-          if (!this.hasBlockingPanelInteraction()) this.render();
+          if (suggestions.length > 0) {
+            this.aiProactiveSuggestions = suggestions;
+            if (!this.hasBlockingPanelInteraction()) this.render();
+          }
         }
       })
       .catch(() => {
-        // Silent: the previous cache keeps showing.
+        // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
         this.isRefreshingProactive = false;
+        this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
       });
   }
 

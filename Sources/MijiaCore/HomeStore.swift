@@ -435,6 +435,10 @@ public final class HomeStore {
     public internal(set) var isProactiveRecommending: Bool = false
     /// Ambient signature (time bucket + rounded readings) the suggestion cache was built from (#113).
     var lastProactiveRefreshSignature: String?
+    /// Earliest moment a failed background refresh may retry (Codex #116 review).
+    var proactiveRetryEarliest: Date?
+    /// Cooldown before a failed background refresh retries; test seam.
+    var proactiveRetryCooldown: TimeInterval = 300
     /// The running silent refresh, exposed so tests can await it.
     var proactiveRefreshTask: Task<Void, Never>?
     var assistantResetTask: Task<Void, Never>?

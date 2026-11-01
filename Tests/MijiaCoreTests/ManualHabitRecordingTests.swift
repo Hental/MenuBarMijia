@@ -96,9 +96,13 @@ struct ManualHabitRecordingTests {
 
     @Test("全屋关灯 quick action records habits and undo rolls them back")
     func quickActionRecordsAndUndoRollsBack() async throws {
-        let (store, _) = try await makeStore()
+        let (store, mock) = try await makeStore()
 
         store.executeQuickAction(.lightsOff)
+        // Habits train only after the dispatched commands confirm (#113 review fix).
+        for _ in 0..<100 where store.userHabitMemory.entries.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         var memory = store.userHabitMemory
         #expect(memory.entries.map { "\($0.targetId)|\($0.operationKey)" } == ["dev_ceiling|power:off"])
@@ -109,11 +113,31 @@ struct ManualHabitRecordingTests {
         #expect(memory.entries.isEmpty)
     }
 
+    @Test("A failing quick action never trains habits")
+    func failedQuickActionRecordsNothing() async throws {
+        let (store, mock) = try await makeStore()
+        await mock.setShouldFail(true)
+
+        store.executeQuickAction(.lightsOff)
+        // Wait for the dispatch task to actually attempt the command.
+        for _ in 0..<100 where (await mock.executedCommands).isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        let memory = store.userHabitMemory
+        #expect(memory.entries.isEmpty)
+        #expect(store.undoBanner != nil, "the banner still offers device restore")
+    }
+
     @Test("turnAllOff records habits for every target and undo rolls them back")
     func turnAllOffRecordsAndUndoRollsBack() async throws {
         let (store, _) = try await makeStore()
 
         store.turnAllOff()
+        for _ in 0..<100 where store.userHabitMemory.entries.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         var memory = store.userHabitMemory
         #expect(Set(memory.entries.map { "\($0.targetId)|\($0.operationKey)" }) == [

@@ -10,6 +10,7 @@ import {
   ModelIntentResolver,
   UndoPhrase,
   UserHabitMemory,
+  type HabitDayType,
   assistantEndpointIdentity,
   buildAssistantContext,
   buildHabitSummary,
@@ -1777,34 +1778,51 @@ describe("Windows update check (#39)", () => {
   });
 });
 
-describe("Cross-platform habit memory corpus (#113)", () => {
+describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
   const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/habit_golden.json"), "utf8");
   const corpus = JSON.parse(raw) as {
     devices: SmartDevice[];
     scenes: Array<{ id: string; name: string; entityId: string }>;
     memoryCases: Array<{
       name: string;
+      date: string;
       hour: number;
-      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string; ageDays?: number }>;
       recordIntents: Array<{ targetId: string; kind: string; value: unknown }>;
       expectReceipt: Array<{
         bucket: string;
         targetId: string;
         operationKey: string;
         previousCount: number | null;
+        previousDayType: string | null;
       }> | null;
-      entriesAfterRecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      entriesAfterRecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string }>;
       expectUnrecord: boolean;
-      entriesAfterUnrecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      entriesAfterUnrecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string }>;
+    }>;
+    sequenceCases: Array<{
+      name: string;
+      date: string;
+      hour: number;
+      steps: Array<{
+        gapMinutes: number | null;
+        intents: Array<{ targetId: string; kind: string; value: unknown }>;
+        unrecord?: boolean;
+      }>;
+      expectedSequences: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>;
+      expectedLastAction: { targetId: string; operationKey: string };
     }>;
     topSuggestionCases: Array<{
       name: string;
+      date: string;
       hour: number;
       deviceIds: string[];
-      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>;
+      entriesBefore: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string; ageDays?: number }>;
       favoriteIds: string[];
       environment: Array<{ roomName: string; temperature: number; humidity: number }>;
       limit: number;
+      lastAction: { targetId: string; operationKey: string; ageMinutes: number } | null;
+      sequencesBefore: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>;
       expected: Array<Array<{ targetId: string; kind: string; value: unknown }>>;
     }>;
   };
@@ -1842,28 +1860,91 @@ describe("Cross-platform habit memory corpus (#113)", () => {
     return { targetId: intent.targetId, kind: op.kind, value };
   };
 
-  const memoryFrom = (entries: Array<{ bucket: string; targetId: string; operationKey: string; count: number }>) =>
-    new UserHabitMemory(entries.map((e) => ({ ...e })));
+  const caseDate = (date: string, hour: number): Date => {
+    const [year, month, day] = date.split("-").map(Number);
+    assert.ok(year && month && day);
+    return new Date(year, month - 1, day, hour, 30);
+  };
+
+  const memoryFrom = (
+    entries: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string; ageDays?: number }>,
+    now: Date,
+    sequences: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }> = [],
+    lastAction: { targetId: string; operationKey: string; ageMinutes: number } | null = null,
+  ) =>
+    new UserHabitMemory(
+      entries.map((e) => ({
+        bucket: e.bucket,
+        targetId: e.targetId,
+        operationKey: e.operationKey,
+        count: e.count,
+        dayType: e.dayType as HabitDayType | undefined,
+        lastRecordedAtMs: now.getTime() - (e.ageDays ?? 0) * 86_400_000,
+      })),
+      sequences.map((s) => ({ ...s })),
+      lastAction
+        ? {
+            targetId: lastAction.targetId,
+            operationKey: lastAction.operationKey,
+            recordedAtMs: now.getTime() - lastAction.ageMinutes * 60_000,
+          }
+        : null,
+    );
+
+  const projectEntries = (memory: UserHabitMemory) =>
+    memory.entries.map((e) => ({
+      bucket: e.bucket,
+      targetId: e.targetId,
+      operationKey: e.operationKey,
+      count: e.count,
+      dayType: e.dayType ?? null,
+    }));
 
   it("matches record/unrecord semantics shared with MijiaCore UserHabitMemory", () => {
     for (const item of corpus.memoryCases) {
-      const memory = memoryFrom(item.entriesBefore);
-      const now = new Date(2026, 9, 16, item.hour, 30);
+      const now = caseDate(item.date, item.hour);
+      const memory = memoryFrom(item.entriesBefore, now);
       const intents = item.recordIntents.map(toIntent);
       const receipt = memory.record(intents, corpus.devices, corpus.scenes, now);
       assert.deepEqual(receipt?.entries ?? null, item.expectReceipt, item.name);
-      assert.deepEqual(memory.entries, item.entriesAfterRecord, item.name);
+      assert.deepEqual(projectEntries(memory), item.entriesAfterRecord, item.name);
       if (item.expectUnrecord && receipt) {
         memory.unrecord(receipt);
-        assert.deepEqual(memory.entries, item.entriesAfterUnrecord, item.name);
+        assert.deepEqual(projectEntries(memory), item.entriesAfterUnrecord, item.name);
       }
+    }
+  });
+
+  it("matches sequence learning shared with MijiaCore UserHabitMemory (ADR-0009)", () => {
+    for (const item of corpus.sequenceCases) {
+      const start = caseDate(item.date, item.hour);
+      const memory = new UserHabitMemory();
+      let lastAt = start;
+      for (const step of item.steps) {
+        const at = step.gapMinutes !== null ? new Date(lastAt.getTime() + step.gapMinutes * 60_000) : start;
+        lastAt = at;
+        const receipt = memory.record(step.intents.map(toIntent), corpus.devices, corpus.scenes, at);
+        if (step.unrecord && receipt) memory.unrecord(receipt);
+      }
+      assert.deepEqual(
+        memory.sequences.map((s) => ({ afterKey: s.afterKey, targetId: s.targetId, operationKey: s.operationKey, count: s.count })),
+        item.expectedSequences,
+        item.name,
+      );
+      assert.deepEqual(
+        memory.lastAction
+          ? { targetId: memory.lastAction.targetId, operationKey: memory.lastAction.operationKey }
+          : null,
+        item.expectedLastAction,
+        item.name,
+      );
     }
   });
 
   it("matches the Top-4 proactive engine shared with MijiaCore", () => {
     for (const item of corpus.topSuggestionCases) {
-      const memory = memoryFrom(item.entriesBefore);
-      const now = new Date(2026, 9, 16, item.hour, 30);
+      const now = caseDate(item.date, item.hour);
+      const memory = memoryFrom(item.entriesBefore, now, item.sequencesBefore ?? [], item.lastAction ?? null);
       const devices = item.deviceIds.map((id) => {
         const dev = corpus.devices.find((d) => d.id === id);
         assert.ok(dev, `${item.name}: unknown device ${id}`);

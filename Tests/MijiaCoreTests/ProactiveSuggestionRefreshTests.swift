@@ -146,7 +146,7 @@ struct ProactiveSuggestionRefreshTests {
         #expect(store.assistantState == .idle)
     }
 
-    @Test("A failed background refresh keeps the cache and stays silent")
+    @Test("A failed background refresh keeps the cache, stays silent, and retries after the cooldown")
     func failedRefreshStaysSilent() async throws {
         let (store, _) = try await makeStore()
         store.homeBackend = .xiaomiCloud
@@ -162,6 +162,11 @@ struct ProactiveSuggestionRefreshTests {
         #expect(store.assistantSuggestions.count == 4, "the local cache survives a failed refresh")
         #expect(store.assistantState == .idle)
         #expect(store.isProactiveRecommending == false)
+        // The failed context is not marked served: it retries once the cooldown passes (Codex #116).
+        #expect(store.lastProactiveRefreshSignature == nil)
+        #expect(store.maybeRefreshProactiveSuggestionsInBackground() == nil, "throttled inside the cooldown")
+        store.proactiveRetryEarliest = .distantPast
+        #expect(store.maybeRefreshProactiveSuggestionsInBackground() != nil, "retries after the cooldown")
     }
 
     @Test("Presenting the bar never clobbers a pending choice or a running command")

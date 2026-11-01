@@ -134,22 +134,31 @@ extension HomeStore {
             return
         }
 
-        let habitReceipt = recordsHabits ? recordManualHabits(intents: habitIntents) : nil
         scheduleUndoBanner(
             title: L10n.tr("已执行「\(action.title)」", "Executed \"\(action.title)\""),
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: affectedDeviceIds.count,
-            habitReceipt: habitReceipt,
+            habitReceipt: nil,
             duration: undoBannerDuration
         )
+        guard let bannerId = undoBanner?.id else { return }
 
         let context = controlContextID
         Task {
+            var didFail = false
             for cmd in commands {
                 guard context == controlContextID else { return }
-                try? await executeDeviceCommand(cmd)
+                do {
+                    try await executeDeviceCommand(cmd)
+                } catch {
+                    didFail = true
+                }
             }
+            // Habits train only on confirmed success, and only while the banner this action
+            // created is still the live one (an undo or expiry cancels the learning) (#113).
+            guard context == controlContextID, !didFail, recordsHabits, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
         }
     }
 
@@ -248,21 +257,29 @@ extension HomeStore {
             devices[idx].kind = change.kind
         }
 
-        let habitReceipt = recordManualHabits(intents: habitIntents)
         scheduleUndoBanner(
             title: L10n.tr("已关闭 \(offCommands.count) 台设备", "Turned off \(offCommands.count) device(s)"),
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: targetIds.count,
-            habitReceipt: habitReceipt
+            habitReceipt: nil
         )
+        guard let bannerId = undoBanner?.id else { return }
 
         let context = controlContextID
         Task {
+            var didFail = false
             for cmd in offCommands {
                 guard context == controlContextID else { return }
-                try? await executeDeviceCommand(cmd)
+                do {
+                    try await executeDeviceCommand(cmd)
+                } catch {
+                    didFail = true
+                }
             }
+            // Habits train only on confirmed success while this action's banner is live (#113).
+            guard context == controlContextID, !didFail, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
         }
     }
 
