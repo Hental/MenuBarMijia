@@ -662,7 +662,9 @@ struct SensorCardView: View {
                 .font(.system(size: size, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .contentTransition(.numericText(value: spec.temperature ?? 0))
-                .foregroundStyle(tempColor)
+                // The reading is the card's hero number: at 24 pt a saturated blue reads as a glow,
+                // so it takes the label ink and the thermometer glyph carries the temperature hue.
+                .foregroundStyle(fg)
             Text(L10n.temperatureSymbol)
                 .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold, design: .rounded))
                 .foregroundStyle(muted)
