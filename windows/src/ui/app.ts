@@ -87,6 +87,9 @@ import {
   TILE_SIZES,
   applyOrder,
   targetSize,
+  releaseVelocity,
+  projectedOffset,
+  resizePreviewScale,
   chosenSize,
   comfort,
   emptyLayoutPrefs,
@@ -4966,8 +4969,33 @@ export class MenuMijiaWindowsApp {
    */
   private bindLayoutGestures(): void {
     let press: { id: string; x: number; y: number; timer: number; dimming: boolean; el: HTMLElement } | null = null;
-    let resizing: { id: string; startX: number; startY: number; startSize: Exclude<TileSize, "auto">; didStep: boolean; moved: boolean } | null = null;
+    let resizing: {
+      id: string;
+      startX: number;
+      startY: number;
+      startSize: Exclude<TileSize, "auto">;
+      didStep: boolean;
+      moved: boolean;
+      lastDx: number;
+      lastDy: number;
+      samples: Array<{ x: number; y: number; t: number }>;
+    } | null = null;
+    let previewCleanupTimer: number | null = null;
     let suppressNextHandleClick = false;
+
+    const clearPreviewTransform = (id: string, animateBack: boolean): void => {
+      if (previewCleanupTimer !== null) { window.clearTimeout(previewCleanupTimer); previewCleanupTimer = null; }
+      const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(id)}"]`);
+      if (!tile) return;
+      if (animateBack) {
+        tile.style.transition = "transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1.15)";
+        tile.style.transform = "";
+        previewCleanupTimer = window.setTimeout(() => { tile.style.transition = ""; }, 260);
+      } else {
+        tile.style.transition = "";
+        tile.style.transform = "";
+      }
+    };
 
     const beginDrag = (id: string, el: HTMLElement, x: number, y: number) => {
       const r = el.getBoundingClientRect();
@@ -4993,11 +5021,11 @@ export class MenuMijiaWindowsApp {
     );
     window.addEventListener("pointercancel", () => {
       this.pointerIsDown = false;
-      resizing = null;
+      if (resizing) { clearPreviewTransform(resizing.id, false); resizing = null; }
     });
     window.addEventListener("blur", () => {
       this.pointerIsDown = false;
-      resizing = null;
+      if (resizing) { clearPreviewTransform(resizing.id, false); resizing = null; }
     });
 
     this.root.addEventListener("pointerdown", (e) => {
@@ -5015,6 +5043,9 @@ export class MenuMijiaWindowsApp {
             startSize: this.tileSize(dev),
             didStep: false,
             moved: false,
+            lastDx: 0,
+            lastDy: 0,
+            samples: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
           };
         }
         return;
@@ -5036,6 +5067,11 @@ export class MenuMijiaWindowsApp {
       if (resizing) {
         const dx = e.clientX - resizing.startX;
         const dy = e.clientY - resizing.startY;
+        resizing.lastDx = dx;
+        resizing.lastDy = dy;
+        const now = performance.now();
+        resizing.samples.push({ x: e.clientX, y: e.clientY, t: now });
+        resizing.samples = resizing.samples.filter((sample) => now - sample.t <= 120);
         if (Math.hypot(dx, dy) > 3) {
           resizing.moved = true;
         }
@@ -5051,6 +5087,15 @@ export class MenuMijiaWindowsApp {
           this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = next;
           this.saveLayout();
           this.render();
+          return;
+        }
+        // Live tracking preview (QuotaKeeper-style): the card leans toward the drag from
+        // pixel one via a direct style write, so no re-render happens per pointermove.
+        const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(resizing.id)}"]`);
+        if (tile && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          const scale = resizePreviewScale(resizing.startSize, { width: dx, height: dy });
+          tile.style.transformOrigin = "bottom right";
+          tile.style.transform = scale === 1 ? "" : `scale(${scale.toFixed(4)})`;
         }
         return;
       }
@@ -5091,8 +5136,9 @@ export class MenuMijiaWindowsApp {
 
     window.addEventListener("pointerup", () => {
       if (resizing) {
-        const { moved, didStep } = resizing;
+        const { id, moved, didStep, startSize, samples, lastDx, lastDy } = resizing;
         resizing = null;
+        clearPreviewTransform(id, !didStep);
         // A drag without a size step leaves the same handle element mounted, so the browser
         // fires a real click on it after pointerup (microtasks run before that click); swallow it.
         if (moved && !didStep) {
@@ -5100,6 +5146,20 @@ export class MenuMijiaWindowsApp {
           window.setTimeout(() => {
             suppressNextHandleClick = false;
           }, 0);
+          // QuotaKeeper-style flick: release velocity projects onto at most one step.
+          const projection = projectedOffset(releaseVelocity(samples, performance.now()));
+          const dev = this.devices.find((d) => d.id === id);
+          if (!dev) return;
+          const target = targetSize(
+            startSize,
+            { width: lastDx + projection.width, height: lastDy + projection.height },
+            this.settings.isCompactGridMode,
+          );
+          if (target !== this.tileSize(dev)) {
+            this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = target;
+            this.saveLayout();
+            this.render();
+          }
         }
         return;
       }

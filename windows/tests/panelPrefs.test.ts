@@ -18,6 +18,9 @@ import {
   parseGlobalShortcut,
   recordShortcutFromKeyEvent,
   targetSize,
+  releaseVelocity,
+  projectedOffset,
+  resizePreviewScale,
   resolvedSize,
   spans,
 } from "../src/ui/panelPrefs.js";
@@ -50,29 +53,70 @@ describe("panel layout prefs", () => {
     assert.equal(resolvedSize("auto", plug("p"), false, true), "full");
   });
 
-  it("targetSize steps half <-> full <-> panel across 45pt horizontal and vertical thresholds (#115)", () => {
-    // Sub-threshold movement (<= 45pt) stays at starting size
-    assert.equal(targetSize("half", { width: 45, height: 45 }, true), "half");
-    assert.equal(targetSize("full", { width: -45, height: -45 }, true), "full");
+  it("targetSize steps half <-> full <-> panel across 30pt horizontal and vertical thresholds (#115)", () => {
+    // Sub-threshold movement (<= 30pt) stays at starting size
+    assert.equal(targetSize("half", { width: 30, height: 30 }, true), "half");
+    assert.equal(targetSize("full", { width: -30, height: -30 }, true), "full");
 
     // Outward drag from half -> full -> panel (horizontal, vertical, or diagonal)
-    assert.equal(targetSize("half", { width: 46, height: 0 }, true), "full");
-    assert.equal(targetSize("half", { width: 0, height: 46 }, true), "full");
+    assert.equal(targetSize("half", { width: 31, height: 0 }, true), "full");
+    assert.equal(targetSize("half", { width: 0, height: 31 }, true), "full");
     assert.equal(targetSize("half", { width: 60, height: 60 }, true), "panel");
-    assert.equal(targetSize("half", { width: 95, height: 0 }, true), "panel");
-    assert.equal(targetSize("half", { width: 0, height: 95 }, true), "panel");
+    assert.equal(targetSize("half", { width: 65, height: 0 }, true), "panel");
+    assert.equal(targetSize("half", { width: 0, height: 65 }, true), "panel");
 
     // Inward drag from panel -> full -> half (horizontal, vertical, or diagonal)
-    assert.equal(targetSize("panel", { width: -46, height: 0 }, true), "full");
-    assert.equal(targetSize("panel", { width: 0, height: -46 }, true), "full");
+    assert.equal(targetSize("panel", { width: -31, height: 0 }, true), "full");
+    assert.equal(targetSize("panel", { width: 0, height: -31 }, true), "full");
     assert.equal(targetSize("panel", { width: -60, height: -60 }, true), "half");
-    assert.equal(targetSize("panel", { width: -95, height: 0 }, true), "half");
-    assert.equal(targetSize("panel", { width: 0, height: -95 }, true), "half");
+    assert.equal(targetSize("panel", { width: -65, height: 0 }, true), "half");
+    assert.equal(targetSize("panel", { width: 0, height: -65 }, true), "half");
 
     // Resolves "auto" based on isCompactGrid before applying step delta
     assert.equal(targetSize("auto", { width: 50, height: 0 }, true), "full");
     assert.equal(targetSize("auto", { width: 50, height: 0 }, false), "panel");
     assert.equal(targetSize("auto", { width: -50, height: 0 }, false), "half");
+  });
+
+  it("computes release velocity from the last 100ms and projects a flick onto at most one step (#115)", () => {
+    const now = 10_000;
+    const fast = [
+      { x: 0, y: 0, t: now - 80 },
+      { x: 24, y: 16, t: now },
+    ];
+    assert.deepEqual(releaseVelocity(fast, now), { x: 300, y: 200 });
+
+    // A rested pointer yields no velocity, so a stationary release cannot fling.
+    const rested = [
+      { x: 20, y: 10, t: now - 500 },
+      { x: 20, y: 10, t: now - 400 },
+    ];
+    assert.deepEqual(releaseVelocity(rested, now), { x: 0, y: 0 });
+
+    // Projection clamps to the threshold per axis: a 300px/s flick adds ~one step.
+    const projection = projectedOffset({ x: 300, y: 200 });
+    assert.ok(Math.abs(projection.width - 29.7) < 1e-9);
+    assert.ok(Math.abs(projection.height - 19.8) < 1e-9);
+
+    // A short sub-threshold drag plus its flick crosses the step at release.
+    assert.equal(targetSize("half", { width: 20 + projection.width, height: 0 }, true), "full");
+
+    // A slow drag projects nothing extra.
+    const slow = projectedOffset({ x: 100, y: -100 });
+    assert.ok(Math.abs(slow.width - 9.9) < 1e-9);
+    assert.ok(Math.abs(slow.height + 9.9) < 1e-9);
+  });
+
+  it("preview scale tracks the drag outward and rubberbands inward (#115)", () => {
+    assert.equal(resizePreviewScale("half", { width: 0, height: 0 }), 1);
+    // Half dragged outward: grows up to +5% at the threshold.
+    assert.equal(resizePreviewScale("half", { width: 30, height: 0 }), 1.05);
+    assert.equal(resizePreviewScale("half", { width: 15, height: 0 }), 1.025);
+    // Half pushed inward: rubberbands down to −4%.
+    assert.equal(resizePreviewScale("half", { width: -30, height: 0 }), 0.96);
+    // Panel dragged inward (its outward direction): grows; overshoot clamps.
+    assert.equal(resizePreviewScale("panel", { width: -30, height: 0 }), 1.05);
+    assert.equal(resizePreviewScale("panel", { width: -90, height: 0 }), 1.05);
   });
 
   it("moves before/after a target and keeps unknown devices in place", () => {

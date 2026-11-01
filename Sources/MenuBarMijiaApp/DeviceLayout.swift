@@ -28,8 +28,9 @@ public enum TileSize: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Pure threshold resolver for the bottom-right corner arc resize gesture (#115).
+/// Mirrors `targetSize` in `windows/src/ui/panelPrefs.ts` on purpose (shared contract).
 public enum TileResizeGestureMath {
-    public static let stepThreshold: CGFloat = 45
+    public static let stepThreshold: CGFloat = 30
 
     private static let orderedSizes: [TileSize] = [.half, .full, .panel]
 
@@ -55,6 +56,51 @@ public enum TileResizeGestureMath {
         if delta < -stepThreshold * 2 { return -2 }
         if delta < -stepThreshold { return -1 }
         return 0
+    }
+
+    // MARK: Flick inertia (QuotaKeeper-style release velocity)
+
+    /// One pointer position sample taken during a handle drag.
+    public struct ResizeSample: Equatable, Sendable {
+        public var offset: CGSize
+        public var time: TimeInterval
+        public init(offset: CGSize, time: TimeInterval) {
+            self.offset = offset
+            self.time = time
+        }
+    }
+
+    /// Pointer velocity in pt/s from the last 100 ms of samples; zero when the pointer rested.
+    public static func releaseVelocity(_ samples: [ResizeSample], now: TimeInterval) -> CGSize {
+        let recent = samples.filter { now - $0.time <= 0.1 }
+        guard recent.count >= 2, let first = recent.first, let last = recent.last else { return .zero }
+        let elapsed = last.time - first.time
+        guard elapsed >= 0.008, now - last.time <= 0.06 else { return .zero }
+        return CGSize(
+            width: (last.offset.width - first.offset.width) / elapsed,
+            height: (last.offset.height - first.offset.height) / elapsed
+        )
+    }
+
+    /// Flick projection (rate 0.99, as in iOS deceleration): a release flick lands at most one step.
+    public static func projectedOffset(velocity: CGSize, threshold: CGFloat = stepThreshold) -> CGSize {
+        func project(_ v: CGFloat) -> CGFloat { max(-threshold, min(threshold, v * 0.099)) }
+        return CGSize(width: project(velocity.width), height: project(velocity.height))
+    }
+
+    /// Corner-anchored tracking preview while the drag has not crossed a step yet:
+    /// growing outward scales up to +5%, pushing inward rubberbands down to −4%.
+    public static func previewScale(startSize: TileSize, translation: CGSize, threshold: CGFloat = stepThreshold) -> CGFloat {
+        let distance = hypot(translation.width, translation.height)
+        guard distance > 1 else { return 1 }
+        let progress = min(distance / threshold, 1)
+        let outward: Bool
+        switch startSize {
+        case .half: outward = translation.width > 0 || translation.height > 0
+        case .panel: outward = translation.width < 0 || translation.height < 0
+        default: outward = (abs(translation.width) >= abs(translation.height) ? translation.width : translation.height) >= 0
+        }
+        return 1 + (outward ? 0.05 : -0.04) * progress
     }
 }
 
@@ -175,6 +221,7 @@ struct LayoutEditable: ViewModifier {
     let size: TileSize
     let isDragging: Bool
     let dragOffset: CGSize
+    var resizePreviewScale: CGFloat = 1
     let onCycleSize: () -> Void
     var onBeginResize: () -> Void = {}
     var onResizeDrag: (CGSize) -> Void = { _ in }
@@ -187,6 +234,7 @@ struct LayoutEditable: ViewModifier {
         ZStack(alignment: .bottomTrailing) {
             jiggling(content.allowsHitTesting(!editing))
                 .scaleEffect(isDragging ? 1.05 : 1)
+                .scaleEffect(resizePreviewScale, anchor: .bottomTrailing)
                 .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
 
             if editing && !isDragging {
@@ -239,6 +287,15 @@ struct LayoutEditable: ViewModifier {
 
 enum TileSpace {
     static let name = "device_tiles"
+}
+
+/// Live state of one corner-handle resize gesture (#115): the size the drag started from,
+/// whether a step already fired, and the pointer samples backing release-velocity flick.
+struct ActiveTileResize {
+    let deviceId: String
+    let startSize: TileSize
+    var didStep: Bool
+    var samples: [TileResizeGestureMath.ResizeSample]
 }
 
 /// Card frames in the tile coordinate space, used to find which card the pointer is over.

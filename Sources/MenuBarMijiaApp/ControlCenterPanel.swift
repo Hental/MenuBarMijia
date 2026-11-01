@@ -10,7 +10,8 @@ public struct ControlCenterPanel: View {
     @AppStorage(DeviceLayoutPrefs.orderKey) private var orderRaw: String = "[]"
     @State private var isEditingLayout = false
     @State private var draggingId: String?
-    @State private var activeResize: (deviceId: String, startSize: TileSize, didStep: Bool)?
+    @State private var activeResize: ActiveTileResize?
+    @State private var activeResizeTranslation: CGSize = .zero
     // In-memory mirrors of the saved order/sizes: @AppStorage publishes changes outside the
     // current animation transaction, so moves made through it alone snap instead of sliding.
     @State private var liveOrder: [String]?
@@ -425,11 +426,19 @@ public struct ControlCenterPanel: View {
             size: tileSize(device),
             isDragging: draggingId == device.id,
             dragOffset: dragOffset(for: device.id),
+            resizePreviewScale: resizePreviewScale(for: device),
             onCycleSize: { cycleSize(device) },
             onBeginResize: { beginResizeIfNeeded(device.id) },
             onResizeDrag: { translation in updateResize(device.id, translation: translation) },
             onEndResize: { translation in endResize(device.id, translation: translation) }
         )
+    }
+
+    /// Corner-anchored tracking preview: the card leans toward the drag from pixel one,
+    /// so the discrete half/full/panel model never feels like a dead zone (#115).
+    private func resizePreviewScale(for device: SmartDevice) -> CGFloat {
+        guard let resize = activeResize, resize.deviceId == device.id, !resize.didStep, !reduceMotion else { return 1 }
+        return TileResizeGestureMath.previewScale(startSize: resize.startSize, translation: activeResizeTranslation)
     }
 
     // MARK: - Page Sections (favorites, custom groups, ungrouped)
@@ -739,13 +748,19 @@ public struct ControlCenterPanel: View {
     private func beginResizeIfNeeded(_ deviceId: String) {
         guard activeResize == nil,
               let device = store.devices.first(where: { $0.id == deviceId }) else { return }
-        activeResize = (deviceId: deviceId, startSize: tileSize(device), didStep: false)
+        activeResize = ActiveTileResize(deviceId: deviceId, startSize: tileSize(device), didStep: false, samples: [])
+        activeResizeTranslation = .zero
     }
 
     private func updateResize(_ deviceId: String, translation: CGSize) {
         guard var current = activeResize,
               current.deviceId == deviceId,
               let device = store.devices.first(where: { $0.id == deviceId }) else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        current.samples.append(TileResizeGestureMath.ResizeSample(offset: translation, time: now))
+        current.samples = current.samples.filter { now - $0.time <= 0.12 }
+        activeResize = current
+        activeResizeTranslation = translation
         let target = TileResizeGestureMath.targetSize(
             startSize: current.startSize,
             translation: translation,
@@ -761,10 +776,23 @@ public struct ControlCenterPanel: View {
     private func endResize(_ deviceId: String, translation: CGSize) {
         guard let current = activeResize, current.deviceId == deviceId else { return }
         activeResize = nil
+        activeResizeTranslation = .zero
         let moved = hypot(translation.width, translation.height)
-        if !current.didStep, moved < 5,
-           let device = store.devices.first(where: { $0.id == deviceId }) {
+        let device = store.devices.first(where: { $0.id == deviceId })
+        if !current.didStep, moved < 5, let device {
             cycleSize(device)
+        } else if !current.didStep, let device {
+            // QuotaKeeper-style flick: release velocity projects onto at most one step.
+            let velocity = TileResizeGestureMath.releaseVelocity(current.samples, now: Date.timeIntervalSinceReferenceDate)
+            let projection = TileResizeGestureMath.projectedOffset(velocity: velocity)
+            let target = TileResizeGestureMath.targetSize(
+                startSize: current.startSize,
+                translation: CGSize(width: translation.width + projection.width, height: translation.height + projection.height),
+                isCompactGrid: store.isCompactGridMode
+            )
+            if target != tileSize(device) {
+                setTileSize(target, for: device, playHaptic: true)
+            }
         }
     }
 
@@ -855,7 +883,7 @@ public struct ControlCenterPanel: View {
         if playHaptic {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
             store.expandedDeviceId = nil
             liveSizes = sizes
         }

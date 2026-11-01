@@ -721,26 +721,78 @@ struct MenuBarPanelControllerTests {
     }
 
 
-    @Test("TileResizeGestureMath maps 45pt horizontal and vertical translations across half, full, and panel (#115)")
+    @Test("TileResizeGestureMath maps 30pt horizontal and vertical translations across half, full, and panel (#115)")
     func tileResizeGestureMathThresholds() {
-        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 45, height: 45), isCompactGrid: true) == .half)
-        #expect(TileResizeGestureMath.targetSize(startSize: .full, translation: CGSize(width: -45, height: -45), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 30, height: 30), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .full, translation: CGSize(width: -30, height: -30), isCompactGrid: true) == .full)
 
-        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 46, height: 0), isCompactGrid: true) == .full)
-        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 46), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 31, height: 0), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 31), isCompactGrid: true) == .full)
         #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 60, height: 60), isCompactGrid: true) == .panel)
-        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 95, height: 0), isCompactGrid: true) == .panel)
-        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 95), isCompactGrid: true) == .panel)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 65, height: 0), isCompactGrid: true) == .panel)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 65), isCompactGrid: true) == .panel)
 
-        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -46, height: 0), isCompactGrid: true) == .full)
-        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -46), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -31, height: 0), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -31), isCompactGrid: true) == .full)
         #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -60, height: -60), isCompactGrid: true) == .half)
-        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -95, height: 0), isCompactGrid: true) == .half)
-        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -95), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -65, height: 0), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -65), isCompactGrid: true) == .half)
 
         #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: 50, height: 0), isCompactGrid: true) == .full)
         #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: 50, height: 0), isCompactGrid: false) == .panel)
         #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: -50, height: 0), isCompactGrid: false) == .half)
+    }
+
+    @Test("TileResizeGestureMath computes release velocity from the last 100ms and projects a flick onto at most one step (#115)")
+    func tileResizeGestureMathFlickProjection() {
+        let now: TimeInterval = 100
+        let fast = [
+            TileResizeGestureMath.ResizeSample(offset: .zero, time: now - 0.08),
+            TileResizeGestureMath.ResizeSample(offset: CGSize(width: 24, height: 16), time: now),
+        ]
+        let velocity = TileResizeGestureMath.releaseVelocity(fast, now: now)
+        #expect(abs(velocity.width - 300) < 1)
+        #expect(abs(velocity.height - 200) < 1)
+
+        // A rested pointer yields no velocity, so a stationary release cannot fling.
+        let rested = [
+            TileResizeGestureMath.ResizeSample(offset: CGSize(width: 20, height: 10), time: now - 0.5),
+            TileResizeGestureMath.ResizeSample(offset: CGSize(width: 20, height: 10), time: now - 0.4),
+        ]
+        #expect(TileResizeGestureMath.releaseVelocity(rested, now: now) == .zero)
+
+        // Projection clamps to the threshold per axis: a 300pt/s flick adds ~one step.
+        let projection = TileResizeGestureMath.projectedOffset(velocity: velocity)
+        #expect(abs(projection.width - 29.7) < 0.001)
+        #expect(abs(projection.height - 19.8) < 0.001)
+
+        // A short sub-threshold drag plus its flick crosses the step at release.
+        let shortDrag = TileResizeGestureMath.targetSize(
+            startSize: .half,
+            translation: CGSize(width: 20 + projection.width, height: 0),
+            isCompactGrid: true
+        )
+        #expect(shortDrag == .full)
+
+        // A slow drag projects nothing extra.
+        let slow = TileResizeGestureMath.projectedOffset(velocity: CGSize(width: 100, height: -100))
+        #expect(abs(slow.width - 9.9) < 0.001)
+        #expect(abs(slow.height + 9.9) < 0.001)
+    }
+
+    @Test("TileResizeGestureMath preview scale tracks the drag outward and rubberbands inward (#115)")
+    func tileResizeGestureMathPreviewScale() {
+        // No movement: exactly 1.
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: .zero) == 1)
+        // Half dragged outward: grows up to +5% at the threshold.
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: 30, height: 0)) == 1.05)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: 15, height: 0)) == 1.025)
+        // Half pushed inward: rubberbands down to −4%.
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: -30, height: 0)) == 0.96)
+        // Panel dragged inward (its outward direction): grows.
+        #expect(TileResizeGestureMath.previewScale(startSize: .panel, translation: CGSize(width: -30, height: 0)) == 1.05)
+        // Overshoot clamps at the threshold.
+        #expect(TileResizeGestureMath.previewScale(startSize: .panel, translation: CGSize(width: -90, height: 0)) == 1.05)
     }
     @Test("Long-pressing a light card enters edit mode and bottom-right corner arc handle supports both drag resizing and tap cycling without reordering (#115)")
     func longPressOnLightCardEntersEditModeWithoutExpandingAndCyclesTileSizes() async throws {

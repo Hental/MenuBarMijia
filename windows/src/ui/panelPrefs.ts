@@ -98,7 +98,7 @@ export interface TileResizeTranslation {
 }
 
 /** Drag distance in px that advances one size step (half ↔ full ↔ panel). */
-export const RESIZE_STEP_THRESHOLD = 45;
+export const RESIZE_STEP_THRESHOLD = 30;
 
 const ORDERED_CONCRETE_TILE_SIZES: ReadonlyArray<Exclude<TileSize, "auto">> = ["half", "full", "panel"];
 
@@ -114,7 +114,7 @@ function resizeAxisSteps(delta: number, stepThreshold: number): number {
  * Pure threshold resolver for the bottom-right corner arc resize gesture (#115).
  * Must stay semantically identical to `TileResizeGestureMath` in
  * `Sources/MenuBarMijiaApp/DeviceLayout.swift` — the two platforms mirror this contract
- * on purpose (same 45pt horizontal/vertical step thresholds, same half → full → panel order).
+ * on purpose (same 30pt horizontal/vertical step thresholds, same half → full → panel order).
  */
 export function targetSize(
   startSize: TileSize,
@@ -128,6 +128,44 @@ export function targetSize(
     resizeAxisSteps(translation.height, RESIZE_STEP_THRESHOLD);
   const targetIndex = Math.min(Math.max(startIndex + stepDelta, 0), ORDERED_CONCRETE_TILE_SIZES.length - 1);
   return ORDERED_CONCRETE_TILE_SIZES[targetIndex] ?? resolvedStart;
+}
+
+export interface TileResizeSample {
+  readonly x: number;
+  readonly y: number;
+  /** `performance.now()` milliseconds. */
+  readonly t: number;
+}
+
+/** Pointer velocity in px/s from the last 100 ms of samples; zero when the pointer rested. */
+export function releaseVelocity(samples: readonly TileResizeSample[], now: number): { x: number; y: number } {
+  const recent = samples.filter((sample) => now - sample.t <= 100);
+  if (recent.length < 2) return { x: 0, y: 0 };
+  const first = recent[0]!;
+  const last = recent.at(-1)!;
+  const elapsed = last.t - first.t;
+  if (elapsed < 8 || now - last.t > 60) return { x: 0, y: 0 };
+  return { x: (last.x - first.x) / (elapsed / 1000), y: (last.y - first.y) / (elapsed / 1000) };
+}
+
+/** Flick projection (rate 0.99, iOS deceleration): clamped to one threshold per axis. */
+export function projectedOffset(velocity: { x: number; y: number }, threshold = RESIZE_STEP_THRESHOLD): { width: number; height: number } {
+  const project = (v: number) => Math.max(-threshold, Math.min(threshold, v * 0.099));
+  return { width: project(velocity.x), height: project(velocity.y) };
+}
+
+/** Corner-anchored tracking preview while no step has fired: +5% outward, −4% inward rubberband. */
+export function resizePreviewScale(startSize: TileSize, translation: TileResizeTranslation, threshold = RESIZE_STEP_THRESHOLD): number {
+  const distance = Math.hypot(translation.width, translation.height);
+  if (distance <= 1) return 1;
+  const progress = Math.min(distance / threshold, 1);
+  const outward =
+    startSize === "half"
+      ? translation.width > 0 || translation.height > 0
+      : startSize === "panel"
+        ? translation.width < 0 || translation.height < 0
+        : (Math.abs(translation.width) >= Math.abs(translation.height) ? translation.width : translation.height) >= 0;
+  return 1 + (outward ? 0.05 : -0.04) * progress;
 }
 
 /** Sorts by the saved order; devices not in it keep their incoming order after the known ones. */
