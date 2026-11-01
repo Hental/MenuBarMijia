@@ -95,11 +95,10 @@ extension HomeStore {
             )
             guard context == controlContextID, !assistantState.isUserActive else { return }
             // The context counts as served only once a usable result landed (Codex #116 review);
-            // an empty result is a valid "home is ideal" answer.
+            // an empty result is a valid "home is ideal" answer and falls back to the local
+            // ranking instead of stale suggestions (Codex #116 re-review).
             lastProactiveRefreshSignature = attemptedSignature
-            if !inferred.isEmpty {
-                assistantSuggestions = inferred
-            }
+            assistantSuggestions = inferred.isEmpty ? localTopSuggestions() : inferred
         } catch {
             proactiveRetryEarliest = Date().addingTimeInterval(proactiveRetryCooldown)
         }
