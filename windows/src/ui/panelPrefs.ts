@@ -92,6 +92,44 @@ export function nextSize(size: Exclude<TileSize, "auto">): Exclude<TileSize, "au
   return size === "half" ? "full" : size === "full" ? "panel" : "half";
 }
 
+export interface TileResizeTranslation {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Drag distance in px that advances one size step (half ↔ full ↔ panel). */
+export const RESIZE_STEP_THRESHOLD = 45;
+
+const ORDERED_CONCRETE_TILE_SIZES: ReadonlyArray<Exclude<TileSize, "auto">> = ["half", "full", "panel"];
+
+function resizeAxisSteps(delta: number, stepThreshold: number): number {
+  if (delta > stepThreshold * 2) return 2;
+  if (delta > stepThreshold) return 1;
+  if (delta < -stepThreshold * 2) return -2;
+  if (delta < -stepThreshold) return -1;
+  return 0;
+}
+
+/**
+ * Pure threshold resolver for the bottom-right corner arc resize gesture (#115).
+ * Must stay semantically identical to `TileResizeGestureMath` in
+ * `Sources/MenuBarMijiaApp/DeviceLayout.swift` — the two platforms mirror this contract
+ * on purpose (same 45pt horizontal/vertical step thresholds, same half → full → panel order).
+ */
+export function targetSize(
+  startSize: TileSize,
+  translation: TileResizeTranslation,
+  isCompactGrid = true,
+): Exclude<TileSize, "auto"> {
+  const resolvedStart: Exclude<TileSize, "auto"> = startSize === "auto" ? (isCompactGrid ? "half" : "full") : startSize;
+  const startIndex = ORDERED_CONCRETE_TILE_SIZES.indexOf(resolvedStart);
+  const stepDelta =
+    resizeAxisSteps(translation.width, RESIZE_STEP_THRESHOLD) +
+    resizeAxisSteps(translation.height, RESIZE_STEP_THRESHOLD);
+  const targetIndex = Math.min(Math.max(startIndex + stepDelta, 0), ORDERED_CONCRETE_TILE_SIZES.length - 1);
+  return ORDERED_CONCRETE_TILE_SIZES[targetIndex] ?? resolvedStart;
+}
+
 /** Sorts by the saved order; devices not in it keep their incoming order after the known ones. */
 export function applyOrder<T extends { readonly id: string }>(order: readonly string[], devices: readonly T[]): T[] {
   if (order.length === 0) return [...devices];

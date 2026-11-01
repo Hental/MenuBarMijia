@@ -10,6 +10,7 @@ public struct ControlCenterPanel: View {
     @AppStorage(DeviceLayoutPrefs.orderKey) private var orderRaw: String = "[]"
     @State private var isEditingLayout = false
     @State private var draggingId: String?
+    @State private var activeResize: (deviceId: String, startSize: TileSize, didStep: Bool)?
     // In-memory mirrors of the saved order/sizes: @AppStorage publishes changes outside the
     // current animation transaction, so moves made through it alone snap instead of sliding.
     @State private var liveOrder: [String]?
@@ -424,7 +425,10 @@ public struct ControlCenterPanel: View {
             size: tileSize(device),
             isDragging: draggingId == device.id,
             dragOffset: dragOffset(for: device.id),
-            onCycleSize: { cycleSize(device) }
+            onCycleSize: { cycleSize(device) },
+            onBeginResize: { beginResizeIfNeeded(device.id) },
+            onResizeDrag: { translation in updateResize(device.id, translation: translation) },
+            onEndResize: { translation in endResize(device.id, translation: translation) }
         )
     }
 
@@ -667,6 +671,13 @@ public struct ControlCenterPanel: View {
                 // search result be dragged into the saved order. Cards stay tappable instead.
                 guard !search.isSearching else { return }
                 let moved = hypot(d.translation.width, d.translation.height)
+                if isEditingLayout {
+                    if let resizingId = activeResize?.deviceId ?? resizeHandleCardId(at: d.startLocation) {
+                        beginResizeIfNeeded(resizingId)
+                        updateResize(resizingId, translation: d.translation)
+                        return
+                    }
+                }
                 if draggingId == nil {
                     if isEditingLayout {
                         if moved > 3, let id = cardId(at: d.startLocation) { beginDrag(id, at: d.startLocation) }
@@ -693,11 +704,15 @@ public struct ControlCenterPanel: View {
                     swapIfNeeded(dragged: id, at: d.location)
                 }
             }
-            .onEnded { _ in
+            .onEnded { d in
                 pressTask?.cancel()
                 pressTask = nil
                 pressCancelled = false
                 lastSwapTarget = nil
+                if let resizingId = activeResize?.deviceId {
+                    endResize(resizingId, translation: d.translation)
+                    return
+                }
                 guard draggingId != nil else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                     draggingId = nil
@@ -708,6 +723,49 @@ public struct ControlCenterPanel: View {
 
     private func cardId(at point: CGPoint) -> String? {
         tileFrames.first { $0.value.contains(point) }?.key
+    }
+
+    /// Hit-tests the 28×28 bottom-right corner arc resize handle in `TileSpace.name`.
+    private func resizeHandleCardId(at point: CGPoint) -> String? {
+        for (id, frame) in tileFrames {
+            let handleRect = CGRect(x: frame.maxX - 24, y: frame.maxY - 24, width: 28, height: 28)
+            if handleRect.contains(point) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private func beginResizeIfNeeded(_ deviceId: String) {
+        guard activeResize == nil,
+              let device = store.devices.first(where: { $0.id == deviceId }) else { return }
+        activeResize = (deviceId: deviceId, startSize: tileSize(device), didStep: false)
+    }
+
+    private func updateResize(_ deviceId: String, translation: CGSize) {
+        guard var current = activeResize,
+              current.deviceId == deviceId,
+              let device = store.devices.first(where: { $0.id == deviceId }) else { return }
+        let target = TileResizeGestureMath.targetSize(
+            startSize: current.startSize,
+            translation: translation,
+            isCompactGrid: store.isCompactGridMode
+        )
+        if target != tileSize(device) {
+            current.didStep = true
+            activeResize = current
+            setTileSize(target, for: device, playHaptic: true)
+        }
+    }
+
+    private func endResize(_ deviceId: String, translation: CGSize) {
+        guard let current = activeResize, current.deviceId == deviceId else { return }
+        activeResize = nil
+        let moved = hypot(translation.width, translation.height)
+        if !current.didStep, moved < 5,
+           let device = store.devices.first(where: { $0.id == deviceId }) {
+            cycleSize(device)
+        }
     }
 
     private func beginDrag(_ id: String, at start: CGPoint) {
@@ -787,8 +845,16 @@ public struct ControlCenterPanel: View {
         case .full: next = .panel
         case .panel, .auto: next = .half
         }
+        setTileSize(next, for: device, playHaptic: true)
+    }
+
+    private func setTileSize(_ next: TileSize, for device: SmartDevice, playHaptic: Bool) {
+        guard tileSize(device) != next else { return }
         var sizes = liveSizes ?? DeviceLayoutPrefs.decode(tileSizesRaw)
         sizes[DeviceLayoutPrefs.scopedKey(id: device.id, scope: layoutScope)] = next
+        if playHaptic {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
             store.expandedDeviceId = nil
             liveSizes = sizes
@@ -801,6 +867,7 @@ public struct ControlCenterPanel: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 isEditingLayout = false
                 draggingId = nil
+                activeResize = nil
             }
         } label: {
             Text(L10n.tr("完成", "Done")).font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
@@ -890,10 +957,14 @@ public struct ControlCenterPanel: View {
                 .background {
                     GeometryReader { geo in
                         let f = geo.frame(in: .named(TileSpace.name))
-                        Color.clear.preference(
-                            key: TileFramesKey.self,
-                            value: [dev.id: CGRect(x: f.minX.rounded(), y: f.minY.rounded(), width: f.width.rounded(), height: f.height.rounded())]
-                        )
+                        let g = geo.frame(in: .global)
+                        Color.clear
+                            .preference(
+                                key: TileFramesKey.self,
+                                value: [dev.id: CGRect(x: f.minX.rounded(), y: f.minY.rounded(), width: f.width.rounded(), height: f.height.rounded())]
+                            )
+                            .onAppear { LayoutUIState.shared.cardGlobalFrames[dev.id] = g }
+                            .onChange(of: g) { _, newFrame in LayoutUIState.shared.cardGlobalFrames[dev.id] = newFrame }
                     }
                 }
                 .layoutValue(key: TileSpanKey.self, value: span)
@@ -1167,7 +1238,7 @@ public struct ControlCenterPanel: View {
 
     private var statusSummaryText: String {
         if isEditingLayout {
-            return L10n.tr("拖动卡片排序，点角标改大小", "Drag to reorder, tap badge to resize")
+            return L10n.tr("拖动卡片排序，点右下角圆弧手柄改大小", "Drag to reorder, drag or tap the corner handle to resize")
         }
         if store.activeDeviceCount > 0 {
             return L10n.tr(

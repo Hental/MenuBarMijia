@@ -27,6 +27,37 @@ public enum TileSize: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Pure threshold resolver for the bottom-right corner arc resize gesture (#115).
+public enum TileResizeGestureMath {
+    public static let stepThreshold: CGFloat = 45
+
+    private static let orderedSizes: [TileSize] = [.half, .full, .panel]
+
+    public static func targetSize(
+        startSize: TileSize,
+        translation: CGSize,
+        isCompactGrid: Bool = true
+    ) -> TileSize {
+        let resolvedStart: TileSize = startSize == .auto
+            ? (isCompactGrid ? .half : .full)
+            : startSize
+        guard let startIndex = orderedSizes.firstIndex(of: resolvedStart) else {
+            return resolvedStart
+        }
+        let stepDelta = axisSteps(for: translation.width) + axisSteps(for: translation.height)
+        let targetIndex = min(max(startIndex + stepDelta, 0), orderedSizes.count - 1)
+        return orderedSizes[targetIndex]
+    }
+
+    private static func axisSteps(for delta: CGFloat) -> Int {
+        if delta > stepThreshold * 2 { return 2 }
+        if delta > stepThreshold { return 1 }
+        if delta < -stepThreshold * 2 { return -2 }
+        if delta < -stepThreshold { return -1 }
+        return 0
+    }
+}
+
 /// Stores `[deviceId: TileSize]` as JSON under one defaults key so views can observe it with `@AppStorage`.
 public enum DeviceLayoutPrefs {
     public static let storageKey = "device_tile_sizes"
@@ -96,7 +127,7 @@ extension DeviceLayoutPrefs {
     }
 }
 
-// MARK: - Edit Mode (long-press → jiggle, drag to reorder, tap badge to resize)
+// MARK: - Edit Mode (long-press → jiggle, drag to reorder, corner arc handle to resize)
 
 private struct LayoutEditingKey: EnvironmentKey {
     static let defaultValue = false
@@ -109,44 +140,82 @@ extension EnvironmentValues {
     }
 }
 
+/// Draws a bold iOS Control Center-style quarter-circle arc hugging the card's bottom-right corner (#115).
+struct CornerArcHandleShape: Shape {
+    var cornerRadius: CGFloat = DesignTokens.Radius.card
+    var inset: CGFloat = 4
+
+    func path(in rect: CGRect) -> Path {
+        let radius = max(6, cornerRadius)
+        let center = CGPoint(
+            x: rect.maxX - inset - radius,
+            y: rect.maxY - inset - radius
+        )
+        var path = Path()
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(0),
+            endAngle: .degrees(90),
+            clockwise: false
+        )
+        return path
+    }
+}
+
 /// Wraps one device card. Long-press then keep dragging picks the card up straight away (no
 /// second click); while editing a plain drag moves any card. The card follows the pointer via
-/// `dragOffset`, jiggles, and shows a size badge that cycles half → full → panel.
+/// `dragOffset`, jiggles, and shows a bottom-right corner arc handle that supports both drag
+/// resizing (`half ↔ full ↔ panel`) and tap cycling (`half → full → panel → half`).
 struct LayoutEditable: ViewModifier {
     @Environment(\.isEditingLayout) private var editing
     @Environment(\.effectiveReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let deviceId: String
     let size: TileSize
     let isDragging: Bool
     let dragOffset: CGSize
     let onCycleSize: () -> Void
+    var onBeginResize: () -> Void = {}
+    var onResizeDrag: (CGSize) -> Void = { _ in }
+    var onEndResize: (CGSize) -> Void = { _ in }
 
     // Per-card phase so neighbouring cards do not swing in sync.
     private var phase: Double { Double(abs(deviceId.hashValue % 97)) / 97 * .pi * 2 }
 
     func body(content: Content) -> some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .bottomTrailing) {
             jiggling(content.allowsHitTesting(!editing))
                 .scaleEffect(isDragging ? 1.05 : 1)
                 .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
 
             if editing && !isDragging {
-                Button(action: onCycleSize) {
-                    Image(systemName: size.symbol)
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 20, height: 20)
-                        .background(Circle().fill(Color.accentColor))
-                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                        .padding(4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableCardButtonStyle(scaleAmount: 0.85))
-                .accessibilityLabel(Text(L10n.tr("切换卡片大小，当前 \(size.title)", "Change card size, currently \(size.title)")))
-                .panelHelp(L10n.tr("切换卡片大小：\(size.title)", "Card size: \(size.title)"))
-                .padding(.top, -9)
-                .padding(.trailing, -9)
-                .transition(.scale.combined(with: .opacity))
+                CornerArcHandleShape()
+                    .stroke(
+                        colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary.opacity(0.78),
+                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                    )
+                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .named(TileSpace.name))
+                            .onChanged { value in
+                                onBeginResize()
+                                onResizeDrag(value.translation)
+                            }
+                            .onEnded { value in
+                                onEndResize(value.translation)
+                            }
+                    )
+                    .accessibilityElement()
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(Text(L10n.tr("调整卡片大小，当前 \(size.title)", "Resize card, currently \(size.title)")))
+                    .accessibilityAction { onCycleSize() }
+                    .panelHelp(L10n.tr("拖拽或点击调整卡片大小：\(size.title)", "Drag or click to resize: \(size.title)"))
+                    .padding(.bottom, -4)
+                    .padding(.trailing, -4)
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .offset(dragOffset)
@@ -298,6 +367,9 @@ final class LayoutUIState {
     /// Raised from a card's context menu, so entering edit mode no longer requires the 0.6 s
     /// long-press the audit flagged as inaccessible (#41).
     var isEditingLayoutRequested = false
+    /// Latest card frames in window `.global` coordinates; lets UI tests locate the resize
+    /// handle after dynamic relayouts without hard-coding pixel positions.
+    var cardGlobalFrames: [String: CGRect] = [:]
 }
 
 /// Inline name prompt shown over the panel for creating or renaming a group.

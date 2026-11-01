@@ -86,6 +86,7 @@ import {
   SKINS,
   TILE_SIZES,
   applyOrder,
+  targetSize,
   chosenSize,
   comfort,
   emptyLayoutPrefs,
@@ -2295,7 +2296,7 @@ export class MenuMijiaWindowsApp {
                     ${isDemo ? t("演示预览") : t("Miot 直连")}
                   </span>
                 </div>
-                <div class="cc-subtitle">${this.escapeHtml(this.isEditingLayout ? t("拖动卡片排序 · 点角标改大小") : this.statusSummaryText)}</div>
+                <div class="cc-subtitle">${this.escapeHtml(this.isEditingLayout ? t("拖动卡片排序 · 点右下角圆弧手柄改大小") : this.statusSummaryText)}</div>
               </div>
             </div>
 
@@ -2715,8 +2716,9 @@ export class MenuMijiaWindowsApp {
     const size = this.tileSize(dev);
     const attrs = `data-tile-id="${this.escapeHtml(dev.id)}" style="grid-column: span ${span}; --i: ${Math.min(index, 12)}; --jd: -${Math.round((performance.now() + (index * 137) % 560) % 560)}ms"`;
     const motion = `${this.animateEntrance && this.skin !== "classic" ? "is-entering" : ""} ${this.poppedDeviceId === dev.id ? "is-popped" : ""} ${this.draggingId === dev.id ? "is-dragging" : ""}`;
+    const sizeTitle = TILE_SIZES.find((item) => item.id === size)?.title ?? "";
     const badge = this.isEditingLayout
-      ? `<button class="cc-size-badge" data-cycle-size="${this.escapeHtml(dev.id)}" title="${t("切换卡片大小")}">${TILE_SIZES.find((t) => t.id === size)?.title ?? ""}</button>`
+      ? `<button class="cc-resize-handle" data-resize-handle="${this.escapeHtml(dev.id)}" data-cycle-size="${this.escapeHtml(dev.id)}" data-tile-size="${size}" title="${t("切换卡片大小")}：${sizeTitle}" aria-label="${t("切换卡片大小")}，${sizeTitle}"><svg class="cc-resize-arc" viewBox="0 0 28 28" aria-hidden="true"><path d="M 22 10 A 12 12 0 0 1 10 22" /></svg></button>`
       : "";
     if (dev.kind.kind === "sensor" && !(this.skin === "bento" && span < 6)) {
       return this.renderSensorCard(dev, dev.kind, span < 6, attrs, motion, badge);
@@ -4189,7 +4191,6 @@ export class MenuMijiaWindowsApp {
     this.root.querySelectorAll<HTMLElement>("[data-prompt-cancel]").forEach((el) => el.addEventListener("click", () => this.closePrompt()));
 
     this.root.querySelectorAll<HTMLElement>("[data-cycle-size]").forEach((btn) => {
-      btn.addEventListener("pointerdown", (e) => e.stopPropagation());
       btn.addEventListener("click", () => {
         const dev = this.devices.find((d) => d.id === btn.dataset.cycleSize);
         if (!dev) return;
@@ -4965,6 +4966,8 @@ export class MenuMijiaWindowsApp {
    */
   private bindLayoutGestures(): void {
     let press: { id: string; x: number; y: number; timer: number; dimming: boolean; el: HTMLElement } | null = null;
+    let resizing: { id: string; startX: number; startY: number; startSize: Exclude<TileSize, "auto">; didStep: boolean; moved: boolean } | null = null;
+    let suppressNextHandleClick = false;
 
     const beginDrag = (id: string, el: HTMLElement, x: number, y: number) => {
       const r = el.getBoundingClientRect();
@@ -4990,15 +4993,34 @@ export class MenuMijiaWindowsApp {
     );
     window.addEventListener("pointercancel", () => {
       this.pointerIsDown = false;
+      resizing = null;
     });
     window.addEventListener("blur", () => {
       this.pointerIsDown = false;
+      resizing = null;
     });
 
     this.root.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      suppressNextHandleClick = false;
+      const handleEl = (e.target as HTMLElement).closest<HTMLElement>(".cc-resize-handle");
+      if (handleEl && this.isEditingLayout) {
+        const id = handleEl.dataset.resizeHandle ?? handleEl.dataset.cycleSize ?? "";
+        const dev = this.devices.find((d) => d.id === id);
+        if (dev) {
+          resizing = {
+            id: dev.id,
+            startX: e.clientX,
+            startY: e.clientY,
+            startSize: this.tileSize(dev),
+            didStep: false,
+            moved: false,
+          };
+        }
+        return;
+      }
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-tile-id]");
-      if (!el || (e.target as HTMLElement).closest(".cc-size-badge, input")) return;
+      if (!el || (e.target as HTMLElement).closest(".cc-resize-handle, input")) return;
       const id = el.dataset.tileId as string;
       const timer = this.isEditingLayout
         ? 0
@@ -5011,6 +5033,27 @@ export class MenuMijiaWindowsApp {
     });
 
     window.addEventListener("pointermove", (e) => {
+      if (resizing) {
+        const dx = e.clientX - resizing.startX;
+        const dy = e.clientY - resizing.startY;
+        if (Math.hypot(dx, dy) > 3) {
+          resizing.moved = true;
+        }
+        const dev = this.devices.find((d) => d.id === resizing?.id);
+        if (!dev) return;
+        const next = targetSize(
+          resizing.startSize,
+          { width: dx, height: dy },
+          this.settings.isCompactGridMode,
+        );
+        if (next !== this.tileSize(dev)) {
+          resizing.didStep = true;
+          this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = next;
+          this.saveLayout();
+          this.render();
+        }
+        return;
+      }
       if (!press) return;
       const dx = e.clientX - press.x;
       const dy = e.clientY - press.y;
@@ -5047,6 +5090,19 @@ export class MenuMijiaWindowsApp {
     });
 
     window.addEventListener("pointerup", () => {
+      if (resizing) {
+        const { moved, didStep } = resizing;
+        resizing = null;
+        // A drag without a size step leaves the same handle element mounted, so the browser
+        // fires a real click on it after pointerup (microtasks run before that click); swallow it.
+        if (moved && !didStep) {
+          suppressNextHandleClick = true;
+          window.setTimeout(() => {
+            suppressNextHandleClick = false;
+          }, 0);
+        }
+        return;
+      }
       if (!press) return;
       window.clearTimeout(press.timer);
       const finished = press;
@@ -5069,8 +5125,14 @@ export class MenuMijiaWindowsApp {
 
     // A long-press or dim drag ends with a click on the card; swallow it so nothing toggles.
     this.root.addEventListener("click", (e) => {
+      if (suppressNextHandleClick && (e.target as HTMLElement).closest(".cc-resize-handle")) {
+        suppressNextHandleClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
       if (this.suppressNextClick || this.isEditingLayout) {
-        if ((e.target as HTMLElement).closest("[data-tile-id]") && !(e.target as HTMLElement).closest(".cc-size-badge")) {
+        if ((e.target as HTMLElement).closest("[data-tile-id]") && !(e.target as HTMLElement).closest(".cc-resize-handle")) {
           e.stopPropagation();
           e.preventDefault();
         }

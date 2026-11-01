@@ -17,6 +17,7 @@ import {
   pageSections,
   parseGlobalShortcut,
   recordShortcutFromKeyEvent,
+  targetSize,
   resolvedSize,
   spans,
 } from "../src/ui/panelPrefs.js";
@@ -47,6 +48,31 @@ describe("panel layout prefs", () => {
     assert.equal(resolvedSize("auto", climate("c"), true, true), "full");
     assert.equal(resolvedSize("auto", climate("c"), true, false), "half");
     assert.equal(resolvedSize("auto", plug("p"), false, true), "full");
+  });
+
+  it("targetSize steps half <-> full <-> panel across 45pt horizontal and vertical thresholds (#115)", () => {
+    // Sub-threshold movement (<= 45pt) stays at starting size
+    assert.equal(targetSize("half", { width: 45, height: 45 }, true), "half");
+    assert.equal(targetSize("full", { width: -45, height: -45 }, true), "full");
+
+    // Outward drag from half -> full -> panel (horizontal, vertical, or diagonal)
+    assert.equal(targetSize("half", { width: 46, height: 0 }, true), "full");
+    assert.equal(targetSize("half", { width: 0, height: 46 }, true), "full");
+    assert.equal(targetSize("half", { width: 60, height: 60 }, true), "panel");
+    assert.equal(targetSize("half", { width: 95, height: 0 }, true), "panel");
+    assert.equal(targetSize("half", { width: 0, height: 95 }, true), "panel");
+
+    // Inward drag from panel -> full -> half (horizontal, vertical, or diagonal)
+    assert.equal(targetSize("panel", { width: -46, height: 0 }, true), "full");
+    assert.equal(targetSize("panel", { width: 0, height: -46 }, true), "full");
+    assert.equal(targetSize("panel", { width: -60, height: -60 }, true), "half");
+    assert.equal(targetSize("panel", { width: -95, height: 0 }, true), "half");
+    assert.equal(targetSize("panel", { width: 0, height: -95 }, true), "half");
+
+    // Resolves "auto" based on isCompactGrid before applying step delta
+    assert.equal(targetSize("auto", { width: 50, height: 0 }, true), "full");
+    assert.equal(targetSize("auto", { width: 50, height: 0 }, false), "panel");
+    assert.equal(targetSize("auto", { width: -50, height: 0 }, false), "half");
   });
 
   it("moves before/after a target and keeps unknown devices in place", () => {

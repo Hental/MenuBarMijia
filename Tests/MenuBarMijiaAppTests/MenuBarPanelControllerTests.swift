@@ -720,7 +720,29 @@ struct MenuBarPanelControllerTests {
         #expect(panel.level.rawValue > NSWindow.Level.statusBar.rawValue)
     }
 
-    @Test("Long-pressing a light card enters edit mode without expanding its drawer and allows cycling half -> full -> panel -> half")
+
+    @Test("TileResizeGestureMath maps 45pt horizontal and vertical translations across half, full, and panel (#115)")
+    func tileResizeGestureMathThresholds() {
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 45, height: 45), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .full, translation: CGSize(width: -45, height: -45), isCompactGrid: true) == .full)
+
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 46, height: 0), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 46), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 60, height: 60), isCompactGrid: true) == .panel)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 95, height: 0), isCompactGrid: true) == .panel)
+        #expect(TileResizeGestureMath.targetSize(startSize: .half, translation: CGSize(width: 0, height: 95), isCompactGrid: true) == .panel)
+
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -46, height: 0), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -46), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -60, height: -60), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: -95, height: 0), isCompactGrid: true) == .half)
+        #expect(TileResizeGestureMath.targetSize(startSize: .panel, translation: CGSize(width: 0, height: -95), isCompactGrid: true) == .half)
+
+        #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: 50, height: 0), isCompactGrid: true) == .full)
+        #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: 50, height: 0), isCompactGrid: false) == .panel)
+        #expect(TileResizeGestureMath.targetSize(startSize: .auto, translation: CGSize(width: -50, height: 0), isCompactGrid: false) == .half)
+    }
+    @Test("Long-pressing a light card enters edit mode and bottom-right corner arc handle supports both drag resizing and tap cycling without reordering (#115)")
     func longPressOnLightCardEntersEditModeWithoutExpandingAndCyclesTileSizes() async throws {
         _ = NSApplication.shared
         let previousLanguage = L10n.currentLanguage
@@ -800,31 +822,84 @@ struct MenuBarPanelControllerTests {
         #expect(store.expandedDeviceId == nil, "Releasing long-press must not trigger the card's expand-drawer button")
         #expect(store.devices.first(where: { $0.id == light.id })?.isActiveOn == initialIsOn)
 
-        // Click 1 on the top-trailing size badge of the half-width card: half -> full.
-        let badgeHalf = NSPoint(x: 179.5, y: 404)
-        func clickBadge(at point: NSPoint) async throws -> [String: TileSize] {
-            sendMouse(.leftMouseDown, at: point)
-            try await Task.sleep(for: .milliseconds(40))
-            Self.pumpMainRunLoop()
-            sendMouse(.leftMouseUp, at: point)
-            try await Task.sleep(for: .milliseconds(200))
+        func handlePoint() -> NSPoint {
+            if let g = LayoutUIState.shared.cardGlobalFrames[light.id] {
+                return NSPoint(x: g.maxX - 6, y: hosting.bounds.height - g.maxY + 6)
+            }
+            return NSPoint(x: 176, y: 358)
+        }
+        func currentSizes() -> [String: TileSize] {
+            DeviceLayoutPrefs.decode(defaults.string(forKey: DeviceLayoutPrefs.storageKey) ?? "{}")
+        }
+        func flushLayout() async throws {
+            try await Task.sleep(for: .milliseconds(160))
             Self.pumpMainRunLoop()
             hosting.layoutSubtreeIfNeeded()
             hosting.displayIfNeeded()
             window.displayIfNeeded()
-            return DeviceLayoutPrefs.decode(defaults.string(forKey: DeviceLayoutPrefs.storageKey) ?? "{}")
+            Self.pumpMainRunLoop()
         }
 
-        let sizes1 = try await clickBadge(at: badgeHalf)
+        // 1. Outward drag on bottom-right corner arc handle: half -> full -> panel without reordering.
+        let dragOutStart = handlePoint()
+        sendMouse(.leftMouseDown, at: dragOutStart)
+        try await Task.sleep(for: .milliseconds(30))
+        Self.pumpMainRunLoop()
+
+        let dragOutStep1 = NSPoint(x: dragOutStart.x + 60, y: dragOutStart.y)
+        sendMouse(.leftMouseDragged, at: dragOutStep1)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .full, "Dragging handle right > 45pt must step half -> full")
+
+        let dragOutStep2 = NSPoint(x: dragOutStart.x + 60, y: dragOutStart.y - 60)
+        sendMouse(.leftMouseDragged, at: dragOutStep2)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .panel, "Continuing drag down > 45pt must step full -> panel")
+
+        sendMouse(.leftMouseUp, at: dragOutStep2)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .panel)
+        #expect(DeviceLayoutPrefs.decodeOrder(defaults.string(forKey: DeviceLayoutPrefs.orderKey) ?? "[]").isEmpty, "Handle drag must not trigger card reordering")
+
+        // 2. Inward drag on bottom-right corner arc handle: panel -> full -> half without reordering.
+        let dragInStart = handlePoint()
+        sendMouse(.leftMouseDown, at: dragInStart)
+        try await Task.sleep(for: .milliseconds(30))
+        Self.pumpMainRunLoop()
+
+        let dragInStep1 = NSPoint(x: dragInStart.x - 60, y: dragInStart.y)
+        sendMouse(.leftMouseDragged, at: dragInStep1)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .full, "Dragging handle left < -45pt must step panel -> full")
+
+        let dragInStep2 = NSPoint(x: dragInStart.x - 60, y: dragInStart.y + 60)
+        sendMouse(.leftMouseDragged, at: dragInStep2)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .half, "Continuing drag up < -45pt must step full -> half")
+
+        sendMouse(.leftMouseUp, at: dragInStep2)
+        try await flushLayout()
+        #expect(currentSizes()["all|\(light.id)"] == .half)
+        #expect(DeviceLayoutPrefs.decodeOrder(defaults.string(forKey: DeviceLayoutPrefs.orderKey) ?? "[]").isEmpty, "Inward handle drag must not trigger card reordering")
+
+        // 3. Light tap on bottom-right corner arc handle still cycles half -> full -> panel -> half.
+        func tapHandle() async throws -> [String: TileSize] {
+            let point = handlePoint()
+            sendMouse(.leftMouseDown, at: point)
+            try await Task.sleep(for: .milliseconds(40))
+            Self.pumpMainRunLoop()
+            sendMouse(.leftMouseUp, at: point)
+            try await flushLayout()
+            return currentSizes()
+        }
+
+        let sizes1 = try await tapHandle()
         #expect(sizes1["all|\(light.id)"] == .full)
 
-        // Click 2 on the top-trailing size badge of the full-width card: full -> panel.
-        let badgeFull = NSPoint(x: 358, y: 404)
-        let sizes2 = try await clickBadge(at: badgeFull)
+        let sizes2 = try await tapHandle()
         #expect(sizes2["all|\(light.id)"] == .panel)
 
-        // Click 3 on the top-trailing size badge of the panel card: panel -> half.
-        let sizes3 = try await clickBadge(at: badgeFull)
+        let sizes3 = try await tapHandle()
         #expect(sizes3["all|\(light.id)"] == .half)
     }
 

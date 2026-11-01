@@ -802,7 +802,7 @@ body {
   transition: width 160ms ease;
 }
 
-.cc-tile > *:not(.cc-tile-fill):not(.cc-size-badge) {
+.cc-tile > *:not(.cc-tile-fill):not(.cc-resize-handle) {
   position: relative;
   z-index: 1;
 }
@@ -2336,7 +2336,7 @@ input[type="checkbox"]:checked::after {
   overflow: visible;
 }
 
-.cc-popover.is-editing .cc-tile > *:not(.cc-size-badge) {
+.cc-popover.is-editing .cc-tile > *:not(.cc-resize-handle) {
   pointer-events: none;
 }
 
@@ -2358,22 +2358,46 @@ input[type="checkbox"]:checked::after {
   }
 }
 
-.cc-size-badge {
+.cc-resize-handle {
   position: absolute;
-  top: -6px;
   right: -4px;
-  z-index: 5;
+  bottom: -4px;
+  width: 28px;
+  height: 28px;
+  z-index: 6;
   border: 0;
-  cursor: pointer;
-  font: inherit;
-  font-size: 9.5px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--apple-blue);
-  color: #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: nwse-resize;
+  touch-action: none;
+  user-select: none;
   animation: cc-badge-in 200ms var(--ease-spring) both;
+}
+
+.cc-popover.scheme-light .cc-resize-handle {
+  color: rgba(28, 30, 36, 0.82);
+}
+
+.cc-popover.is-editing .cc-tile.is-dragging .cc-resize-handle {
+  display: none;
+}
+
+.cc-resize-arc {
+  width: 28px;
+  height: 28px;
+  overflow: visible;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+.cc-resize-arc path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
 }
 
 @keyframes cc-badge-in {

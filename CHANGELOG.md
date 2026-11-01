@@ -3,6 +3,7 @@
 ## 1.1.5
 
 ### 新功能与体验提升
+- **布局编辑：iOS 控制中心风格右下角圆弧手柄调大小（[#115](https://github.com/jryang1997/MenuBarMijia/issues/115)）**：macOS 与 Windows 编辑模式移除原右上角蓝色小圆点，改为卡片右下角加粗四分之一圆弧手柄；按住向外拖逐档放大（半行 → 整行 → 展开面板）、向内推回逐档缩小，跨档伴随弹簧动画与触觉反馈（macOS `NSHapticFeedbackManager.alignment`），手柄拖拽不触发卡片位置交换；轻点手柄仍按 半行 → 整行 → 展开面板 → 半行 循环切换，并保留无障碍标签与操作。阈值解析器 `TileResizeGestureMath`（水平/垂直 45pt 阈值）双端共享同一行为契约。
 - **Windows / Web 端界面重构与刷新防闪烁调优（[#108](https://github.com/jryang1997/MenuBarMijia/pull/108)）**：
   - **浅色 / 深色 / 跟随系统外观模式与毛玻璃控制中心样式**：统一收敛为经典系统毛玻璃质感与激活白卡（platter）设计，新增「跟随系统 / 浅色 / 深色」三档外观设置与底栏太阳/月亮一键切换按钮（`#btn-toggle-appearance`），实时响应系统深浅色切换。
   - **面板刷新重绘调优**：`renderNow()` 复用已挂载的外层 `.cc-popover` 容器并清除 `is-opening`，消除点击设备开关、步进温度或云端轮询重绘时反复触发整窗下拉与卡片入场动画的问题；同时保留设置抽屉 `.cc-sheet` 滚动位置，切换选项不再跳回顶部。

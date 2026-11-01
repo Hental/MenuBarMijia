@@ -1549,4 +1549,69 @@ describe("Air purifier support (#98)", () => {
     const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as Record<string, unknown>;
     assert.equal(saved["appearance"], "dark");
   });
+
+  it("renders bottom-right corner arc resize handles in layout edit mode and supports drag resizing and tap cycling without reordering (#115)", async () => {
+    startDemo();
+    const lightSelector = '[data-tile-id="light.living_ceiling"]';
+    element(lightSelector).dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 80 }));
+    await click("[data-start-editing]");
+
+    assert.equal(element(".cc-popover").classList.contains("is-editing"), true);
+    assert.equal(document.querySelectorAll(".cc-size-badge").length, 0, "Old top-right badge must be removed");
+
+    const handleSelector = '.cc-resize-handle[data-cycle-size="light.living_ceiling"]';
+    assert.equal(Boolean(element(handleSelector).querySelector("svg.cc-resize-arc path")), true, "Corner arc SVG path must be rendered inside .cc-resize-handle");
+    assert.equal(element(handleSelector).getAttribute("data-tile-size"), "half");
+
+    const readSavedSizes = (): Record<string, string> => {
+      const raw = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+        layout?: { tileSizes?: Record<string, string> };
+      };
+      return raw.layout?.tileSizes ?? {};
+    };
+    const readSavedOrder = (): string[] => {
+      const raw = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+        layout?: { order?: string[] };
+      };
+      return raw.layout?.order ?? [];
+    };
+
+    // 1. Outward drag on .cc-resize-handle: half -> full -> panel without starting card reorder.
+    element(handleSelector).dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 160, clientY: 160 }));
+    window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 220, clientY: 160 }));
+    await setImmediate();
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "full");
+    assert.equal(element(lightSelector).classList.contains("is-dragging"), false, "Handle drag must not start card reorder drag");
+
+    window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 220, clientY: 220 }));
+    await setImmediate();
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "panel");
+    assert.equal(element(lightSelector).classList.contains("is-dragging"), false);
+
+    window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, clientX: 220, clientY: 220 }));
+    await setImmediate();
+    assert.deepEqual(readSavedOrder(), []);
+
+    // 2. Inward drag on .cc-resize-handle: panel -> full -> half without starting card reorder.
+    element(handleSelector).dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 300, clientY: 260 }));
+    window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 240, clientY: 260 }));
+    await setImmediate();
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "full");
+
+    window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 240, clientY: 200 }));
+    await setImmediate();
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "half");
+
+    window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, clientX: 240, clientY: 200 }));
+    await setImmediate();
+    assert.deepEqual(readSavedOrder(), []);
+
+    // 3. Light tap/click on .cc-resize-handle still cycles half -> full -> panel -> half.
+    await click(handleSelector);
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "full");
+    await click(handleSelector);
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "panel");
+    await click(handleSelector);
+    assert.equal(readSavedSizes()["all|light.living_ceiling"], "half");
+  });
 });
