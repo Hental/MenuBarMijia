@@ -217,6 +217,17 @@ describe("Windows device control and undo", () => {
     assert.match(tile("light.living_ceiling"), /日光/);
   });
 
+  it("restores ordinary color temperature after a light-effect action", async () => {
+    startDemo();
+    await click('[data-expand-device="light.living_ceiling"]');
+    await setRange('[data-colortemp="light.living_ceiling"]', "5500");
+    await command("客厅吸顶灯月光模式");
+    assert.match(tile("light.living_ceiling"), /月光/);
+    await click("#btn-undo");
+    assert.match(tile("light.living_ceiling"), /5500K/);
+    assert.doesNotMatch(tile("light.living_ceiling"), /月光/);
+  });
+
   it("switches moonlight from the light drawer and restores its original mode on undo", async () => {
     startDemo();
     await click('[data-expand-device="light.living_ceiling"]');
@@ -1654,8 +1665,9 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
     assert.deepEqual(habitEntries().map((e) => e.operationKey), ["brightness:30", "brightness:42"]);
   });
 
-  it("shows four zero-delay proactive suggestions right after opening", async () => {
+  it("shows four zero-delay proactive suggestions when opening the ball", async () => {
     startDemo();
+    await click("#btn-grok-ball");
     // Demo home: two lights on (全屋关灯), then running AC, plug, and camera power-offs.
     const pills = [...document.querySelectorAll<HTMLElement>("[data-proactive-id]")];
     assert.equal(pills.length, 4);
@@ -1664,11 +1676,14 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
 
   it("executes a proactive suggestion and records it as a habit", async () => {
     startDemo();
+    await click("#btn-grok-ball");
     await click('[data-proactive-id^="builtin:lightsOff"]');
     await waitFor(() => habitEntries().length > 0);
     assert.ok(habitEntries().every((e) => e.operationKey === "power:off"));
-    // The executed action disappears from the strip because the lights are off now.
-    await waitFor(() => document.querySelector('[data-proactive-id^="builtin:lightsOff"]') === null);
+    // Reopening filters out the completed action because the lights are now off.
+    await waitFor(() => document.querySelector(".cc-grok-stage") === null);
+    await click("#btn-grok-ball");
+    assert.equal(document.querySelector('[data-proactive-id^="builtin:lightsOff"]'), null);
   });
 
   it("records a scene quick action through the natural command flow", async () => {
@@ -1874,6 +1889,7 @@ describe("Home Assistant source", () => {
       localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
       new MenuMijiaWindowsApp(element("#app"));
       await waitFor(() => !!document.querySelector('[data-tile-id="light.study"]'));
+      await click("#btn-grok-ball");
       for (const tick of ticks) tick();
       await waitFor(() => modelRequests === 1);
       if (responseState === "cached") await waitFor(() => !!document.querySelector('[data-proactive-id^="chat:"]'));
@@ -1883,6 +1899,7 @@ describe("Home Assistant source", () => {
       url.value = "http://localhost:8124";
       await click("#btn-save-settings");
       await waitFor(() => tile("light.study").includes("Source B lamp"));
+      if (!document.querySelector(".cc-grok-stage")) await click("#btn-grok-ball");
       assert.doesNotMatch(document.body.textContent ?? "", /Source A lamp/);
       for (const tick of ticks) tick();
       await setImmediate();
@@ -2152,5 +2169,47 @@ describe("Home Assistant source", () => {
     assert.equal(element('[data-body-device="study-light"]'),card);
     assert.equal(document.activeElement,input);
     assert.match(tile("study-light"),/78%|78 %/);
+  });
+});
+
+describe("GrokBall side attachment (#114)", () => {
+  it("opens four side actions, executes with undo, and collapses with Escape", async () => {
+    startDemo();
+    await click("#btn-grok-ball");
+    assert.equal(document.querySelectorAll(".cc-grok-sidebar [data-proactive-id]").length, 4);
+    await click(".cc-grok-pill");
+    await waitFor(() => document.querySelector("#btn-undo") !== null);
+    assert.equal(document.querySelector(".cc-grok-stage"), null);
+    assert.equal(element(".cc-grok-ball").dataset.emotion, "33");
+    await click("#btn-undo");
+    await click("#btn-grok-ball");
+    dom.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape" }));
+    assert.equal(document.querySelector(".cc-grok-stage"), null);
+  });
+
+  it("keeps learned scenes outside the reversible side attachment", async () => {
+    localStorage.setItem(["menumijia", "windows", "settings", "v2"].join("."), JSON.stringify({
+      connectionMode: "demo", hasCompletedOnboarding: true,
+      habitEntries: [{ bucket: "深夜", targetId: "scene.home", operationKey: "scene:activate", count: 99 }],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click("#btn-grok-ball");
+    assert.equal(document.querySelector('[data-proactive-id*="scene.home"]'), null);
+    assert.equal(document.querySelectorAll(".cc-grok-pill").length, 4);
+  });
+
+  it("shows emotion 34 on the ball when a Home Assistant refresh fails", async () => {
+    const invoke = async (name: string) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") throw new Error("Home Assistant unreachable");
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem(["menumijia", "windows", "settings", "v2"].join("."), JSON.stringify({
+      connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector("[data-ha-error]"));
+    assert.equal(element(".cc-grok-ball").dataset.emotion, "34");
   });
 });

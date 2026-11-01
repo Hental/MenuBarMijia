@@ -1053,4 +1053,55 @@ struct GoldenCorpusTests {
             #expect(actual == item.expected, "\(item.name)")
         }
     }
+
+    // MARK: - GrokBall Emotion & Radial Stage Corpus (#114)
+
+    private struct GrokBallCorpus: Decodable {
+        let radialSlots: [String]
+        let emotionCases: [GrokBallEmotionCase]
+    }
+
+    private struct GrokBallEmotionCase: Decodable {
+        let name: String
+        let timeBucket: String
+        let activeDeviceCount: Int
+        let speechListening: Bool
+        let assistantState: String
+        let isRecommending: Bool
+        let hasErrorToast: Bool
+        let isPointerTracking: Bool
+        let isStageExpanded: Bool
+        let hasRecentCelebration: Bool
+        let expectedEmotionId: String
+    }
+
+    @Test("Cross-platform GrokBall emotion corpus matches MijiaCore GrokBallEmotionResolver (#114)")
+    func grokBallGoldenCorpusParity() throws {
+        let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/grok_ball_golden.json")
+        let corpus = try JSONDecoder().decode(GrokBallCorpus.self, from: Data(contentsOf: fixtureURL))
+        #expect(GrokBallRadialSlot.allCases.map(\.rawValue) == corpus.radialSlots)
+
+        for item in corpus.emotionCases {
+            let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: item.timeBucket), "\(item.name): unknown timeBucket")
+            let state: AssistantState = switch item.assistantState {
+            case "thinking": .thinking
+            case "done": .done("ok")
+            case "failed": .failed("err")
+            case "awaitingChoice": .awaitingChoice("pick")
+            default: .idle
+            }
+            let actual = GrokBallEmotionResolver.resolve(.init(
+                timeBucket: bucket,
+                activeDeviceCount: item.activeDeviceCount,
+                speechListening: item.speechListening,
+                assistantState: state,
+                isRecommending: item.isRecommending,
+                hasErrorToast: item.hasErrorToast,
+                isPointerTracking: item.isPointerTracking,
+                isStageExpanded: item.isStageExpanded,
+                hasRecentCelebration: item.hasRecentCelebration
+            ))
+            #expect(actual == item.expectedEmotionId, "\(item.name)")
+        }
+    }
 }

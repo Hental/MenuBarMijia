@@ -463,6 +463,9 @@ public actor HAWebSocketProvider: HomeProvider {
             if primaryEid.hasPrefix("camera.") {
                 return ("camera", isOn ? "turn_on" : "turn_off", ["entity_id": primaryEid])
             }
+            if primaryEid.hasPrefix("media_player.") {
+                return ("media_player", isOn ? "turn_on" : "turn_off", ["entity_id": primaryEid])
+            }
             if primaryEid.hasPrefix("button.") {
                 return ("button", "press", ["entity_id": primaryEid])
             }

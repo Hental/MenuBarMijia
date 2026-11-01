@@ -316,6 +316,13 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
             return true
         }
 
+        // Esc collapses the side attachment first; the dashboard retains its other shortcuts.
+        if code == kVK_Escape, store.isGrokBallStageExpanded,
+           MenuBarPanelController.shared.isPanelWindow(NSApp.keyWindow) {
+            store.dismissGrokBallStage()
+            return true
+        }
+
         // #60: an open search owns ↑↓ / Return / → / Esc / typing. With no search it returns false for
         // every key, so the shortcuts below — and the text-field guard right after this — are unchanged.
         if PanelSearchKeyboard.handle(event, store: store) {

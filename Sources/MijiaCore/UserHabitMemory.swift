@@ -174,6 +174,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             public var operationKey: String
             /// `nil` means the transition was inserted by this call and should be removed on undo.
             public var previousCount: Int?
+            /// The recency metadata the transition carried before this call.
+            public var previousLastRecordedAt: Date? = nil
             /// True when capacity trimming removed the just-inserted transition; undo must not resurrect it.
             public var insertedButTrimmed: Bool = false
         }
@@ -316,7 +318,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         afterKey: afterKey,
                         targetId: intent.targetId,
                         operationKey: intent.operationKey,
-                        previousCount: sequences[idx].count
+                        previousCount: sequences[idx].count,
+                        previousLastRecordedAt: sequences[idx].lastRecordedAt
                     ))
                     sequences[idx].count += 1
                     sequences[idx].lastRecordedAt = now
@@ -325,7 +328,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         afterKey: afterKey,
                         targetId: intent.targetId,
                         operationKey: intent.operationKey,
-                        previousCount: nil
+                        previousCount: nil,
+                        previousLastRecordedAt: nil
                     ))
                     sequences.append(SequenceEntry(
                         afterKey: afterKey,
@@ -409,6 +413,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             switch (idx, change.previousCount) {
             case (let idx?, let previousCount?):
                 sequences[idx].count = previousCount
+                sequences[idx].lastRecordedAt = change.previousLastRecordedAt
             case (let idx?, nil):
                 sequences.remove(at: idx)
             case (nil, let previousCount):
@@ -419,7 +424,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         afterKey: change.afterKey,
                         targetId: change.targetId,
                         operationKey: change.operationKey,
-                        count: previousCount ?? 1
+                        count: previousCount ?? 1,
+                        lastRecordedAt: change.previousLastRecordedAt
                     ))
                 }
             }
@@ -655,6 +661,16 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             }
         }
 
+        // An all-off home still needs useful choices before it has learned any habits (#114).
+        for dev in devices where results.count < limit {
+            guard dev.isOnline, !seenTargets.contains(dev.id), Self.isPowerToggleable(dev) else { continue }
+            let intent = DeviceIntent(targetId: dev.id, operation: .power(!dev.isActiveOn))
+            guard Self.isActionable(intent, devices: devices, scenes: scenes),
+                  let title = Self.suggestionTitle(for: intent, devices: devices, scenes: scenes) else { continue }
+            seenTargets.insert(dev.id)
+            append("available:\(dev.id):\(dev.isActiveOn ? "off" : "on")", title, [intent])
+        }
+
         return results
     }
 
@@ -793,7 +809,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         }
     }
 
-    private static func isActionable(
+    static func isActionable(
         _ intent: DeviceIntent,
         devices: [SmartDevice],
         scenes: [HomeScene]

@@ -57,11 +57,36 @@ enum DesignTokens {
         static let speedTrackBottom = Color(red: 0.08, green: 0.62, blue: 0.56)
     }
 
-    /// The panel's own brand marks: the home orb and the All-Off pill.
+    /// The panel's hold-to-confirm All-Off pill.
     enum Brand {
-        static let homeTop = Color(red: 1.00, green: 0.72, blue: 0.12)
-        static let homeBottom = Color(red: 1.00, green: 0.55, blue: 0.00)
         static let allOff = Color(red: 0.90, green: 0.44, blue: 0.08)
+    }
+
+    /// Pinned emotion colours with an appearance-independent black-and-white neutral face.
+    enum GrokBall {
+        static let neutralBody = GrokBallRGB(r: 0.035, g: 0.035, b: 0.035)
+        static let neutralEye = GrokBallRGB(r: 1, g: 1, b: 1)
+        static let neutralHighlight = 0.06
+
+        static func color(_ rgb: GrokBallRGB, shade: Double = 0) -> Color {
+            let target = shade < 0 ? 0.0 : 1.0
+            let amount = abs(shade)
+            return Color(red: rgb.r + (target - rgb.r) * amount,
+                         green: rgb.g + (target - rgb.g) * amount,
+                         blue: rgb.b + (target - rgb.b) * amount)
+        }
+
+        static let star = Color(red: 244 / 255, green: 195 / 255, blue: 78 / 255)
+        static let sleepLetter = Color(red: 168 / 255, green: 162 / 255, blue: 150 / 255)
+        static let confetti: [Color] = [
+            Color(red: 249 / 255, green: 112 / 255, blue: 92 / 255),
+            Color(red: 91 / 255, green: 149 / 255, blue: 240 / 255),
+            Color(red: 63 / 255, green: 190 / 255, blue: 134 / 255),
+            Color(red: 245 / 255, green: 177 / 255, blue: 63 / 255),
+            Color(red: 154 / 255, green: 114 / 255, blue: 238 / 255),
+            Color(red: 53 / 255, green: 195 / 255, blue: 189 / 255)
+        ]
+        static let ribbonGradient = Gradient(colors: [confetti[4], confetti[1], confetti[5], confetti[2], confetti[3]])
     }
     enum Settings {
         static let navigationWidth: CGFloat = 640

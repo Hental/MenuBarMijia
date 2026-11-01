@@ -281,14 +281,6 @@ private struct GeneralSettingsTab: View {
                     Divider().padding(.vertical, 4)
 
                     SettingsToggleRow(
-                        title: L10n.tr("显示顶部快捷场景栏", "Show Quick Scenes Bar"),
-                        isOn: Binding(
-                            get: { store.showQuickActionsBar },
-                            set: { store.showQuickActionsBar = $0 }
-                        )
-                    )
-
-                    SettingsToggleRow(
                         title: L10n.tr("双列紧凑磁贴视图", "2-Column Compact Grid"),
                         isOn: Binding(
                             get: { store.isCompactGridMode },

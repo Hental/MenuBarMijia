@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   ASSISTANT_PROVIDER_PRESETS,
   DelayPhrase,
+  GROK_BALL_RADIAL_SLOTS,
   LocalIntentParser,
   ModelActionPolicy,
   ModelIntentResolver,
@@ -20,6 +21,7 @@ import {
   endpointAllowsSendingSecrets,
   inferAssistantPreset,
   IntentValidator,
+  resolveGrokBallEmotion,
 } from "../src/core/assistant.js";
 import {
   MI_CLOUD_REGIONS,
@@ -2354,5 +2356,43 @@ describe("Home Assistant snapshot boundary", () => {
     const parsedCam = parsed.home.devices.find((device) => device.kind.kind === "camera");
     assert.ok(parsedCam?.kind.kind === "camera");
     assert.equal(parsedCam.kind.snapshotPath, null);
+  });
+});
+
+describe("Cross-platform GrokBall emotion & radial stage corpus (#114)", () => {
+  const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/grok_ball_golden.json"), "utf8");
+  const corpus = JSON.parse(raw) as {
+    radialSlots: string[];
+    emotionCases: Array<{
+      name: string;
+      timeBucket: string;
+      activeDeviceCount: number;
+      speechListening: boolean;
+      assistantState: "idle" | "thinking" | "done" | "failed" | "awaitingChoice";
+      isRecommending: boolean;
+      hasErrorToast: boolean;
+      isPointerTracking: boolean;
+      isStageExpanded: boolean;
+      hasRecentCelebration: boolean;
+      expectedEmotionId: string;
+    }>;
+  };
+
+  it("matches the 4 radial slot order and emotion transitions shared with MijiaCore", () => {
+    assert.deepEqual([...GROK_BALL_RADIAL_SLOTS], corpus.radialSlots);
+    for (const item of corpus.emotionCases) {
+      const actual = resolveGrokBallEmotion({
+        timeBucket: item.timeBucket,
+        activeDeviceCount: item.activeDeviceCount,
+        speechListening: item.speechListening,
+        assistantState: item.assistantState,
+        isRecommending: item.isRecommending,
+        hasErrorToast: item.hasErrorToast,
+        isPointerTracking: item.isPointerTracking,
+        isStageExpanded: item.isStageExpanded,
+        hasRecentCelebration: item.hasRecentCelebration,
+      });
+      assert.equal(actual, item.expectedEmotionId, item.name);
+    }
   });
 });

@@ -67,10 +67,6 @@ public final class HomeStore {
         didSet { userDefaults.set(hideOfflineDevices, forKey: "hide_offline_devices") }
     }
 
-    public var showQuickActionsBar: Bool {
-        didSet { userDefaults.set(showQuickActionsBar, forKey: "show_quick_actions_bar") }
-    }
-
     public var enableGlobalHotkey: Bool {
         didSet {
             userDefaults.set(enableGlobalHotkey, forKey: "enable_global_hotkey")
@@ -313,7 +309,6 @@ public final class HomeStore {
         self.prefersOnDeviceSpeech = boolOrDefaultTrue("assistant_on_device_speech")
         self.hasCompletedOnboarding = ud.bool(forKey: "has_completed_onboarding")
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
-        self.showQuickActionsBar = boolOrDefaultTrue("show_quick_actions_bar")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
         self.isCompactGridMode = (ud.object(forKey: "compact_grid_mode") as? Bool) ?? true
@@ -432,6 +427,8 @@ public final class HomeStore {
     /// A command or suggestion request waiting for the user to allow sending it to a cloud AI service (#20).
     public internal(set) var pendingCloudConsent: PendingCloudConsent?
     public internal(set) var assistantSuggestions: [AssistantSuggestion] = []
+    /// Cached model proactive recommendations for `lastProactiveRefreshSignature` (#113).
+    var aiProactiveSuggestions: [AssistantSuggestion]?
     public internal(set) var isProactiveRecommending: Bool = false
     /// Ambient signature (time bucket + rounded readings) the suggestion cache was built from (#113).
     var lastProactiveRefreshSignature: String?
@@ -441,6 +438,11 @@ public final class HomeStore {
     var proactiveRetryCooldown: TimeInterval = 300
     /// The running silent refresh, exposed so tests can await it.
     var proactiveRefreshTask: Task<Void, Never>?
+    /// Whether the GrokBall star stage with its 4 radial suggestions is open (#114).
+    public internal(set) var isGrokBallStageExpanded: Bool = false
+    /// GrokBall shows `33` (confetti) until this moment after a successful control (#114).
+    public internal(set) var grokBallCelebrationUntil: Date?
+    var grokBallCelebrationTask: Task<Void, Never>?
     var assistantResetTask: Task<Void, Never>?
     /// Test seam replacing the network resolver built from `assistantConfig`.
     var assistantResolverOverride: ModelIntentResolver?

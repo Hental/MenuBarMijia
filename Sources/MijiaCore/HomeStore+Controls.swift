@@ -2,9 +2,12 @@ import Foundation
 
 // Primary toggle and detail-drawer controls backed by optimistic state (#48).
 extension HomeStore {
-    /// Records manual card actions into the habit memory for the current time bucket (#113).
+    /// A manual card action was confirmed by the device: GrokBall celebrates (#114) and the action
+    /// is recorded into the habit memory for the current time bucket (#113).
     /// Returns the receipt so an undo banner can roll the record back; nil when learning is off.
-    func recordManualHabits(intents: [DeviceIntent]) -> UserHabitMemory.RecordingReceipt? {
+    @discardableResult
+    func confirmManualControl(intents: [DeviceIntent]) -> UserHabitMemory.RecordingReceipt? {
+        celebrateGrokBall()
         guard isHabitLearningEnabled, !intents.isEmpty else { return nil }
         var memory = userHabitMemory
         let receipt = memory.record(utterance: nil, intents: intents, devices: devices, scenes: scenes)
@@ -96,10 +99,11 @@ extension HomeStore {
             do {
                 try await executeDeviceCommand(cmd)
                 if isMomentaryButton {
+                    self.celebrateGrokBall()
                     self.showToast(L10n.tr("已触发 \(device.name)", "Triggered \(device.name)"), isError: false)
                 } else {
                     // Only a confirmed command counts as a habit; a failed toggle rolls back (#113).
-                    self.recordManualHabits(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
+                    self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
                 }
                 return true
             } catch {
@@ -609,7 +613,7 @@ extension HomeStore {
         Task {
             do {
                 try await executeDeviceCommand(command)
-                recordManualHabits(intents: habitIntents)
+                confirmManualControl(intents: habitIntents)
             } catch {
                 if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
                     self.devices[idx] = fallback
@@ -633,7 +637,7 @@ extension HomeStore {
             guard !Task.isCancelled, let self else { return }
             do {
                 try await self.executeDeviceCommand(command)
-                self.recordManualHabits(intents: habitIntents)
+                self.confirmManualControl(intents: habitIntents)
             } catch {
                 if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
                     self.devices[idx] = fallback

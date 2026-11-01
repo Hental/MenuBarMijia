@@ -3,10 +3,13 @@
 ## Unreleased
 
 ### 新功能与体验提升
+- **GrokBall 情绪球与侧边推荐（[#114](https://github.com/jryang1997/MenuBarMijia/issues/114), [#123](https://github.com/jryang1997/MenuBarMijia/pull/123)）**：小球悬挂在面板侧边并跟随鼠标注视，点击后在外侧纵向展开四项推荐；再次点击或按 Esc 收起。屏幕边缘自动左右镜像，展开保持小球与主面板卡片位置；macOS 使用独立透明附属窗口，Windows 扩展窗口侧栏。睡眠、聆听、思考、成功与报错状态对应不同表情，成功后短暂撒花，可逆设备动作提供撤销。系统开启减弱动态效果时静态绘制表情，停止旋转、眨眼与粒子动画。Windows 内置 [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball) 的 MIT 运行时，macOS 使用原生 Canvas 绘制。
+  - **macOS 小球拖动与语音交互**：默认、好奇与睡眠表情改为黑球白眼；小球可自由拖动，四项推荐按其相对主面板的位置向左、右、上或下展开，上下空间较窄时自动改为横排，靠近屏幕边缘时优先避免裁切和遮挡设备。轻点展开推荐，长按 0.5 秒进入语音，拖动不会同时触发点击或语音。移除顶部快捷动作栏及对应设置项，原有动作与场景仍可通过助手执行。
+  - 推荐只包含可逆设备动作，场景与单向唤醒按钮不进入侧边推荐，可通过语音或文本指令执行；有足够可执行动作时补满四项，能力不足时显示实际数量。全关且没有习惯记录的家庭也可从在线设备生成开启建议。
 - **Windows 端 Home Assistant 原生连接源支持（[#117](https://github.com/jryang1997/MenuBarMijia/pull/117)）**：Windows 端新增 Home Assistant 数据源切换、原生 WebSocket 认证与注册表快照（`get_states` + `config/entity_registry/list` + `config/device_registry/list` + `config/area_registry/list`）、服务调用与场景触发、Windows 凭据管理器令牌存储，以及按服务地址与令牌指纹隔离的本地设备缓存、自定义名称、星标与操作习惯；切换连接源时自动失效旧异步请求与撤销队列。
 - **macOS 通用二进制（Universal Binary: `arm64` + `x86_64`）原生支持（[#118](https://github.com/jryang1997/MenuBarMijia/issues/118), [#119](https://github.com/jryang1997/MenuBarMijia/pull/119)）**：`scripts/build_app.sh` 与 `scripts/release.sh` 默认编译并校验 `arm64 + x86_64` 双架构通用二进制，并对全架构切片执行符号表路径泄露检查与 `go2rtc` 双架构守卫，使同一份 DMG 安装包、应用内自动更新与 Homebrew Cask 同时原生支持 Apple Silicon 与 Intel Mac。
-- **温湿度卡片读数配色收敛**：24pt 温度数字原用饱和蓝（`Orb.climate` #007AFF），暗色玻璃卡上会读成「发光的数字」，现改用主文本墨色；温度计图标、湿度水滴/百分比与湿度环改用新增的 `DesignTokens.Reading` 读数色（比设备徽标色低一档饱和度、按 4.5:1 以上对比度取样，浅色更深、深色更柔），暗色下不再发亮。
-- **暗色模式卡片墨色统一**：暗色下「开启」的卡片不再铺成近白亮板，改为比关闭态高一级的深色玻璃，卡内文字、数值、模式胶囊、图标统一使用白墨；修复展开抽屉里「80%」「4200K」等白字压在近白卡面（约 1.1:1）几乎不可见、模式胶囊白字压灰底的问题。浅色模式的亮白卡片与深色亮板上的墨色保持不变。
+- **温湿度卡片读数配色收敛（[#122](https://github.com/jryang1997/MenuBarMijia/pull/122)）**：24pt 温度数字原用饱和蓝（`Orb.climate` #007AFF），暗色玻璃卡上会读成「发光的数字」，现改用主文本墨色；温度计图标、湿度水滴/百分比与湿度环改用新增的 `DesignTokens.Reading` 读数色（比设备徽标色低一档饱和度、按 4.5:1 以上对比度取样，浅色更深、深色更柔），暗色下不再发亮。
+- **暗色模式卡片墨色统一（[#120](https://github.com/jryang1997/MenuBarMijia/pull/120), [#121](https://github.com/jryang1997/MenuBarMijia/pull/121)）**：暗色下「开启」的卡片不再铺成近白亮板，改为比关闭态高一级的深色玻璃，卡内文字、数值、模式胶囊、图标统一使用白墨；修复展开抽屉里「80%」「4200K」等白字压在近白卡面（约 1.1:1）几乎不可见、模式胶囊白字压灰底的问题。浅色模式的亮白卡片与深色亮板上的墨色保持不变。
 - **全渠道操作习惯学习与零延迟 Top 4「猜你想控」推荐引擎（[#113](https://github.com/jryang1997/MenuBarMijia/issues/113)）**：
   - **手动点卡片也计入习惯记忆**：macOS 与 Windows 双端把手动点击卡片开关、调亮度 / 色温 / 空调温度、切换空调与风扇模式、摇头、触发场景、内置快捷动作与「一键全关」全部按当前时段（清晨 / 午间 / 下午 / 夜晚 / 深夜）记入 `UserHabitMemory`；点击撤销横幅会同步回滚本次习惯计数，只有命令确认成功的操作才会被学习。
   - **固定 Top 4 零延迟推荐**：`topSuggestions` 默认返回 4 项当前可执行的推荐，习惯不足时按星标常用设备、当前开启设备、「全屋关灯」内置动作与环境温湿度（室温 ≥28°C 建议降温 / ≤16°C 建议升温）确定性补齐，并过滤已处于目标状态的冗余动作。
@@ -17,7 +20,7 @@
 ## 1.1.5
 
 ### 新功能与体验提升
-- **布局编辑：iOS 控制中心风格右下角圆弧手柄调大小（[#115](https://github.com/jryang1997/MenuBarMijia/issues/115)）**：macOS 与 Windows 编辑模式移除原右上角蓝色小圆点，改为卡片右下角加粗四分之一圆弧手柄；按住向外拖逐档放大（半行 → 整行 → 展开面板）、向内推回逐档缩小，跨档伴随弹簧动画与触觉反馈（macOS `NSHapticFeedbackManager.alignment`），手柄拖拽不触发卡片位置交换；轻点手柄仍按 半行 → 整行 → 展开面板 → 半行 循环切换，并保留无障碍标签与操作。手感对齐 QuotaKeeper 看板：30pt 步进阈值 + 拖拽中卡片右下角锚定的跟手缩放预览（向外 +5% / 向内 −4% 橡皮筋）+ 松手按最近 100ms 指针速度投掷最多跨一档（双端共享 `TileResizeGestureMath` / `targetSize` 契约）。
+- **布局编辑：iOS 控制中心风格右下角圆弧手柄调大小（[#115](https://github.com/jryang1997/MenuBarMijia/issues/115)）**：macOS 与 Windows 编辑模式移除原右上角蓝色小圆点，改为卡片右下角加粗四分之一圆弧手柄；按住向外拖逐档放大（半行 → 整行 → 展开面板）、向内推回逐档缩小，跨档伴随弹簧动画与触觉反馈（macOS `NSHapticFeedbackManager.alignment`），手柄拖拽不触发卡片位置交换；轻点手柄仍按 半行 → 整行 → 展开面板 → 半行 循环切换，并保留无障碍标签与操作。手感对齐 QuotaKeeper 看板：30pt 步进阈值 + 松手按最近 100ms 指针速度投掷最多跨一档（双端共享 `TileResizeGestureMath` / `targetSize` 契约）。
 - **Windows / Web 端界面重构与刷新防闪烁调优（[#108](https://github.com/jryang1997/MenuBarMijia/pull/108)）**：
   - **浅色 / 深色 / 跟随系统外观模式与毛玻璃控制中心样式**：统一收敛为经典系统毛玻璃质感与激活白卡（platter）设计，新增「跟随系统 / 浅色 / 深色」三档外观设置与底栏太阳/月亮一键切换按钮（`#btn-toggle-appearance`），实时响应系统深浅色切换。
   - **面板刷新重绘调优**：`renderNow()` 复用已挂载的外层 `.cc-popover` 容器并清除 `is-opening`，消除点击设备开关、步进温度或云端轮询重绘时反复触发整窗下拉与卡片入场动画的问题；同时保留设置抽屉 `.cc-sheet` 滚动位置，切换选项不再跳回顶部。

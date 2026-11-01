@@ -17,19 +17,27 @@ extension HomeStore {
 
     public func presentAssistantBar(startVoice: Bool = false) {
         isShowingAssistantBar = true
-        if !assistantState.isUserActive {
-            if assistantSuggestions.isEmpty || proactiveRefreshSignature() != lastProactiveRefreshSignature {
-                // Zero delay: rank locally from habits, favorites, environment, and running
-                // devices; a configured model then refreshes the cache in the background (#113).
-                assistantSuggestions = localTopSuggestions()
-            }
-        }
-        maybeRefreshProactiveSuggestionsInBackground()
+        refreshProactiveSuggestionCacheIfStale()
         if startVoice {
             assistantVoiceRequest &+= 1
         } else {
             assistantFocusRequest &+= 1
         }
+    }
+
+    /// Zero delay: re-ranks the cache locally from habits, favorites, environment, and running
+    /// devices when it is empty or stale, then lets a configured model refresh it in the background (#113).
+    func refreshProactiveSuggestionCacheIfStale() {
+        if !assistantState.isUserActive,
+           assistantSuggestions.isEmpty || proactiveRefreshSignature() != lastProactiveRefreshSignature {
+            if proactiveRefreshSignature() == lastProactiveRefreshSignature,
+               let ai = aiProactiveSuggestions, !ai.isEmpty {
+                assistantSuggestions = ai
+            } else {
+                assistantSuggestions = localTopSuggestions()
+            }
+        }
+        maybeRefreshProactiveSuggestionsInBackground()
     }
 
     /// The local zero-delay Top 4 (#113).
@@ -98,6 +106,7 @@ extension HomeStore {
             // an empty result is a valid "home is ideal" answer and falls back to the local
             // ranking instead of stale suggestions (Codex #116 re-review).
             lastProactiveRefreshSignature = attemptedSignature
+            aiProactiveSuggestions = inferred
             assistantSuggestions = inferred.isEmpty ? localTopSuggestions() : inferred
         } catch {
             proactiveRetryEarliest = Date().addingTimeInterval(proactiveRetryCooldown)
@@ -288,11 +297,12 @@ extension HomeStore {
         assistantResolverOverride ?? ModelIntentResolver(config: config, transport: assistantTransportOverride)
     }
 
-    public func applyAssistantSuggestion(_ suggestion: AssistantSuggestion) async {
+    /// Runs a tapped suggestion. `offersUndoBanner` shows the 撤销 banner even for one device (GrokBall pills, #114).
+    public func applyAssistantSuggestion(_ suggestion: AssistantSuggestion, offersUndoBanner: Bool = false) async {
         assistantSuggestions.removeAll { $0.id == suggestion.id }
         let reply = IntentReply.describe(suggestion.intents, devices: devices, scenes: scenes)
         let plan = IntentPlan(intents: suggestion.intents, reply: reply, source: .model)
-        _ = await executeIntentPlan(plan, recordedUtterance: nil, origin: .userInitiated)
+        _ = await executeIntentPlan(plan, recordedUtterance: nil, origin: .userInitiated, offersUndoBanner: offersUndoBanner)
     }
 
     /// Resolves a natural-language command (local parser first, model fallback) and applies it.
@@ -575,6 +585,7 @@ extension HomeStore {
         _ plan: IntentPlan,
         recordedUtterance: String?,
         origin: AssistantExecutionOrigin,
+        offersUndoBanner: Bool = false,
         receiptStartedAt: Date? = nil,
         usedHabitContext: Bool = false,
         habitSummary: String? = nil
@@ -648,8 +659,9 @@ extension HomeStore {
         }
 
         // Automation rules always offer undo, even for one device, and keep the banner long enough
-        // to survive a lock/sleep round trip (#59). The panel keeps its 2+ device rule (#53).
-        if !appliedDeviceIds.isEmpty, appliedDeviceIds.count > 1 || origin == .automation {
+        // to survive a lock/sleep round trip (#59). GrokBall pills promise undo too (#114).
+        // The panel keeps its 2+ device rule (#53).
+        if !appliedDeviceIds.isEmpty, appliedDeviceIds.count > 1 || origin == .automation || offersUndoBanner {
             scheduleUndoBanner(
                 title: plan.reply.isEmpty ? L10n.tr("已执行 AI 指令", "Executed AI command") : plan.reply,
                 restoreCommands: restoreCommands.reversed(),
@@ -676,6 +688,9 @@ extension HomeStore {
         } else {
             if !plan.suggestions.isEmpty {
                 assistantSuggestions = plan.suggestions
+            } else if proactiveRefreshSignature() == lastProactiveRefreshSignature,
+                      let ai = aiProactiveSuggestions, !ai.isEmpty {
+                assistantSuggestions = ai
             } else {
                 assistantSuggestions = localTopSuggestions()
             }
@@ -776,6 +791,28 @@ extension HomeStore {
         return effect.updated
     }
 
+    /// Verify the same intermediate states and reverse command order used by real execution.
+    static func isAssistantSuggestionReversible(_ suggestion: AssistantSuggestion, devices: [SmartDevice]) -> Bool {
+        var snapshots: [String: (before: SmartDevice, after: SmartDevice)] = [:]
+        var restore: [(targetId: String, command: DeviceCommand)] = []
+        for intent in suggestion.intents {
+            guard let original = devices.first(where: { $0.id == intent.targetId }),
+                  !original.isMomentaryButton else { return false }
+            let current = snapshots[intent.targetId]?.after ?? original
+            guard let effect = assistantEffect(of: intent.operation, on: current),
+                  !effect.restore.isEmpty else { return false }
+            snapshots[intent.targetId] = (original, effect.updated)
+            for command in effect.restore { restore.append((intent.targetId, command)) }
+        }
+        guard !restore.isEmpty else { return false }
+        for step in restore.reversed() {
+            guard let snapshot = snapshots[step.targetId],
+                  let restored = undoEffect(of: step.command, on: snapshot.after) else { return false }
+            snapshots[step.targetId] = (snapshot.before, restored)
+        }
+        return snapshots.values.allSatisfy { $0.before.kind == $0.after.kind }
+    }
+
     private static func assistantEffect(of operation: IntentOperation, on device: SmartDevice) -> AssistantEffect? {
         guard let op = IntentValidator.normalize(operation, for: device) else { return nil }
         var updated = device
@@ -788,39 +825,42 @@ extension HomeStore {
             return AssistantEffect(updated: updated, command: .setLightPower(entityId: s.entityId, isOn: on), restore: [restore])
 
         case (.brightness(let percent), .light(var s)):
-            let restore: DeviceCommand = s.isOn
-                ? .setLightBrightness(entityId: s.entityId, percent: s.brightnessPercent ?? 100)
-                : .setLightPower(entityId: s.entityId, isOn: false)
+            var restore: [DeviceCommand] = []
+            if !s.isOn { restore.append(.setLightPower(entityId: s.entityId, isOn: false)) }
+            if let previous = s.brightnessPercent {
+                restore.append(.setLightBrightness(entityId: s.entityId, percent: previous))
+            } else if s.isOn {
+                restore.append(.setLightBrightness(entityId: s.entityId, percent: 100))
+            }
             s.isOn = true
             s.brightnessPercent = percent
             updated.kind = .light(s)
-            return AssistantEffect(updated: updated, command: .setLightBrightness(entityId: s.entityId, percent: percent), restore: [restore])
+            return AssistantEffect(updated: updated, command: .setLightBrightness(entityId: s.entityId, percent: percent), restore: restore)
 
         case (.colorTemperature(let kelvin), .light(var s)):
-            let restore: DeviceCommand
-            if !s.isOn {
-                restore = .setLightPower(entityId: s.entityId, isOn: false)
-            } else if let prevKelvin = s.colorTempKelvin {
-                restore = .setLightColorTemp(entityId: s.entityId, kelvin: prevKelvin)
-            } else {
-                restore = .setLightPower(entityId: s.entityId, isOn: true)
+            var restore: [DeviceCommand] = []
+            if !s.isOn { restore.append(.setLightPower(entityId: s.entityId, isOn: false)) }
+            if let prevKelvin = s.colorTempKelvin {
+                if let effect = s.currentEffect { restore.append(.setLightEffect(entityId: s.entityId, effect: effect)) }
+                restore.append(.setLightColorTemp(entityId: s.entityId, kelvin: prevKelvin))
+            } else if s.isOn {
+                restore.append(.setLightPower(entityId: s.entityId, isOn: true))
             }
             s.isOn = true
             s.colorTempKelvin = kelvin
             s.currentEffect = nil
             updated.kind = .light(s)
-            return AssistantEffect(updated: updated, command: .setLightColorTemp(entityId: s.entityId, kelvin: kelvin), restore: [restore])
+            return AssistantEffect(updated: updated, command: .setLightColorTemp(entityId: s.entityId, kelvin: kelvin), restore: restore)
 
         case (.lightEffect(let effect), .light(var s)):
-            let restore: DeviceCommand
-            if !s.isOn {
-                restore = .setLightPower(entityId: s.entityId, isOn: false)
-            } else if let prevEffect = s.currentEffect {
-                restore = .setLightEffect(entityId: s.entityId, effect: prevEffect)
+            var restore: [DeviceCommand] = []
+            if !s.isOn { restore.append(.setLightPower(entityId: s.entityId, isOn: false)) }
+            if let prevEffect = s.currentEffect {
+                restore.append(.setLightEffect(entityId: s.entityId, effect: prevEffect))
             } else if let prevKelvin = s.colorTempKelvin {
-                restore = .setLightColorTemp(entityId: s.entityId, kelvin: prevKelvin)
-            } else {
-                restore = .setLightPower(entityId: s.entityId, isOn: true)
+                restore.append(.setLightColorTemp(entityId: s.entityId, kelvin: prevKelvin))
+            } else if s.isOn {
+                restore.append(.setLightPower(entityId: s.entityId, isOn: true))
             }
             s.isOn = true
             s.currentEffect = effect
@@ -828,7 +868,7 @@ extension HomeStore {
             return AssistantEffect(
                 updated: updated,
                 command: .setLightEffect(entityId: s.entityId, effect: effect),
-                restore: [restore]
+                restore: restore
             )
 
         case (.power(let on), .climate(var s)):
@@ -911,18 +951,17 @@ extension HomeStore {
                 restore: [restore]
             )
         case (.fanSpeed(let preset), .fan(var s)):
-            let restore: DeviceCommand
-            if !s.isOn {
-                restore = .setFanPower(entityId: s.entityId, isOn: false)
-            } else if let previous = s.presetMode {
-                restore = .setFanPresetMode(entityId: s.entityId, presetMode: previous)
-            } else {
-                restore = .setFanPower(entityId: s.entityId, isOn: true)
+            var restore: [DeviceCommand] = []
+            if !s.isOn { restore.append(.setFanPower(entityId: s.entityId, isOn: false)) }
+            if let previous = s.presetMode {
+                restore.append(.setFanPresetMode(entityId: s.entityId, presetMode: previous))
+            } else if s.isOn {
+                restore.append(.setFanPower(entityId: s.entityId, isOn: true))
             }
             s.isOn = true
             s.presetMode = preset
             updated.kind = .fan(s)
-            return AssistantEffect(updated: updated, command: .setFanPresetMode(entityId: s.entityId, presetMode: preset), restore: [restore])
+            return AssistantEffect(updated: updated, command: .setFanPresetMode(entityId: s.entityId, presetMode: preset), restore: restore)
 
         case (.fanSpeed(let fanMode), .climate(var s)):
             let restore = s.fanMode.map { [DeviceCommand.setClimateFanMode(entityId: s.entityId, fanMode: $0)] } ?? []

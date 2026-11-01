@@ -122,6 +122,97 @@
         "humidity": 60,
         "battery": 80
       }
+    },
+    {
+      "id": "off_dev_ceiling",
+      "name": "客厅吸顶灯",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "yeelink.light.ceiling20",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.ceiling",
+        "isOn": false,
+        "brightnessPercent": 80,
+        "colorTempKelvin": 4000,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": [
+          "Day",
+          "Night"
+        ]
+      }
+    },
+    {
+      "id": "off_dev_floor",
+      "name": "落地灯",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "yeelink.light.lamp1",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.floor",
+        "isOn": false,
+        "brightnessPercent": null,
+        "colorTempKelvin": null,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": []
+      }
+    },
+    {
+      "id": "off_dev_desk",
+      "name": "书房台灯",
+      "roomId": "shu_fang",
+      "roomName": "书房",
+      "model": "yeelink.light.lamp4",
+      "isOnline": true,
+      "kind": {
+        "kind": "light",
+        "entityId": "light.desk",
+        "isOn": false,
+        "brightnessPercent": null,
+        "colorTempKelvin": null,
+        "minKelvin": 2700,
+        "maxKelvin": 6500,
+        "currentEffect": null,
+        "availableEffects": []
+      }
+    },
+    {
+      "id": "off_dev_ac",
+      "name": "客厅空调",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "xiaomi.aircondition.mt0",
+      "isOnline": true,
+      "kind": {
+        "kind": "climate",
+        "entityId": "climate.ac",
+        "isOn": false,
+        "hvacMode": "off",
+        "availableModes": [
+          "off",
+          "cool",
+          "heat",
+          "dry",
+          "fan_only",
+          "auto"
+        ],
+        "targetTemperature": 25,
+        "currentTemperature": 29.5,
+        "minTemp": 16,
+        "maxTemp": 30,
+        "step": 1,
+        "fanMode": null,
+        "availableFanModes": [],
+        "swingMode": null,
+        "availableSwingModes": []
+      }
     }
   ],
   "scenes": [
@@ -816,6 +907,52 @@
           }
         ]
       ]
+    },
+    {
+      "name": "an all-off home with no memory still fills four executable actions",
+      "date": "2026-10-16",
+      "hour": 21,
+      "deviceIds": [
+        "off_dev_ceiling",
+        "off_dev_floor",
+        "off_dev_desk",
+        "off_dev_ac"
+      ],
+      "entriesBefore": [],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "off_dev_ceiling",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "off_dev_floor",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "off_dev_desk",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "off_dev_ac",
+            "kind": "power",
+            "value": true
+          }
+        ]
+      ],
+      "sequencesBefore": []
     }
   ],
   "sequenceCases": [

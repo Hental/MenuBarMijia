@@ -1,5 +1,6 @@
 import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand, parseCachedHAHome } from "../core/homeAssistant.js";
 import type { SynthesizedHome } from "../core/models.js";
+import { GrokBallView } from "./grokBall.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
   DelayPhrase,
@@ -19,6 +20,7 @@ import {
   timeBucketLabel,
   INSECURE_ENDPOINT_MESSAGE,
   ModelActionPolicy,
+  resolveGrokBallEmotion,
   type HabitEntry,
   type HabitLastAction,
   type HabitRecordingReceipt,
@@ -753,6 +755,12 @@ export class MenuMijiaWindowsApp {
   private aiProactiveSuggestions: AssistantSuggestion[] | null = null;
   private aiProactiveSignature: string | null = null;
   private isRefreshingProactive = false;
+  private isGrokBallStageExpanded = false;
+  private readonly grokBall = new GrokBallView();
+  private grokBallCelebrationUntil = 0;
+  private grokBallPointerUntil = 0;
+  private grokBallOnLeft = false;
+  private panelGeometryUpdates: Promise<void> = Promise.resolve();
   /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
   private proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
@@ -848,6 +856,13 @@ export class MenuMijiaWindowsApp {
     }
 
     this.bindGlobalKeys();
+    window.addEventListener("pointermove", (event) => {
+      const rect = this.grokBall.element.getBoundingClientRect();
+      this.grokBallPointerUntil = Date.now() + 1500;
+      this.grokBall.setGaze((event.clientX - rect.left - rect.width / 2) / 160,
+        (event.clientY - rect.top - rect.height / 2) / 160);
+      this.syncGrokBallEmotion();
+    });
     this.bindLayoutGestures();
     this.bindOpenAnimation();
     window.addEventListener("menumijia:open-update", () => {
@@ -1147,6 +1162,10 @@ export class MenuMijiaWindowsApp {
       }
 
       if (e.key === "Escape") {
+        if (this.isGrokBallStageExpanded) {
+          this.setGrokBallStageExpanded(false);
+          return;
+        }
         if (this.activeLiveCameraId !== null) {
           this.hideCameraLiveView();
           return;
@@ -1178,6 +1197,7 @@ export class MenuMijiaWindowsApp {
       this.maybeRefreshProactiveInBackground();
 
       const now = Date.now();
+      this.syncGrokBallEmotion();
       let changed = false;
 
       if (this.lastUndoAction && this.lastUndoAction.expiresAtMs <= now) {
@@ -1598,6 +1618,7 @@ export class MenuMijiaWindowsApp {
             })
           : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云");
     }
+    this.syncGrokBallEmotion();
     return true;
   }
 
@@ -1623,6 +1644,11 @@ export class MenuMijiaWindowsApp {
     // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
     this.aiProactiveSuggestions = null;
     this.aiProactiveSignature = null;
+    this.isRefreshingProactive = false;
+    this.proactiveRetryAfterMs = null;
+    this.isGrokBallStageExpanded = false;
+    this.grokBallCelebrationUntil = 0;
+    this.applyPanelHeight();
     this.saveSettings();
     this.render();
     void this.refreshDevices(false);
@@ -1884,11 +1910,17 @@ export class MenuMijiaWindowsApp {
       case "setLightColorTemp":
         return k.kind === "light" && k.colorTempKelvin !== null ? [
           { kind: "setLightColorTemp", entityId: k.entityId, kelvin: k.colorTempKelvin },
+          ...(k.currentEffect !== null ? [{ kind: "setLightEffect" as const, entityId: k.entityId, effect: k.currentEffect }] : []),
           { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
         ] : [];
       case "setLightEffect":
-        return k.kind === "light" && k.currentEffect !== null ? [
+        if (k.kind !== "light") return [];
+        if (k.currentEffect !== null) return [
           { kind: "setLightEffect", entityId: k.entityId, effect: k.currentEffect },
+          { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
+        ];
+        return k.colorTempKelvin !== null ? [
+          { kind: "setLightColorTemp", entityId: k.entityId, kelvin: k.colorTempKelvin },
           { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
         ] : [];
       case "setClimatePower":
@@ -1999,6 +2031,7 @@ export class MenuMijiaWindowsApp {
     }
     if (sourceRevision !== this.sourceRevision) return false;
     if (succeeded > 0) {
+      if (failed === 0) this.grokBallCelebrationUntil = Date.now() + 2400;
       // Only explicit user asks train habits; model-inferred and scheduled runs do not (#34/#113).
       const habitReceipt = options.recordHabits && failed === 0 ? this.recordHabits(intents) : null;
       // Scene activations have no inverse: an undo action must exist only when at least one
@@ -2028,6 +2061,7 @@ export class MenuMijiaWindowsApp {
     const inverseCommands = this.buildInverseCommand(device, command);
     if (!(await this.applyCommand(command))) return;
     if (sourceRevision !== this.sourceRevision) return;
+    this.grokBallCelebrationUntil = Date.now() + 2400;
     const habitReceipt = intent ? this.recordHabits([intent]) : null;
     this.lastUndoAction = inverseCommands.length > 0 ? {
       summary,
@@ -2104,44 +2138,141 @@ export class MenuMijiaWindowsApp {
     return `${bucket}|${readings}`;
   }
 
+  private isIntentReversibleOnDevice(intent: DeviceIntent, device: SmartDevice): { reversible: boolean; nextDevice: SmartDevice } {
+    if (!device.isOnline || (device.kind.kind === "plug" && device.kind.switchEntityId.startsWith("button."))) {
+      return { reversible: false, nextDevice: device };
+    }
+    const normalized = IntentValidator.normalize(intent.operation, device);
+    if (!normalized) return { reversible: false, nextDevice: device };
+    if (
+      this.settings.connectionMode === "homeAssistant" &&
+      normalized.kind === "power" &&
+      normalized.isOn &&
+      device.kind.kind === "climate" &&
+      !device.kind.availableModes.some((mode) => mode !== "off" && mode !== "unknown" && mode !== "unavailable")
+    ) {
+      return { reversible: false, nextDevice: device };
+    }
+    const normalizedIntent: DeviceIntent = { targetId: intent.targetId, operation: normalized };
+    const commands = IntentValidator.commandsForIntent(normalizedIntent, device);
+    if (commands.length === 0 || !commands.every((command) => this.buildInverseCommand(device, command).length > 0)) {
+      return { reversible: false, nextDevice: device };
+    }
+    const k = device.kind;
+    let nextKind = k;
+    if (k.kind === "light") {
+      if (normalized.kind === "power") nextKind = { ...k, isOn: normalized.isOn };
+      else if (normalized.kind === "brightness") nextKind = { ...k, isOn: true, brightnessPercent: normalized.percent };
+      else if (normalized.kind === "colorTemperature") nextKind = { ...k, isOn: true, colorTempKelvin: normalized.kelvin, currentEffect: null };
+      else if (normalized.kind === "lightEffect") nextKind = { ...k, isOn: true, currentEffect: normalized.effect };
+    } else if (k.kind === "climate") {
+      if (normalized.kind === "power") {
+        const resumeMode = k.hvacMode === "off" ? (k.availableModes.find((m) => m !== "off") ?? "cool") : k.hvacMode;
+        nextKind = { ...k, isOn: normalized.isOn, hvacMode: normalized.isOn ? resumeMode : "off" };
+      } else if (normalized.kind === "hvacMode") {
+        nextKind = { ...k, isOn: normalized.mode !== "off", hvacMode: normalized.mode };
+      } else if (normalized.kind === "targetTemperature") {
+        nextKind = { ...k, targetTemperature: normalized.celsius };
+      } else if (normalized.kind === "fanSpeed") {
+        nextKind = { ...k, fanMode: normalized.speed };
+      }
+    }
+    return { reversible: true, nextDevice: { ...device, kind: nextKind } };
+  }
+
   /** The Top-4 zero-delay suggestions: the AI cache when fresh, otherwise ranked locally (#113). */
   private currentProactiveSuggestions(): AssistantSuggestion[] {
-    if (this.pendingSuggestions.length > 0) return [];
+    if (this.pendingSuggestions.length > 0 && !this.isGrokBallStageExpanded) return [];
     const signature = this.proactiveSignature();
     const aliasedDevices = withAliases(this.layout, this.devices);
-    if (this.aiProactiveSuggestions && this.aiProactiveSignature === signature) {
-      // Drop actions the home has already reached since the model answered; if nothing
-      // survives, fall back to the local ranking instead of an empty strip (#113).
-      const fresh = this.aiProactiveSuggestions.filter((suggestion) =>
-        suggestion.intents.every((intent) => habitActionable(intent, aliasedDevices, this.scenes)),
-      );
-      if (fresh.length > 0) return fresh;
-    }
-    return new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
-      devices: this.devices,
-      scenes: this.scenes,
+    const local = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
+      devices: aliasedDevices,
+      scenes: this.isGrokBallStageExpanded ? [] : this.scenes,
       environmentReadings: this.computedEnvironmentReadings,
     });
+    const cached = this.aiProactiveSignature === signature ? this.aiProactiveSuggestions ?? [] : [];
+    const fallback = this.isGrokBallStageExpanded
+      ? new UserHabitMemory([]).topSuggestions({ devices: aliasedDevices, scenes: [], limit: aliasedDevices.length + 4 })
+      : [];
+    const result: AssistantSuggestion[] = [];
+    for (const item of [...cached, ...local, ...fallback]) {
+      if (this.isGrokBallStageExpanded && item.intents.some((intent) => intent.operation.kind === "activateScene")) continue;
+      const actionableIntents = item.intents.filter((intent) => habitActionable(intent, aliasedDevices, this.scenes));
+      if (actionableIntents.length === 0) continue;
+      if (this.isGrokBallStageExpanded) {
+        if (!item.intents.every((intent) => aliasedDevices.some((entry) => entry.id === intent.targetId && entry.isOnline))) continue;
+        const stateByTarget = new Map<string, SmartDevice>();
+        let allReversible = true;
+        for (const intent of actionableIntents) {
+          const current = stateByTarget.get(intent.targetId) ?? aliasedDevices.find((entry) => entry.id === intent.targetId);
+          if (!current) {
+            allReversible = false;
+            break;
+          }
+          const check = this.isIntentReversibleOnDevice(intent, current);
+          if (!check.reversible) {
+            allReversible = false;
+            break;
+          }
+          stateByTarget.set(intent.targetId, check.nextDevice);
+        }
+        if (!allReversible) continue;
+      }
+      const candidate: AssistantSuggestion = { ...item, intents: actionableIntents };
+      if (result.some((existing) => JSON.stringify(existing.intents) === JSON.stringify(candidate.intents))) continue;
+      result.push(candidate);
+      if (result.length === 4) break;
+    }
+    return result;
   }
 
-  private renderProactiveStrip(): string {
-    const suggestions = this.currentProactiveSuggestions();
-    if (suggestions.length === 0) return "";
-    return `
-      <section class="cc-quick-strip">
-        ${suggestions
-          .map(
-            (item) => `
-          <button class="cc-quick-pill tint-cyan" data-proactive-id="${this.escapeHtml(item.id)}" title="${this.escapeHtml(item.title)}">
-            <span class="cc-quick-icon">${SF_ICONS.sparkles}</span>
-            <span>${this.escapeHtml(item.title)}</span>
-          </button>
-        `,
-          )
-          .join("")}
-      </section>`;
+  private syncGrokBallEmotion(): void {
+    const now = Date.now();
+    this.grokBall.setEmotion(resolveGrokBallEmotion({
+      timeBucket: timeBucketLabel(new Date(now).getHours()),
+      activeDeviceCount: this.activeDeviceCount,
+      speechListening: this.isListeningVoice,
+      assistantState: this.isResolvingIntent ? "thinking" : this.pendingSuggestions.length > 0 ? "awaitingChoice" : "idle",
+      isRecommending: this.isRefreshingProactive,
+      hasErrorToast: this.replyBanner?.isError === true || Boolean(this.haConnectionError),
+      isStageExpanded: this.isGrokBallStageExpanded,
+      isPointerTracking: now < this.grokBallPointerUntil,
+      hasRecentCelebration: now < this.grokBallCelebrationUntil,
+    }));
   }
 
+  private renderGrokBallStage(): string {
+    if (!this.isGrokBallStageExpanded) return "";
+    return `<section class="cc-grok-stage" aria-label="${t("猜你想控")}">
+      ${this.currentProactiveSuggestions().slice(0, 4).map((item) => `
+        <button class="cc-grok-pill" data-proactive-id="${this.escapeHtml(item.id)}" title="${this.escapeHtml(item.title)}">
+          ${this.escapeHtml(item.title)}</button>`).join("")}
+    </section>`;
+  }
+
+  private renderGrokBallSidebar(): string {
+    return `<aside class="cc-grok-sidebar" aria-label="${t("猜你想控")}">
+      <button class="cc-grok-toggle" id="btn-grok-ball" data-grok-toggle aria-label="${t("猜你想控")}" aria-expanded="${this.isGrokBallStageExpanded}"><span data-grok-slot></span></button>
+      ${this.renderGrokBallStage()}
+    </aside>`;
+  }
+
+  private setGrokBallStageExpanded(expanded: boolean): void {
+    if (this.isGrokBallStageExpanded === expanded) return;
+    this.isGrokBallStageExpanded = expanded;
+    this.applyPanelHeight();
+    if (window.__TAURI_INTERNALS__) {
+      void this.panelGeometryUpdates.then(() => this.render());
+    } else {
+      this.render();
+    }
+  }
+
+  /**
+   * Silent background AI refresh for proactive suggestions (#113): fires only when the
+   * time bucket or room climate changed, never blocks the panel, never asks for consent,
+   * and keeps the previous cache when the request fails.
+   */
   private maybeRefreshProactiveInBackground(): void {
     if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
     if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
@@ -2157,6 +2288,7 @@ export class MenuMijiaWindowsApp {
       if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
     }
     const sourceRevision = this.sourceRevision;
+    const selectedHomeId = this.settings.selectedHomeId;
     this.isRefreshingProactive = true;
     const resolver = new ModelIntentResolver(
       { baseURL, model: this.settings.assistantModel, apiKey },
@@ -2180,7 +2312,7 @@ export class MenuMijiaWindowsApp {
         }),
       )
       .then((suggestions) => {
-        if (sourceRevision !== this.sourceRevision) return;
+        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
         this.isRefreshingProactive = false;
         if (this.proactiveSignature() === signature) {
           // The context counts as served only once a usable result landed (Codex #116 review).
@@ -2196,7 +2328,7 @@ export class MenuMijiaWindowsApp {
         }
       })
       .catch(() => {
-        if (sourceRevision !== this.sourceRevision) return;
+        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
         // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
         this.isRefreshingProactive = false;
         this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
@@ -2212,6 +2344,9 @@ export class MenuMijiaWindowsApp {
     this.aiProactiveSignature = null;
     this.isRefreshingProactive = false;
     this.proactiveRetryAfterMs = null;
+    this.isGrokBallStageExpanded = false;
+    this.grokBallCelebrationUntil = 0;
+    this.applyPanelHeight();
     this.haConnectionError = null;
     this.lastUndoAction = null;
     this.pendingCloudConsent = null;
@@ -2301,6 +2436,7 @@ export class MenuMijiaWindowsApp {
           if (k.kind === "light" && k.entityId === command.entityId) {
             k.isOn = true;
             k.colorTempKelvin = command.kelvin;
+            k.currentEffect = null;
           }
           break;
         case "setLightEffect":
@@ -2623,7 +2759,11 @@ export class MenuMijiaWindowsApp {
     const sheetScrollTop = this.root.querySelector(".cc-sheet")?.scrollTop ?? 0;
 
     this.pendingCloudRender = false;
+    this.grokBall.prepareMove();
     this.renderNow();
+    const grokSlot = this.root.querySelector<HTMLElement>("[data-grok-slot]");
+    if (grokSlot) this.grokBall.mount(grokSlot, this.grokBall.element.dataset.emotion ?? "02");
+    this.syncGrokBallEmotion();
 
     const area = this.root.querySelector(".cc-scroll-area");
     if (area) area.scrollTop = scrollTop;
@@ -2687,14 +2827,15 @@ export class MenuMijiaWindowsApp {
         : null;
     const scheme = this.effectiveAppearance;
     this.root.dataset.scheme = scheme;
+    this.root.classList.toggle("is-grok-expanded", this.isGrokBallStageExpanded);
+    this.root.classList.toggle("is-native-host", Boolean(window.__TAURI_INTERNALS__));
+    this.root.dataset.grokSide = this.grokBallOnLeft ? "left" : "right";
     const popoverClass = `cc-popover skin-${this.skin} scheme-${scheme} ${this.skin === "classic" ? "" : "is-skinned"} ${this.isEditingLayout ? "is-editing" : ""}`.trim();
     const innerContent = `
         <header class="cc-header">
           <div class="cc-header-top">
             <div class="cc-title-group">
-              <div class="cc-home-badge ${this.activeDeviceCount > 0 ? "is-active" : ""}">
-                ${SF_ICONS.houseFill}
-              </div>
+              <div class="cc-home-emblem" aria-hidden="true">${SF_ICONS.houseFill}</div>
               <div class="cc-title-stack">
                 <div class="cc-title-row">
                   ${
@@ -2706,7 +2847,7 @@ export class MenuMijiaWindowsApp {
                       : `<span class="cc-home-title">${this.escapeHtml(this.homeTitle)}</span>`
                   }
                   <span class="cc-mode-pill ${isDemo ? "is-demo" : "is-cloud"}">
-                    ${isDemo ? t("演示预览") : t("Miot 直连")}
+                    ${isDemo ? t("演示预览") : this.settings.connectionMode === "homeAssistant" ? "Home Assistant" : t("Miot 直连")}
                   </span>
                 </div>
                 <div class="cc-subtitle">${this.escapeHtml(this.isEditingLayout ? t("拖动卡片排序 · 点右下角圆弧手柄改大小") : this.statusSummaryText)}</div>
@@ -2876,7 +3017,6 @@ export class MenuMijiaWindowsApp {
           ${this.settings.connectionMode === "homeAssistant" ? this.scenes.map((scene) => `<button class="cc-quick-pill tint-blue" data-ha-scene="${this.escapeHtml(scene.id)}"><span class="cc-quick-icon">${SF_ICONS.sparkles}</span><span>${this.escapeHtml(scene.name)}</span></button>`).join("") : ""}
         </section>
 
-        ${this.renderProactiveStrip()}
 
         <div class="cc-room-bar">
           <div class="cc-room-track">
@@ -2994,6 +3134,8 @@ export class MenuMijiaWindowsApp {
     } else {
       this.root.innerHTML = `<div class="${popoverClass}">${innerContent}</div>`;
     }
+    this.root.querySelector(":scope > .cc-grok-sidebar")?.remove();
+    this.root.insertAdjacentHTML("beforeend", this.renderGrokBallSidebar());
 
     this.bindEvents();
   }
@@ -4454,6 +4596,11 @@ export class MenuMijiaWindowsApp {
   }
 
   private bindEvents(): void {
+    this.root.querySelectorAll<HTMLElement>("[data-grok-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        this.setGrokBallStageExpanded(!this.isGrokBallStageExpanded);
+      });
+    });
     const inputEl = this.root.querySelector<HTMLInputElement>("#command-input");
     const sendBtn = this.root.querySelector<HTMLButtonElement>("#btn-send");
     const micBtn = this.root.querySelector<HTMLButtonElement>("#btn-mic");
@@ -4830,6 +4977,8 @@ export class MenuMijiaWindowsApp {
         const aliasedDevices = withAliases(this.layout, this.devices);
         const intents = IntentValidator.sanitize(suggestion.intents, aliasedDevices, this.scenes);
         if (intents.length === 0) return;
+        this.isShowingAssistantBar = true;
+        this.setGrokBallStageExpanded(false);
         void this.executeIntents(intents, IntentReply.describe(intents, aliasedDevices, this.scenes), t("猜你想控"), { recordHabits: true });
       });
     });
@@ -5680,6 +5829,7 @@ export class MenuMijiaWindowsApp {
   /** Drop-in animation each time the tray popover is shown. */
   private bindOpenAnimation(): void {
     const play = () => {
+      this.applyPanelHeight();
       this.root.classList.remove("is-opening");
       void this.root.offsetWidth;
       this.root.classList.add("is-opening");
@@ -5710,8 +5860,18 @@ export class MenuMijiaWindowsApp {
   }
 
   private applyPanelHeight(): void {
-    const h = PANEL_HEIGHTS.find((x) => x.id === this.settings.panelHeight) ?? PANEL_HEIGHTS[1]!;
-    invokeTauriVoid("set_panel_height", { height: h.px });
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    this.panelGeometryUpdates = this.panelGeometryUpdates.then(async () => {
+      const h = PANEL_HEIGHTS.find((item) => item.id === this.settings.panelHeight) ?? PANEL_HEIGHTS[1]!;
+      const side = await invoke<boolean>("set_panel_height", {
+        height: h.px, expanded: this.isGrokBallStageExpanded, sideLeft: this.grokBallOnLeft,
+      });
+      if (typeof side === "boolean") {
+        this.grokBallOnLeft = side;
+        this.root.dataset.grokSide = side ? "left" : "right";
+      }
+    }).catch((error: unknown) => console.error("Panel geometry update failed", error));
   }
 
   /** The saved API key, only when it was saved for this server (#19). */

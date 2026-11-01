@@ -10,6 +10,14 @@ extension HomeStore {
         setAssistantState(.idle)
         pendingCloudConsent = nil
         assistantSuggestions = []
+        aiProactiveSuggestions = nil
+        proactiveRefreshTask?.cancel()
+        proactiveRefreshTask = nil
+        isProactiveRecommending = false
+        proactiveRetryEarliest = nil
+        isGrokBallStageExpanded = false
+        grokBallCelebrationTask?.cancel()
+        grokBallCelebrationUntil = nil
         optimisticLockUntil.removeAll()
         // A different home is a different suggestion context even at the same ambient signature (Codex #116 review).
         lastProactiveRefreshSignature = nil
@@ -24,7 +32,7 @@ extension HomeStore {
         Task {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
-                recordManualHabits(intents: [.init(targetId: scene.id, operation: .activateScene)])
+                confirmManualControl(intents: [.init(targetId: scene.id, operation: .activateScene)])
                 showToast(L10n.tr("已触发场景：\(scene.name)", "Activated scene: \(scene.name)"))
                 return true
             } catch {
@@ -40,7 +48,7 @@ extension HomeStore {
         recordsHabits: Bool = true
     ) {
         let previousSnapshot = devices
-        var commands: [DeviceCommand] = []
+        var commands: [(deviceId: String, command: DeviceCommand)] = []
         var restoreCommands: [DeviceCommand] = []
         var affectedDeviceIds: Set<String> = []
         var habitIntents: [DeviceIntent] = []
@@ -49,10 +57,11 @@ extension HomeStore {
         case .lightsOff:
             for idx in devices.indices where devices[idx].isOnline {
                 guard case .light(var s) = devices[idx].kind, s.isOn else { continue }
-                affectedDeviceIds.insert(devices[idx].id)
-                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
-                lockOptimistic(devices[idx].id, duration: .seconds(3.0))
-                commands.append(.setLightPower(entityId: s.entityId, isOn: false))
+                let deviceId = devices[idx].id
+                affectedDeviceIds.insert(deviceId)
+                habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
+                lockOptimistic(deviceId, duration: .seconds(3.0))
+                commands.append((deviceId, .setLightPower(entityId: s.entityId, isOn: false)))
                 restoreCommands.append(.setLightPower(entityId: s.entityId, isOn: true))
                 s.isOn = false
                 devices[idx].kind = .light(s)
@@ -82,15 +91,16 @@ extension HomeStore {
             }
             for idx in targetIndices {
                 guard case .light(var s) = devices[idx].kind else { continue }
-                affectedDeviceIds.insert(devices[idx].id)
-                habitIntents.append(.init(targetId: devices[idx].id, operation: .brightness(15)))
-                habitIntents.append(.init(targetId: devices[idx].id, operation: .colorTemperature(max(s.minKelvin, 2700))))
-                lockOptimistic(devices[idx].id, duration: .seconds(3.0))
+                let deviceId = devices[idx].id
+                affectedDeviceIds.insert(deviceId)
+                habitIntents.append(.init(targetId: deviceId, operation: .brightness(15)))
+                habitIntents.append(.init(targetId: deviceId, operation: .colorTemperature(max(s.minKelvin, 2700))))
+                lockOptimistic(deviceId, duration: .seconds(3.0))
                 let prevOn = s.isOn
                 let prevBri = s.brightnessPercent ?? 80
                 let prevKelvin = s.colorTempKelvin ?? 4000
-                commands.append(.setLightBrightness(entityId: s.entityId, percent: 15))
-                commands.append(.setLightColorTemp(entityId: s.entityId, kelvin: max(s.minKelvin, 2700)))
+                commands.append((deviceId, .setLightBrightness(entityId: s.entityId, percent: 15)))
+                commands.append((deviceId, .setLightColorTemp(entityId: s.entityId, kelvin: max(s.minKelvin, 2700))))
                 if prevOn {
                     restoreCommands.append(.setLightBrightness(entityId: s.entityId, percent: prevBri))
                     restoreCommands.append(.setLightColorTemp(entityId: s.entityId, kelvin: prevKelvin))
@@ -106,22 +116,23 @@ extension HomeStore {
 
         case .climateSleepOff:
             for idx in devices.indices where devices[idx].isOnline {
+                let deviceId = devices[idx].id
                 switch devices[idx].kind {
                 case .climate(var s) where s.isOn && s.hvacMode != "off":
                     let prevMode = s.hvacMode
-                    affectedDeviceIds.insert(devices[idx].id)
-                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
-                    lockOptimistic(devices[idx].id, duration: .seconds(3.0))
-                    commands.append(.setClimatePower(entityId: s.entityId, isOn: false, fallbackMode: prevMode))
+                    affectedDeviceIds.insert(deviceId)
+                    habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
+                    lockOptimistic(deviceId, duration: .seconds(3.0))
+                    commands.append((deviceId, .setClimatePower(entityId: s.entityId, isOn: false, fallbackMode: prevMode)))
                     restoreCommands.append(.setClimatePower(entityId: s.entityId, isOn: true, fallbackMode: prevMode))
                     s.isOn = false
                     s.hvacMode = "off"
                     devices[idx].kind = .climate(s)
                 case .fan(var s) where s.isOn:
-                    affectedDeviceIds.insert(devices[idx].id)
-                    habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
-                    lockOptimistic(devices[idx].id, duration: .seconds(3.0))
-                    commands.append(.setFanPower(entityId: s.entityId, isOn: false))
+                    affectedDeviceIds.insert(deviceId)
+                    habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
+                    lockOptimistic(deviceId, duration: .seconds(3.0))
+                    commands.append((deviceId, .setFanPower(entityId: s.entityId, isOn: false)))
                     restoreCommands.append(.setFanPower(entityId: s.entityId, isOn: true))
                     s.isOn = false
                     devices[idx].kind = .fan(s)
@@ -148,19 +159,20 @@ extension HomeStore {
 
         let context = controlContextID
         Task {
-            var didFail = false
-            for cmd in commands {
+            var failedDeviceIds: Set<String> = []
+            for item in commands {
                 guard context == controlContextID else { return }
                 do {
-                    try await executeDeviceCommand(cmd)
+                    try await executeDeviceCommand(item.command)
                 } catch {
-                    didFail = true
+                    failedDeviceIds.insert(item.deviceId)
                 }
             }
             // Habits train only on confirmed success, and only while the banner this action
             // created is still the live one (an undo or expiry cancels the learning) (#113).
-            guard context == controlContextID, !didFail, recordsHabits, undoBanner?.id == bannerId else { return }
-            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
+            let succeededIntents = habitIntents.filter { !failedDeviceIds.contains($0.targetId) }
+            guard context == controlContextID, !succeededIntents.isEmpty, recordsHabits, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = confirmManualControl(intents: succeededIntents)
         }
     }
 
@@ -243,18 +255,19 @@ extension HomeStore {
         }
 
         let previousSnapshot = devices
-        var offCommands: [DeviceCommand] = []
+        var offCommands: [(deviceId: String, command: DeviceCommand)] = []
         var restoreCommands: [DeviceCommand] = []
         var habitIntents: [DeviceIntent] = []
 
         for idx in devices.indices where targetIds.contains(devices[idx].id) {
             guard let change = Self.allOffChange(for: devices[idx]) else { continue }
+            let deviceId = devices[idx].id
             // A vacuum returning home has no power op, so it executes but does not train a habit (#113).
             if UserHabitMemory.isPowerToggleable(devices[idx]) {
-                habitIntents.append(.init(targetId: devices[idx].id, operation: .power(false)))
+                habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
             }
-            lockOptimistic(devices[idx].id, duration: .seconds(3.0))
-            offCommands.append(change.off)
+            lockOptimistic(deviceId, duration: .seconds(3.0))
+            offCommands.append((deviceId, change.off))
             restoreCommands.append(change.restore)
             devices[idx].kind = change.kind
         }
@@ -270,18 +283,19 @@ extension HomeStore {
 
         let context = controlContextID
         Task {
-            var didFail = false
-            for cmd in offCommands {
+            var failedDeviceIds: Set<String> = []
+            for item in offCommands {
                 guard context == controlContextID else { return }
                 do {
-                    try await executeDeviceCommand(cmd)
+                    try await executeDeviceCommand(item.command)
                 } catch {
-                    didFail = true
+                    failedDeviceIds.insert(item.deviceId)
                 }
             }
             // Habits train only on confirmed success while this action's banner is live (#113).
-            guard context == controlContextID, !didFail, undoBanner?.id == bannerId else { return }
-            undoBanner?.habitReceipt = recordManualHabits(intents: habitIntents)
+            let succeededIntents = habitIntents.filter { !failedDeviceIds.contains($0.targetId) }
+            guard context == controlContextID, !succeededIntents.isEmpty, undoBanner?.id == bannerId else { return }
+            undoBanner?.habitReceipt = confirmManualControl(intents: succeededIntents)
         }
     }
 

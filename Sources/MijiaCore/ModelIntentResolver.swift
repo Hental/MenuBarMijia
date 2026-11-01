@@ -777,9 +777,18 @@ public struct ModelIntentResolver: Sendable {
                 devices: devices,
                 scenes: scenes
             )
-            guard let primary = ops.first,
-                  let title = UserHabitMemory.suggestionTitle(for: primary, devices: devices, scenes: scenes) else {
+            guard ops.contains(where: { UserHabitMemory.isActionable($0, devices: devices, scenes: scenes) }),
+                  let primary = ops.first,
+                  let firstTitle = UserHabitMemory.suggestionTitle(for: primary, devices: devices, scenes: scenes) else {
                 continue
+            }
+            let title: String
+            if ops.count >= 2,
+               case .hvacMode = ops[0].operation,
+               case .targetTemperature(let celsius) = ops[1].operation {
+                title = "\(firstTitle) · \(L10n.temperature(celsius))"
+            } else {
+                title = firstTitle
             }
             let pct = max(18, min(99, Int((chosenProb * 100).rounded())))
             scored.append((

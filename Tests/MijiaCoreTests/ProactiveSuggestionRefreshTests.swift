@@ -46,11 +46,11 @@ struct ProactiveSuggestionRefreshTests {
         [EnvironmentReading(id: "r1", label: "温湿度计", roomName: "客厅", temperature: temperature, humidity: 60)]
     }
 
-    private func makeStore(temperature: Double = 29.5) async throws -> (HomeStore, MockHomeProvider) {
+    private func makeStore(temperature: Double = 29.5, scenes: [HomeScene] = [], extraDevices: [SmartDevice] = []) async throws -> (HomeStore, MockHomeProvider) {
         let snapshot = SynthesizedHome(
-            devices: [Self.ceiling, Self.floorLamp, Self.deskLamp, Self.ac, Self.plug],
+            devices: [Self.ceiling, Self.floorLamp, Self.deskLamp, Self.ac, Self.plug] + extraDevices,
             environmentReadings: Self.readings(temperature: temperature),
-            scenes: []
+            scenes: scenes
         )
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.proactive.refresh.\(UUID().uuidString)")
@@ -211,5 +211,126 @@ struct ProactiveSuggestionRefreshTests {
 
         #expect(store.assistantSuggestions == pinned)
         #expect(store.assistantState == .awaitingChoice("选一个"))
+    }
+
+    @Test("Clicking GrokBall expands the radial stage with 4 surrounding items, and applying one executes with an undo banner")
+    func grokBallStageExpandAndApply() async throws {
+        let (store, mock) = try await makeStore()
+        #expect(store.isGrokBallStageExpanded == false)
+
+        store.toggleGrokBallStage()
+        #expect(store.isGrokBallStageExpanded == true)
+
+        let radial = store.grokBallRadialSuggestions
+        #expect(radial.count == 4)
+        #expect(radial.map(\.slot) == GrokBallRadialSlot.allCases)
+        #expect(store.grokBallEmotionId(speechListening: false, isPointerTracking: false) == "03")
+
+        let first = try #require(radial.first?.suggestion)
+        await store.applyGrokBallSuggestion(first)
+
+        #expect(store.isGrokBallStageExpanded == false)
+        let executed = await mock.executedCommands
+        #expect(!executed.isEmpty)
+        #expect(store.undoBanner != nil, "executing a radial proactive suggestion must show an undo banner")
+        #expect(store.grokBallEmotionId(speechListening: false, isPointerTracking: false) == "33")
+    }
+
+    @Test("Toggling GrokBall again or dismissing collapses the stage")
+    func grokBallStageDismiss() async throws {
+        let (store, _) = try await makeStore()
+        store.presentGrokBallStage()
+        #expect(store.isGrokBallStageExpanded == true)
+
+        store.dismissGrokBallStage()
+        #expect(store.isGrokBallStageExpanded == false)
+    }
+
+    @Test("A successful manual card control celebrates with 33, and an error toast shows 34")
+    func grokBallReactsToManualControls() async throws {
+        let (store, _) = try await makeStore()
+        store.isHabitLearningEnabled = false
+
+        _ = await store.togglePrimary(Self.deskLamp)?.value
+        #expect(store.grokBallEmotionId(speechListening: false, isPointerTracking: false) == "33",
+                "celebration does not depend on habit learning")
+
+        store.grokBallCelebrationUntil = nil
+        store.showToast("出错了", isError: true)
+        #expect(store.grokBallEmotionId(speechListening: false, isPointerTracking: false) == "34")
+    }
+
+    @Test("Radial stage fills a short model cache and drops actions already reached")
+    func grokBallPadsShortCache() async throws {
+        let (store, _) = try await makeStore()
+        let redundant = AssistantSuggestion(id: "stale", title: "开灯", intents: [
+            DeviceIntent(targetId: Self.ceiling.id, operation: .power(true))
+        ])
+        store.setPreviewState(assistantState: .idle, suggestions: [redundant])
+        let items = store.grokBallRadialSuggestions
+        #expect(items.count == 4)
+        #expect(items.allSatisfy { $0.suggestion.id != redundant.id })
+    }
+
+    @Test("Scene habits keep their normal entry point but never enter the reversible radial stage")
+    func grokBallExcludesSceneActions() async throws {
+        let scene = HomeScene(id: "scene.movie", name: "观影", entityId: "scene.movie")
+        let (store, _) = try await makeStore(scenes: [scene])
+        let suggestion = AssistantSuggestion(id: "scene", title: scene.name, intents: [
+            DeviceIntent(targetId: scene.id, operation: .activateScene)
+        ])
+        store.setPreviewState(assistantState: .idle, suggestions: [suggestion])
+        let radial = store.grokBallRadialSuggestions
+        #expect(radial.count == 4)
+        #expect(radial.allSatisfy { $0.suggestion.intents.allSatisfy { $0.targetId != scene.id } })
+        #expect(store.scenes.contains { $0.id == scene.id })
+    }
+
+    @Test("Unknown prior modes and momentary buttons cannot claim reversible radial actions")
+    func grokBallRequiresConcreteInverse() async throws {
+        let climate = SmartDevice(id: "unknown_ac", name: "空调", roomId: "room", roomName: "房间", model: "ac", isOnline: true,
+            kind: .climate(ClimateSpec(entityId: "climate.unknown", isOn: true, hvacMode: "cool", availableModes: ["off", "cool"], targetTemperature: 25, availableFanModes: ["low", "high"])))
+        let button = SmartDevice(id: "wake", name: "唤醒", roomId: "room", roomName: "房间", model: "button", isOnline: true,
+            kind: .plug(PlugSpec(switchEntityId: "button.wake", isOn: false)))
+        let (store, _) = try await makeStore(extraDevices: [climate, button])
+        let fan = DeviceIntent(targetId: climate.id, operation: .fanSpeed("high"))
+        let press = DeviceIntent(targetId: button.id, operation: .power(true))
+        store.setPreviewState(assistantState: .idle, suggestions: [
+            AssistantSuggestion(id: "unknown", title: "风速", intents: [fan]),
+            AssistantSuggestion(id: "momentary", title: "唤醒", intents: [press])
+        ])
+        let radial = store.grokBallRadialSuggestions
+        #expect(radial.count == 4)
+        #expect(!radial.contains { $0.suggestion.intents.contains(fan) || $0.suggestion.intents.contains(press) })
+    }
+
+    @Test("Compound radial actions restore intermediate light modes in reverse order")
+    func grokBallCompoundUndoRestoresOriginalMode() async throws {
+        let light = SmartDevice(id: "effect_light", name: "灯", roomId: "room", roomName: "房间", model: "light", isOnline: true,
+            kind: .light(LightSpec(entityId: "light.effect", isOn: true, brightnessPercent: 80,
+                colorTempKelvin: 4000, currentEffect: "Day", availableEffects: ["Day", "Night"])))
+        let (store, _) = try await makeStore(extraDevices: [light])
+        let suggestion = AssistantSuggestion(id: "compound", title: "切换夜灯", intents: [
+            DeviceIntent(targetId: light.id, operation: .power(false)),
+            DeviceIntent(targetId: light.id, operation: .lightEffect("Night"))
+        ])
+        store.setPreviewState(assistantState: .idle, suggestions: [suggestion])
+        #expect(store.grokBallRadialSuggestions.contains { $0.suggestion.id == suggestion.id })
+        await store.applyGrokBallSuggestion(suggestion)
+        await store.runAssistantCommand("撤销")
+        #expect(store.devices.first { $0.id == light.id }?.kind == light.kind)
+    }
+
+    @Test("Radial stage keeps compound hvac+temperature suggestions when mode is already active")
+    func grokBallKeepsPartiallyActionableCompoundClimateSuggestion() async throws {
+        let (store, _) = try await makeStore()
+        // Self.ac is already on in cool @ 25°C; cool_26 has redundant hvacMode("cool") + actionable targetTemperature(26).
+        let compound = AssistantSuggestion(id: "proactive:dev_ac:cool_26", title: "客厅空调·制冷模式 · 26°C", intents: [
+            DeviceIntent(targetId: Self.ac.id, operation: .hvacMode("cool")),
+            DeviceIntent(targetId: Self.ac.id, operation: .targetTemperature(26))
+        ])
+        store.setPreviewState(assistantState: .idle, suggestions: [compound])
+        let matched = try #require(store.grokBallRadialSuggestions.first { $0.suggestion.id == compound.id })
+        #expect(matched.suggestion.intents == [DeviceIntent(targetId: Self.ac.id, operation: .targetTemperature(26))])
     }
 }

@@ -1509,6 +1509,8 @@ export interface HabitSequenceChange {
   readonly operationKey: string;
   /** `null` means the transition was inserted by the call and should be removed on undo. */
   readonly previousCount: number | null;
+  /** The recency metadata the transition carried before the call. */
+  readonly previousLastRecordedAtMs?: number | null;
   /** True when capacity trimming removed the just-inserted transition; undo must not resurrect it. */
   insertedButTrimmed?: boolean;
 }
@@ -1714,6 +1716,7 @@ export class UserHabitMemory {
             targetId: intent.targetId,
             operationKey: intent.operationKey,
             previousCount: this.sequences[idx]!.count,
+            previousLastRecordedAtMs: this.sequences[idx]!.lastRecordedAtMs ?? null,
           });
           this.sequences[idx]!.count += 1;
           this.sequences[idx]!.lastRecordedAtMs = nowMs;
@@ -1723,6 +1726,7 @@ export class UserHabitMemory {
             targetId: intent.targetId,
             operationKey: intent.operationKey,
             previousCount: null,
+            previousLastRecordedAtMs: null,
           });
           this.sequences.push({
             afterKey,
@@ -1780,17 +1784,19 @@ export class UserHabitMemory {
       if (idx >= 0) {
         if (change.previousCount !== null) {
           this.sequences[idx]!.count = change.previousCount;
+          this.sequences[idx]!.lastRecordedAtMs = change.previousLastRecordedAtMs ?? undefined;
         } else {
           this.sequences.splice(idx, 1);
         }
-      } else if (change.previousCount === null && change.insertedButTrimmed !== true) {
+      } else if (change.insertedButTrimmed !== true) {
         // A capacity-trimmed pre-existing transition still comes back on undo; a transition
         // that was trimmed on insertion never existed for the user (Codex #116 re-review).
         this.sequences.push({
           afterKey: change.afterKey,
           targetId: change.targetId,
           operationKey: change.operationKey,
-          count: 1,
+          count: change.previousCount ?? 1,
+          lastRecordedAtMs: change.previousLastRecordedAtMs ?? undefined,
         });
       }
     }
@@ -1954,6 +1960,17 @@ export class UserHabitMemory {
         backfillTargets.add(dev.id);
         append(`active:${dev.id}:off`, title, [intent]);
       }
+    }
+
+    // An all-off home still needs useful choices before it has learned any habits (#114).
+    for (const dev of devices) {
+      if (results.length >= limit) break;
+      if (!dev.isOnline || seenTargets.has(dev.id) || !isPowerToggleable(dev)) continue;
+      const intent: DeviceIntent = { targetId: dev.id, operation: { kind: "power", isOn: !isDeviceActiveOn(dev) } };
+      const title = habitSuggestionTitle(intent, devices, scenes);
+      if (!habitActionable(intent, devices, scenes) || title === null) continue;
+      seenTargets.add(dev.id);
+      append(`available:${dev.id}:${isDeviceActiveOn(dev) ? "off" : "on"}`, title, [intent]);
     }
 
     return results;
@@ -2402,10 +2419,16 @@ export function proactiveSuggestionsFromSystemOne(
       devices,
       scenes,
     );
+    if (!ops.some((intent) => habitActionable(intent, devices, scenes))) continue;
     const primary = ops[0];
     if (!primary) continue;
-    const title = habitSuggestionTitle(primary, devices, scenes);
-    if (title === null) continue;
+    const firstTitle = habitSuggestionTitle(primary, devices, scenes);
+    if (firstTitle === null) continue;
+    const second = ops[1];
+    const title =
+      primary.operation.kind === "hvacMode" && second?.operation.kind === "targetTemperature"
+        ? `${firstTitle} · ${formatTemperatureValue(second.operation.celsius)}°C`
+        : firstTitle;
     scored.push({
       prob: chosenProb,
       suggestion: {
@@ -2888,4 +2911,45 @@ export class ModelIntentResolver {
     if (status >= 500) return `AI 服务端暂时不可用 (HTTP ${status})`;
     return `AI 请求失败 (HTTP ${status})`;
   }
+}
+
+// MARK: - GrokBall Emotion & Radial Stage Contract (#114)
+
+export type GrokBallRadialSlot = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+
+export const GROK_BALL_RADIAL_SLOTS: readonly GrokBallRadialSlot[] = [
+  "topLeft",
+  "topRight",
+  "bottomLeft",
+  "bottomRight",
+];
+
+export type GrokBallAssistantPhase = "idle" | "thinking" | "done" | "failed" | "awaitingChoice";
+
+export interface GrokBallEmotionContext {
+  readonly timeBucket: string;
+  readonly activeDeviceCount: number;
+  readonly speechListening: boolean;
+  readonly assistantState: GrokBallAssistantPhase;
+  readonly isRecommending?: boolean;
+  readonly hasErrorToast?: boolean;
+  readonly isPointerTracking?: boolean;
+  readonly isStageExpanded?: boolean;
+  readonly hasRecentCelebration?: boolean;
+}
+
+/**
+ * Pure, deterministic state mapper from home & assistant lifecycle to `TyCoding/grok-ball` `emotionId`.
+ * Shared with `Sources/MijiaCore/GrokBallEmotionResolver.swift` and pinned by `Tests/Fixtures/grok_ball_golden.json` (#114).
+ */
+export function resolveGrokBallEmotion(ctx: GrokBallEmotionContext): string {
+  if (ctx.speechListening) return "35";
+  if (ctx.assistantState === "thinking" || ctx.isRecommending === true) return "30";
+  if (ctx.hasErrorToast === true || ctx.assistantState === "failed") return "34";
+  if (ctx.hasRecentCelebration === true || ctx.assistantState === "done") return "33";
+  if (ctx.assistantState === "awaitingChoice" || ctx.isStageExpanded === true || ctx.isPointerTracking === true) {
+    return "03";
+  }
+  if (ctx.timeBucket === "深夜" && ctx.activeDeviceCount === 0) return "00";
+  return "02";
 }

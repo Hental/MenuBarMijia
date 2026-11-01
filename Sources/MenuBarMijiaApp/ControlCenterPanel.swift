@@ -59,7 +59,6 @@ public struct ControlCenterPanel: View {
     public init(store: HomeStore) {
         self.store = store
     }
-
     public var body: some View {
         let _ = (store.effectiveLanguage, store.selectedRoomId, store.rooms.count)
         ZStack(alignment: .bottom) {
@@ -187,12 +186,6 @@ public struct ControlCenterPanel: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
                     .transition(AppleMotion.drawerTransition)
-            }
-
-            if store.showQuickActionsBar {
-                quickActionsAndScenesBar
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
             }
 
             if let suggestion = store.pendingHAAddressSuggestion {
@@ -994,22 +987,14 @@ public struct ControlCenterPanel: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .center, spacing: 9) {
                 Image(systemName: "house.fill")
-                    .font(.system(size: DesignTokens.TypeSize.title, weight: .semibold))
+                    .font(.system(size: DesignTokens.TypeSize.title, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 34, height: 34)
                     .background(
-                        Circle().fill(
-                            LinearGradient(
-                                colors: [
-                                    DesignTokens.Brand.homeTop,
-                                    DesignTokens.Brand.homeBottom
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
+                        LinearGradient(colors: [.orange, DesignTokens.active],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: Circle()
                     )
-                    .shadow(color: Color.orange.opacity(0.35), radius: 4, y: 1)
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
@@ -1264,67 +1249,6 @@ public struct ControlCenterPanel: View {
             "全屋设备待机， \(store.onlineDeviceCount) 台实时在线",
             "All standby, \(store.onlineDeviceCount) online"
         )
-    }
-
-    // MARK: - 1B. Quick Actions & HA Scenes Strip
-
-    /// Scene strip: equal-width glass pills, four across when there are four or fewer.
-    private var quickActionsAndScenesBar: some View {
-        let itemCount = QuickAction.allCases.count + store.scenes.count
-        return Group {
-            if itemCount <= 4 {
-                scenePillRow(expand: true)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    scenePillRow(expand: false)
-                        .horizontalWheelScroll()
-                }
-            }
-        }
-    }
-
-    private func scenePillRow(expand: Bool) -> some View {
-        HStack(spacing: 6) {
-            ForEach(QuickAction.allCases) { action in
-                Button {
-                    withAnimation(AppleMotion.snappySpring) {
-                        store.executeQuickAction(action)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: action.sfSymbolName)
-                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
-                            .foregroundStyle(ScenePalette.tint(for: action.visualCategory))
-                        Text(action.title)
-                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(PillActionButtonStyle())
-                .frame(maxWidth: expand ? .infinity : nil)
-            }
-
-            ForEach(store.scenes) { scene in
-                Button {
-                    withAnimation(AppleMotion.snappySpring) {
-                        _ = store.triggerScene(scene)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: scene.iconName)
-                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
-                            .foregroundStyle(ScenePalette.tint(for: scene.visualCategory))
-                        Text(scene.name)
-                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(PillActionButtonStyle())
-                .frame(maxWidth: expand ? .infinity : nil)
-            }
-        }
     }
 
     // MARK: - 2. Room Filter Strip & Grid Toggle

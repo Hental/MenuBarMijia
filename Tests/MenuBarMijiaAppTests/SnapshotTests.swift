@@ -361,7 +361,6 @@ private struct SnapshotFixture {
         defaults.set(true, forKey: "has_completed_onboarding")
         defaults.set(AppLanguagePreference.zhHans.rawValue, forKey: "app_language")
         defaults.set(TemperatureUnitPreference.celsius.rawValue, forKey: TemperatureUnitPreference.storageKey)
-        defaults.set(false, forKey: "show_quick_actions_bar")
         // The panel's `.task` checks for updates; keep the snapshot offline and deterministic.
         defaults.set(false, forKey: "automatically_checks_for_updates")
 

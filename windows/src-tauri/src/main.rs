@@ -1055,25 +1055,46 @@ fn set_pin_popover(pin: bool) {
     PIN_POPOVER.store(pin, Ordering::SeqCst);
 }
 
-/// Resizes the popover to the chosen panel height (0 = fill the screen above the taskbar),
-/// keeping its bottom edge where it was so it stays anchored to the tray.
+static GROK_SIDE_LEFT: AtomicBool = AtomicBool::new(false);
+
+fn panel_sidecar_on_left(room_left: f64, room_right: f64, scale: f64) -> bool {
+    if room_right >= (232.0 + 20.0) * scale {
+        false
+    } else if room_left >= (232.0 + 12.0) * scale {
+        true
+    } else {
+        room_left > room_right
+    }
+}
+
+/// Keep the main card column fixed while reserving space for the side-mounted assistant.
 #[tauri::command]
-fn set_panel_height(app: AppHandle, height: f64) {
-    let Some(window) = app.get_webview_window("main") else { return };
+fn set_panel_height(app: AppHandle, height: f64, expanded: bool, side_left: bool) -> bool {
+    let Some(window) = app.get_webview_window("main") else { return side_left };
     let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
     let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
     let screen_h = monitor.as_ref().map(|m| m.size().height as f64 / scale).unwrap_or(900.0);
     let max_h = (screen_h - 54.0 - 24.0).max(480.0);
-    let target = if height <= 0.0 { max_h } else { height.min(max_h) };
-
+    let target_h = if height <= 0.0 { max_h } else { height.min(max_h) };
     let old_pos = window.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
     let old_size = window.outer_size().unwrap_or(PhysicalSize::new(480, 520));
-    let width = old_size.width as f64 / scale;
-    let _ = window.set_size(tauri::LogicalSize::new(width, target));
-    let new_h = (target * scale) as i32;
+    let main_width = 472.0 * scale;
+    let main_x = old_pos.x as f64 + if side_left { (old_size.width as f64 - main_width - 8.0 * scale).max(0.0) } else { 0.0 };
+    let left = monitor.as_ref().map(|m| m.position().x as f64).unwrap_or(0.0) + 12.0 * scale;
+    let right = monitor.as_ref().map(|m| (m.position().x as f64) + m.size().width as f64).unwrap_or(1920.0 * scale) - 12.0 * scale;
+    let room_right = right - main_x - main_width;
+    let room_left = main_x - left;
+    let on_left = panel_sidecar_on_left(room_left, room_right, scale);
+    let rail_width: f64 = if expanded { 232.0 } else { 84.0 };
+    let target_w = (472.0 + rail_width + 20.0).min((right - left) / scale);
+    let desired_x = main_x - if on_left { (rail_width + 12.0) * scale } else { 0.0 };
+    let x = desired_x.clamp(left, (right - target_w * scale).max(left));
     let top = monitor.as_ref().map(|m| m.position().y).unwrap_or(0) + (12.0 * scale) as i32;
-    let y = (old_pos.y + old_size.height as i32 - new_h).max(top);
-    let _ = window.set_position(PhysicalPosition::new(old_pos.x, y));
+    let y = (old_pos.y + old_size.height as i32 - (target_h * scale) as i32).max(top);
+    let _ = window.set_size(tauri::LogicalSize::new(target_w, target_h));
+    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y));
+    GROK_SIDE_LEFT.store(on_left, Ordering::SeqCst);
+    on_left
 }
 
 #[tauri::command]
@@ -1418,7 +1439,13 @@ fn position_popover(window: &WebviewWindow, anchor: Option<PhysicalPosition<f64>
         let max_y = (mon_pos.y + mon_size.height as i32 - win_h - taskbar_offset).max(min_y);
 
         if let Some(pos) = anchor {
-            let target_x = (pos.x as i32 - win_w / 2).clamp(min_x, max_x);
+            let main_w = (472.0 * scale).round() as i32;
+            let main_offset = if GROK_SIDE_LEFT.load(Ordering::SeqCst) {
+                (win_w - main_w - (8.0 * scale).round() as i32).max(0)
+            } else {
+                0
+            };
+            let target_x = (pos.x as i32 - main_offset - main_w / 2).clamp(min_x, max_x);
             let above_tray_y = pos.y as i32 - win_h - margin;
             let target_y = if above_tray_y >= min_y {
                 above_tray_y.min(max_y)
@@ -1572,6 +1599,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidecar_reserves_the_complete_expanded_footprint_at_each_scale() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            assert!(panel_sidecar_on_left(1178.0 * scale, 246.0 * scale, scale));
+            assert!(!panel_sidecar_on_left(1178.0 * scale, 252.0 * scale, scale));
+            assert!(panel_sidecar_on_left(244.0 * scale, 251.0 * scale, scale));
+        }
+    }
 
 
 
