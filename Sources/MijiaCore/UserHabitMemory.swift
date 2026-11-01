@@ -158,6 +158,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             public var previousCount: Int?
             /// The day type the entry carried before this call (upgrading a legacy `nil` entry records it here).
             public var previousDayType: DayType?
+            /// The recency metadata the entry carried before this call, so undo restores the decayed weight (Codex #116 re-review).
+            public var previousLastRecordedAt: Date?
         }
 
         public struct PhraseChange: Equatable, Sendable {
@@ -264,7 +266,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         operationKey: intent.operationKey,
                         dayType: dayType,
                         previousCount: entries[idx].count,
-                        previousDayType: entries[idx].dayType
+                        previousDayType: entries[idx].dayType,
+                        previousLastRecordedAt: entries[idx].lastRecordedAt
                     )
                 )
                 entries[idx].count += 1
@@ -278,7 +281,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         operationKey: intent.operationKey,
                         dayType: dayType,
                         previousCount: nil,
-                        previousDayType: nil
+                        previousDayType: nil,
+                        previousLastRecordedAt: nil
                     )
                 )
                 entries.append(HabitEntry(
@@ -380,6 +384,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             if let previousCount = change.previousCount {
                 entries[idx].count = previousCount
                 entries[idx].dayType = change.previousDayType
+                entries[idx].lastRecordedAt = change.previousLastRecordedAt
             } else {
                 entries.remove(at: idx)
             }

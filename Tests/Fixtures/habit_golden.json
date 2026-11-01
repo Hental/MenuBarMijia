@@ -150,7 +150,8 @@
           "operationKey": "power:on",
           "previousCount": null,
           "previousDayType": null,
-          "dayType": "weekday"
+          "dayType": "weekday",
+          "previousLastRecordedAtAgeDays": null
         }
       ],
       "entriesAfterRecord": [
@@ -193,7 +194,8 @@
           "operationKey": "power:on",
           "previousCount": 2,
           "previousDayType": null,
-          "dayType": "weekday"
+          "dayType": "weekday",
+          "previousLastRecordedAtAgeDays": 0
         }
       ],
       "entriesAfterRecord": [
@@ -252,7 +254,8 @@
           "operationKey": "power:on",
           "previousCount": null,
           "previousDayType": null,
-          "dayType": "weekday"
+          "dayType": "weekday",
+          "previousLastRecordedAtAgeDays": null
         }
       ],
       "entriesAfterRecord": [

@@ -1492,6 +1492,8 @@ export interface HabitEntryChange {
   readonly previousCount: number | null;
   /** The day type the entry carried before the call (upgrading a legacy entry records it here). */
   readonly previousDayType: HabitDayType | null;
+  /** The recency metadata the entry carried before the call, so undo restores the decayed weight (Codex #116 re-review). */
+  readonly previousLastRecordedAtMs: number | null;
 }
 
 /** What one `record` call changed, so undoing the action can take the habit back (#34). */
@@ -1665,6 +1667,7 @@ export class UserHabitMemory {
           dayType,
           previousCount: this.entries[idx]!.count,
           previousDayType: this.entries[idx]!.dayType ?? null,
+          previousLastRecordedAtMs: this.entries[idx]!.lastRecordedAtMs ?? null,
         });
         this.entries[idx]!.count += 1;
         this.entries[idx]!.dayType = dayType;
@@ -1677,6 +1680,7 @@ export class UserHabitMemory {
           dayType,
           previousCount: null,
           previousDayType: null,
+          previousLastRecordedAtMs: null,
         });
         this.entries.push({
           bucket,
@@ -1751,6 +1755,7 @@ export class UserHabitMemory {
       if (change.previousCount !== null) {
         this.entries[idx]!.count = change.previousCount;
         this.entries[idx]!.dayType = change.previousDayType ?? undefined;
+        this.entries[idx]!.lastRecordedAtMs = change.previousLastRecordedAtMs ?? undefined;
       } else {
         this.entries.splice(idx, 1);
       }

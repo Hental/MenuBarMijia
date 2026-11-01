@@ -1796,6 +1796,7 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
         dayType: string | null;
         previousCount: number | null;
         previousDayType: string | null;
+        previousLastRecordedAtAgeDays?: number | null;
       }> | null;
       entriesAfterRecord: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string }>;
       expectUnrecord: boolean;
@@ -1907,7 +1908,23 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
       const memory = memoryFrom(item.entriesBefore, now);
       const intents = item.recordIntents.map(toIntent);
       const receipt = memory.record(intents, corpus.devices, corpus.scenes, now);
-      assert.deepEqual(receipt?.entries ?? null, item.expectReceipt, item.name);
+      const projectedReceipt = receipt
+        ? {
+            entries: receipt.entries.map((change) => ({
+              bucket: change.bucket,
+              targetId: change.targetId,
+              operationKey: change.operationKey,
+              dayType: change.dayType ?? null,
+              previousCount: change.previousCount,
+              previousDayType: change.previousDayType ?? null,
+              previousLastRecordedAtAgeDays:
+                change.previousLastRecordedAtMs === null || change.previousLastRecordedAtMs === undefined
+                  ? null
+                  : Math.round((now.getTime() - change.previousLastRecordedAtMs) / 86_400_000),
+            })),
+          }
+        : null;
+      assert.deepEqual(projectedReceipt?.entries ?? null, item.expectReceipt, item.name);
       assert.deepEqual(projectEntries(memory), item.entriesAfterRecord, item.name);
       if (item.expectUnrecord && receipt) {
         memory.unrecord(receipt);

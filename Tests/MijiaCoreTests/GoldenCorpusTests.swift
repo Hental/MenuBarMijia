@@ -831,6 +831,8 @@ struct GoldenCorpusTests {
         let dayType: String?
         let previousCount: Int?
         let previousDayType: String?
+        /// Age of the pre-call `lastRecordedAt` relative to the case date, in whole days.
+        let previousLastRecordedAtAgeDays: Int?
     }
 
     private struct HabitMemoryCase: Decodable {
@@ -909,14 +911,21 @@ struct GoldenCorpusTests {
         )
     }
 
-    private static func habitReceiptChange(_ change: UserHabitMemory.RecordingReceipt.EntryChange) -> HabitReceiptEntry {
-        HabitReceiptEntry(
+    private static func habitReceiptChange(
+        _ change: UserHabitMemory.RecordingReceipt.EntryChange,
+        now: Date
+    ) -> HabitReceiptEntry {
+        let previousAgeDays = change.previousLastRecordedAt.map { previous in
+            Int((now.timeIntervalSince(previous) / 86_400).rounded())
+        }
+        return HabitReceiptEntry(
             bucket: change.bucket.rawValue,
             targetId: change.targetId,
             operationKey: change.operationKey,
             dayType: change.dayType?.rawValue,
             previousCount: change.previousCount,
-            previousDayType: change.previousDayType?.rawValue
+            previousDayType: change.previousDayType?.rawValue,
+            previousLastRecordedAtAgeDays: previousAgeDays
         )
     }
 
@@ -972,7 +981,7 @@ struct GoldenCorpusTests {
             #expect(intents.count == item.recordIntents.count, "\(item.name): unknown operation kind")
 
             let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: now)
-            #expect(receipt?.entries.map(Self.habitReceiptChange) == item.expectReceipt, "\(item.name)")
+            #expect(receipt?.entries.map { Self.habitReceiptChange($0, now: now) } == item.expectReceipt, "\(item.name)")
             #expect(memory.entries.map(Self.habitEntry) == item.entriesAfterRecord, "\(item.name)")
             if item.expectUnrecord, let receipt {
                 memory.unrecord(receipt)
