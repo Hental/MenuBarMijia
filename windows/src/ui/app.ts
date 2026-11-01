@@ -89,7 +89,6 @@ import {
   targetSize,
   releaseVelocity,
   projectedOffset,
-  resizePreviewScale,
   chosenSize,
   comfort,
   emptyLayoutPrefs,
@@ -4980,22 +4979,12 @@ export class MenuMijiaWindowsApp {
       lastDy: number;
       samples: Array<{ x: number; y: number; t: number }>;
     } | null = null;
-    let previewCleanupTimer: number | null = null;
     let suppressNextHandleClick = false;
 
-    const clearPreviewTransform = (id: string, animateBack: boolean): void => {
-      if (previewCleanupTimer !== null) { window.clearTimeout(previewCleanupTimer); previewCleanupTimer = null; }
+    const endHandleGesture = (id: string): void => {
       const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(id)}"]`);
-      if (!tile) return;
-      tile.classList.remove("is-resizing");
-      if (animateBack) {
-        tile.style.transition = "transform 240ms var(--ease-spring)";
-        tile.style.transform = "";
-        previewCleanupTimer = window.setTimeout(() => { tile.style.transition = ""; }, 260);
-      } else {
-        tile.style.transition = "";
-        tile.style.transform = "";
-      }
+      tile?.classList.remove("is-resizing");
+      this.root.querySelector<HTMLElement>(".cc-resize-handle.is-active")?.classList.remove("is-active");
     };
 
     const beginDrag = (id: string, el: HTMLElement, x: number, y: number) => {
@@ -5022,11 +5011,11 @@ export class MenuMijiaWindowsApp {
     );
     window.addEventListener("pointercancel", () => {
       this.pointerIsDown = false;
-      if (resizing) { clearPreviewTransform(resizing.id, false); resizing = null; }
+      if (resizing) { endHandleGesture(resizing.id); resizing = null; }
     });
     window.addEventListener("blur", () => {
       this.pointerIsDown = false;
-      if (resizing) { clearPreviewTransform(resizing.id, false); resizing = null; }
+      if (resizing) { endHandleGesture(resizing.id); resizing = null; }
     });
 
     this.root.addEventListener("pointerdown", (e) => {
@@ -5048,6 +5037,7 @@ export class MenuMijiaWindowsApp {
             lastDy: 0,
             samples: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
           };
+          handleEl.classList.add("is-active");
           handleEl.closest<HTMLElement>("[data-tile-id]")?.classList.add("is-resizing");
         }
         return;
@@ -5089,17 +5079,6 @@ export class MenuMijiaWindowsApp {
           this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = next;
           this.saveLayout();
           this.render();
-          // No early return: fall through so the fresh node keeps the continuous preview.
-        }
-        // Live tracking preview (QuotaKeeper-style): the card leans toward the drag from
-        // pixel one via a direct style write, so no re-render happens per pointermove.
-        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-          const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(resizing.id)}"]`);
-          if (tile) {
-            const scale = resizePreviewScale(resizing.startSize, this.tileSize(dev), { width: dx, height: dy });
-            tile.style.transformOrigin = "bottom right";
-            tile.style.transform = scale === 1 ? "" : `scale(${scale.toFixed(4)})`;
-          }
         }
         return;
       }
@@ -5142,7 +5121,7 @@ export class MenuMijiaWindowsApp {
       if (resizing) {
         const { id, moved, didStep, startSize, samples, lastDx, lastDy } = resizing;
         resizing = null;
-        clearPreviewTransform(id, !didStep);
+        endHandleGesture(id);
         // A drag without a size step leaves the same handle element mounted, so the browser
         // fires a real click on it after pointerup (microtasks run before that click); swallow it.
         if (moved && !didStep) {

@@ -2379,11 +2379,22 @@ input[type="checkbox"]:checked::after {
   cursor: nwse-resize;
   touch-action: none;
   user-select: none;
-  animation: cc-badge-in 200ms var(--ease-spring) both;
+  transform-origin: bottom right;
+  transition: transform 140ms var(--ease-spring), color 140ms ease;
+  animation: cc-badge-in 200ms var(--ease-spring) backwards;
+}
+
+.cc-resize-handle.is-active {
+  transform: scale(1.3);
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .cc-popover.scheme-light .cc-resize-handle {
   color: rgba(28, 30, 36, 0.5);
+}
+
+.cc-popover.scheme-light .cc-resize-handle.is-active {
+  color: rgba(28, 30, 36, 0.85);
 }
 
 .cc-popover.is-editing .cc-tile.is-dragging .cc-resize-handle {

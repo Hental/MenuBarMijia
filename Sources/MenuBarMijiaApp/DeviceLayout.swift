@@ -87,35 +87,6 @@ public enum TileResizeGestureMath {
         func project(_ v: CGFloat) -> CGFloat { max(-threshold, min(threshold, v * 0.099)) }
         return CGSize(width: project(velocity.width), height: project(velocity.height))
     }
-
-    /// Corner-anchored tracking preview while the drag has not crossed a step yet:
-    /// growing outward scales up to +5%, pushing inward rubberbands down to −4%.
-    /// Progress is cumulative across steps (`distance/threshold − stepsBetween`), so the
-    /// preview never snaps when a step fires — the real-size spring masks the handoff.
-    public static func previewScale(
-        startSize: TileSize,
-        currentSize: TileSize,
-        translation: CGSize,
-        threshold: CGFloat = stepThreshold
-    ) -> CGFloat {
-        let distance = hypot(translation.width, translation.height)
-        guard distance > 1 else { return 1 }
-        let stepsCrossed = CGFloat(abs(stepsBetween(startSize, currentSize)))
-        let progress = min(max(distance / threshold - stepsCrossed, 0), 1)
-        let outward: Bool
-        switch startSize {
-        case .half: outward = translation.width > 0 || translation.height > 0
-        case .panel: outward = translation.width < 0 || translation.height < 0
-        default: outward = (abs(translation.width) >= abs(translation.height) ? translation.width : translation.height) >= 0
-        }
-        return 1 + (outward ? 0.05 : -0.04) * progress
-    }
-
-    /// Ordinal distance between two sizes in the half → full → panel ladder (0 if either is auto).
-    public static func stepsBetween(_ a: TileSize, _ b: TileSize) -> Int {
-        guard let ia = orderedSizes.firstIndex(of: a), let ib = orderedSizes.firstIndex(of: b) else { return 0 }
-        return ib - ia
-    }
 }
 
 /// Stores `[deviceId: TileSize]` as JSON under one defaults key so views can observe it with `@AppStorage`.
@@ -242,47 +213,54 @@ struct LayoutEditable: ViewModifier {
     var onResizeDrag: (CGSize) -> Void = { _ in }
     var onEndResize: (CGSize, [TileResizeGestureMath.ResizeSample]) -> Void = { _, _ in }
 
-    /// Gesture-scoped tracking preview: lives here so per-pointermove updates never re-render
-    /// the whole panel (#115, QuotaKeeper-style "only the active card needs layout").
-    @State private var previewScale: CGFloat = 1
+    /// Gesture-scoped state lives here so per-pointermove updates never re-render the whole
+    /// panel (#115, QuotaKeeper-style "only the active card needs layout"). The card itself
+    /// never transforms during a handle drag — a corner-anchored scale would push the
+    /// opposite edges past the panel padding — only the handle leans into the finger.
+    @State private var isHandleActive = false
     @State private var resizeSamples: [TileResizeGestureMath.ResizeSample] = []
 
     // Per-card phase so neighbouring cards do not swing in sync.
     private var phase: Double { Double(abs(deviceId.hashValue % 97)) / 97 * .pi * 2 }
 
+    /// Quiet at rest, confident under the finger.
+    private var handleInk: Color {
+        if isHandleActive {
+            return colorScheme == .dark ? Color.white.opacity(0.9) : Color.primary.opacity(0.8)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.55) : Color.primary.opacity(0.45)
+    }
+
     func body(content: Content) -> some View {
         ZStack(alignment: .bottomTrailing) {
             jiggling(content.allowsHitTesting(!editing))
                 .scaleEffect(isDragging ? 1.05 : 1)
-                .scaleEffect(previewScale, anchor: .bottomTrailing)
                 .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
 
             if editing && !isDragging {
                 CornerArcHandleShape()
                     .stroke(
-                        colorScheme == .dark ? Color.white.opacity(0.55) : Color.primary.opacity(0.45),
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                        handleInk,
+                        style: StrokeStyle(lineWidth: isHandleActive ? 4 : 3, lineCap: .round)
                     )
                     .shadow(color: .black.opacity(0.15), radius: 1, y: 1)
+                    .scaleEffect(isHandleActive ? 1.25 : 1, anchor: .bottomTrailing)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
+                    .animation(reduceMotion ? nil : AppleMotion.pressFeedback, value: isHandleActive)
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .named(TileSpace.name))
                             .onChanged { value in
+                                isHandleActive = true
                                 onBeginResize()
                                 onResizeDrag(value.translation)
                                 guard !reduceMotion else { return }
                                 let now = Date.timeIntervalSinceReferenceDate
                                 resizeSamples.append(TileResizeGestureMath.ResizeSample(offset: value.translation, time: now))
                                 resizeSamples = resizeSamples.filter { now - $0.time <= 0.12 }
-                                previewScale = TileResizeGestureMath.previewScale(
-                                    startSize: size,
-                                    currentSize: size,
-                                    translation: value.translation
-                                )
                             }
                             .onEnded { value in
-                                withAnimation(AppleMotion.snappySpring) { previewScale = 1 }
+                                isHandleActive = false
                                 let samples = resizeSamples
                                 resizeSamples = []
                                 onEndResize(value.translation, samples)
