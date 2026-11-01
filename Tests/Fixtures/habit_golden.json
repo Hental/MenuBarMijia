@@ -148,7 +148,8 @@
           "bucket": "夜晚",
           "targetId": "dev_ceiling",
           "operationKey": "power:on",
-          "previousCount": null
+          "previousCount": null,
+          "previousDayType": null
         }
       ],
       "entriesAfterRecord": [
@@ -156,11 +157,13 @@
           "bucket": "夜晚",
           "targetId": "dev_ceiling",
           "operationKey": "power:on",
-          "count": 1
+          "count": 1,
+          "dayType": "weekday"
         }
       ],
       "expectUnrecord": true,
-      "entriesAfterUnrecord": []
+      "entriesAfterUnrecord": [],
+      "date": "2026-10-16"
     },
     {
       "name": "repeat actions increment and the receipt remembers the previous count",
@@ -170,7 +173,9 @@
           "bucket": "夜晚",
           "targetId": "dev_desk",
           "operationKey": "power:on",
-          "count": 2
+          "count": 2,
+          "dayType": null,
+          "ageDays": 0
         }
       ],
       "recordIntents": [
@@ -185,7 +190,8 @@
           "bucket": "夜晚",
           "targetId": "dev_desk",
           "operationKey": "power:on",
-          "previousCount": 2
+          "previousCount": 2,
+          "previousDayType": null
         }
       ],
       "entriesAfterRecord": [
@@ -193,7 +199,8 @@
           "bucket": "夜晚",
           "targetId": "dev_desk",
           "operationKey": "power:on",
-          "count": 3
+          "count": 3,
+          "dayType": "weekday"
         }
       ],
       "expectUnrecord": true,
@@ -202,9 +209,11 @@
           "bucket": "夜晚",
           "targetId": "dev_desk",
           "operationKey": "power:on",
-          "count": 2
+          "count": 2,
+          "dayType": null
         }
-      ]
+      ],
+      "date": "2026-10-16"
     },
     {
       "name": "relative steps are never learned",
@@ -220,7 +229,8 @@
       "expectReceipt": null,
       "entriesAfterRecord": [],
       "expectUnrecord": false,
-      "entriesAfterUnrecord": []
+      "entriesAfterUnrecord": [],
+      "date": "2026-10-16"
     },
     {
       "name": "records land in the matching time bucket",
@@ -238,7 +248,8 @@
           "bucket": "下午",
           "targetId": "dev_ac",
           "operationKey": "power:on",
-          "previousCount": null
+          "previousCount": null,
+          "previousDayType": null
         }
       ],
       "entriesAfterRecord": [
@@ -246,11 +257,13 @@
           "bucket": "下午",
           "targetId": "dev_ac",
           "operationKey": "power:on",
-          "count": 1
+          "count": 1,
+          "dayType": "weekday"
         }
       ],
       "expectUnrecord": false,
-      "entriesAfterUnrecord": []
+      "entriesAfterUnrecord": [],
+      "date": "2026-10-16"
     }
   ],
   "topSuggestionCases": [
@@ -270,7 +283,9 @@
           "bucket": "夜晚",
           "targetId": "dev_desk",
           "operationKey": "power:on",
-          "count": 1
+          "count": 1,
+          "dayType": "weekday",
+          "ageDays": 0
         }
       ],
       "favoriteIds": [
@@ -312,7 +327,10 @@
             "value": false
           }
         ]
-      ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "favorites, environment trim, and the builtin pad an empty memory",
@@ -372,7 +390,10 @@
             "value": false
           }
         ]
-      ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "cold rooms suggest heating",
@@ -398,7 +419,10 @@
             "value": 22
           }
         ]
-      ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "no controllable devices means no suggestions",
@@ -414,7 +438,10 @@
         }
       ],
       "limit": 4,
-      "expected": []
+      "expected": [],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "already-satisfied habits are filtered and the builtin backfills",
@@ -432,7 +459,9 @@
           "bucket": "夜晚",
           "targetId": "dev_ceiling",
           "operationKey": "power:on",
-          "count": 1
+          "count": 1,
+          "dayType": "weekday",
+          "ageDays": 0
         }
       ],
       "favoriteIds": [],
@@ -472,7 +501,10 @@
             "value": false
           }
         ]
-      ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "a color-temperature habit at the current kelvin is filtered and backfilled",
@@ -490,7 +522,9 @@
           "bucket": "夜晚",
           "targetId": "dev_ceiling",
           "operationKey": "ct:4000",
-          "count": 1
+          "count": 1,
+          "dayType": "weekday",
+          "ageDays": 0
         }
       ],
       "favoriteIds": [],
@@ -530,7 +564,10 @@
             "value": false
           }
         ]
-      ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
     },
     {
       "name": "the builtin backfills per-light power-offs up to the limit",
@@ -570,7 +607,380 @@
             "value": false
           }
         ]
+      ],
+      "date": "2026-10-16",
+      "lastAction": null,
+      "sequencesBefore": []
+    },
+    {
+      "name": "recent habits outrank frequent but stale ones",
+      "date": "2026-10-16",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_ac"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ceiling",
+          "operationKey": "power:off",
+          "count": 4,
+          "dayType": "weekday",
+          "ageDays": 0
+        },
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ac",
+          "operationKey": "power:off",
+          "count": 10,
+          "dayType": "weekday",
+          "ageDays": 30
+        }
+      ],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ],
+      "lastAction": null,
+      "sequencesBefore": []
+    },
+    {
+      "name": "weekend habits surface on weekends despite lower counts",
+      "date": "2026-11-07",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 1,
+          "dayType": "weekend",
+          "ageDays": 0
+        },
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ac",
+          "operationKey": "power:off",
+          "count": 5,
+          "dayType": "weekday",
+          "ageDays": 0
+        }
+      ],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "dev_desk",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_plug",
+            "kind": "power",
+            "value": false
+          }
+        ]
+      ],
+      "lastAction": null,
+      "sequencesBefore": []
+    },
+    {
+      "name": "a fresh transition boosts the likely next action",
+      "date": "2026-10-16",
+      "hour": 21,
+      "deviceIds": [
+        "dev_ceiling",
+        "dev_floor",
+        "dev_desk",
+        "dev_ac",
+        "dev_plug"
+      ],
+      "entriesBefore": [
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 1,
+          "dayType": "weekday",
+          "ageDays": 0
+        },
+        {
+          "bucket": "夜晚",
+          "targetId": "dev_ac",
+          "operationKey": "power:off",
+          "count": 2,
+          "dayType": "weekday",
+          "ageDays": 0
+        }
+      ],
+      "favoriteIds": [],
+      "environment": [],
+      "limit": 4,
+      "lastAction": {
+        "targetId": "dev_ceiling",
+        "operationKey": "power:on",
+        "ageMinutes": 5
+      },
+      "sequencesBefore": [
+        {
+          "afterKey": "dev_ceiling|power:on",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 3
+        }
+      ],
+      "expected": [
+        [
+          {
+            "targetId": "dev_desk",
+            "kind": "power",
+            "value": true
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ac",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_ceiling",
+            "kind": "power",
+            "value": false
+          },
+          {
+            "targetId": "dev_floor",
+            "kind": "power",
+            "value": false
+          }
+        ],
+        [
+          {
+            "targetId": "dev_plug",
+            "kind": "power",
+            "value": false
+          }
+        ]
       ]
+    }
+  ],
+  "sequenceCases": [
+    {
+      "name": "actions within the window learn a transition",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        }
+      ],
+      "expectedSequences": [
+        {
+          "afterKey": "dev_ceiling|power:on",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "expectedLastAction": {
+        "targetId": "dev_desk",
+        "operationKey": "power:on"
+      }
+    },
+    {
+      "name": "undoing the second action removes the transition and restores the last action",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ],
+          "unrecord": true
+        }
+      ],
+      "expectedSequences": [],
+      "expectedLastAction": {
+        "targetId": "dev_ceiling",
+        "operationKey": "power:on"
+      }
+    },
+    {
+      "name": "actions outside the window learn nothing",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 45,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        }
+      ],
+      "expectedSequences": [],
+      "expectedLastAction": {
+        "targetId": "dev_desk",
+        "operationKey": "power:on"
+      }
+    },
+    {
+      "name": "repeating the same pair increments the transition count",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        }
+      ],
+      "expectedSequences": [
+        {
+          "afterKey": "dev_ceiling|power:on",
+          "targetId": "dev_desk",
+          "operationKey": "power:on",
+          "count": 2
+        },
+        {
+          "afterKey": "dev_desk|power:on",
+          "targetId": "dev_ceiling",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "expectedLastAction": {
+        "targetId": "dev_desk",
+        "operationKey": "power:on"
+      }
     }
   ]
 }

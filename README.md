@@ -110,7 +110,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Voice Interaction** | ✅ Menu bar hold / Hotkey hold / Hands-free | ⚠️ Hands-free only | macOS supports native Speech frameworks; Windows uses WebView speech recognition |
 | **Local Command Parsing** | ✅ Supported | ✅ Supported | Power, brightness, temp, fan speeds, and timers are parsed locally |
 | **Optional AI Assistant** | ✅ Supported | ✅ Supported | Connect Jev, DeepSeek, Ollama, etc. Actions with <80% confidence require confirmation |
-| **Proactive "For You" Suggestions** | ✅ Top 4 chips | ✅ Top 4 pills | Manual card actions train per-time-bucket habits (undo rolls them back); the panel opens with 4 zero-delay actionable picks (habits, starred favorites, running devices, all-lights-off, room climate), and a configured model silently refreshes the cache in the background |
+| **Proactive "For You" Suggestions** | ✅ Top 4 chips | ✅ Top 4 pills | Manual card actions train per-time-bucket, weekday/weekend habits with a 14-day decay half-life and next-action sequence prediction (undo rolls them back; see [ADR-0009](docs/adr/0009-habit-ranking-algorithm.md)); the panel opens with 4 zero-delay actionable picks, and a configured model silently refreshes the cache in the background |
 | **All-Off & Instant Undo** | ✅ Supported | ✅ Supported | A 0.6s hold confirms the action; plugs and vacuums are excluded by default; reversible actions show an undo banner for 10–15s |
 | **Mac Event Automation** | ✅ Supported | — Not yet | Event triggers on screen lock, sleep, wake, and external display connections |
 | **Apple Shortcuts (App Intents)** | ✅ Supported (4 actions) | — Not yet | Toggle Device, Run Scene, Voice Command, Query Room Climate |

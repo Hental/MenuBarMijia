@@ -1386,7 +1386,11 @@ export function buildEnvironmentSummary(readings: readonly EnvironmentReading[])
 export function buildHabitSummary(
   enabled: boolean,
   shortcuts: readonly HabitPhraseSummary[],
-  memory?: Readonly<{ entries: readonly HabitEntry[] }>,
+  memory?: Readonly<{
+    entries: readonly HabitEntry[];
+    sequences?: readonly { afterKey: string; targetId: string; operationKey: string; count: number }[];
+    lastAction?: { targetId: string; operationKey: string; recordedAtMs: number } | null;
+  }>,
   devices: readonly SmartDevice[] = [],
   scenes: readonly HomeScene[] = [],
   now: Date = new Date(),
@@ -1407,6 +1411,22 @@ export function buildHabitSummary(
       .filter((v): v is string => v !== null);
     if (topForBucket.length > 0) parts.push(`${bucket}常做：${topForBucket.join("、")}`);
   }
+  // Next-action hint from the freshest learned transition (ADR-0009).
+  if (memory?.lastAction && memory.sequences && now.getTime() - memory.lastAction.recordedAtMs <= HABIT_SEQUENCE_BOOST_WINDOW_MS) {
+    const afterKey = `${memory.lastAction.targetId}|${memory.lastAction.operationKey}`;
+    const next = [...memory.sequences]
+      .filter((s) => s.afterKey === afterKey)
+      .sort((a, b) => b.count - a.count)[0];
+    if (next) {
+      const prevOp = decodeHabitOperation(memory.lastAction.operationKey);
+      const nextOp = decodeHabitOperation(next.operationKey);
+      if (prevOp && nextOp) {
+        const prevTitle = IntentReply.describe([{ targetId: memory.lastAction.targetId, operation: prevOp }], devices, scenes).replace(/^已/, "");
+        const nextTitle = IntentReply.describe([{ targetId: next.targetId, operation: nextOp }], devices, scenes).replace(/^已/, "");
+        parts.push(`刚做完${prevTitle}后常做：${nextTitle}(${next.count}次)`);
+      }
+    }
+  }
   if (shortcuts.length > 0) {
     const top = shortcuts.slice(0, 4).map((shortcut) => `「${shortcut.phrase}」→${shortcut.reply}`);
     parts.push(`个人口头禅：${top.join("；")}`);
@@ -1416,13 +1436,51 @@ export function buildHabitSummary(
 
 // MARK: - Full-Channel Habit Memory & Top-4 Engine (#113)
 
-/** One learned "in this time bucket, this device gets this operation" counter. */
+/** One learned "in this time bucket + day type, this device gets this operation" counter. */
 export interface HabitEntry {
   bucket: string;
   targetId: string;
   operationKey: string;
   count: number;
+  /** Absent for entries recorded before ADR-0009; matches any day type. */
+  dayType?: HabitDayType;
+  /** Recency metadata for the decay score; the compared pattern stays the operation key. */
+  lastRecordedAtMs?: number;
 }
+
+/** Weekday vs weekend context signal (WWDC18-211), coarsened to two buckets (ADR-0009). */
+export type HabitDayType = "weekday" | "weekend";
+
+/** One learned transition: after `afterKey` (targetId|operationKey), this operation often follows. */
+export interface HabitSequenceEntry {
+  afterKey: string;
+  targetId: string;
+  operationKey: string;
+  count: number;
+  lastRecordedAtMs?: number;
+}
+
+/** The most recent learned action, so the next record can form a transition. */
+export interface HabitLastAction {
+  targetId: string;
+  operationKey: string;
+  recordedAtMs: number;
+}
+
+export function habitDayType(now: Date): HabitDayType {
+  const day = now.getDay();
+  return day === 0 || day === 6 ? "weekend" : "weekday";
+}
+
+/** Recency half-life in days for the decay score (ADR-0009, own calibration). */
+export const HABIT_DECAY_HALF_LIFE_DAYS = 14;
+/** A transition is only learned when the previous action happened within this window. */
+export const HABIT_SEQUENCE_WINDOW_MS = 30 * 60 * 1000;
+/** The next-action boost only applies while the last action is still fresh. */
+export const HABIT_SEQUENCE_BOOST_WINDOW_MS = 60 * 60 * 1000;
+/** Score bonus per learned transition count when the last action matches (ADR-0009). */
+export const HABIT_SEQUENCE_BOOST_WEIGHT = 2;
+export const MAX_HABIT_SEQUENCES = 40;
 
 export interface HabitEntryChange {
   readonly bucket: string;
@@ -1430,11 +1488,23 @@ export interface HabitEntryChange {
   readonly operationKey: string;
   /** `null` means the entry was inserted by the call and should be removed on undo. */
   readonly previousCount: number | null;
+  /** The day type the entry carried before the call (upgrading a legacy entry records it here). */
+  readonly previousDayType: HabitDayType | null;
 }
 
 /** What one `record` call changed, so undoing the action can take the habit back (#34). */
 export interface HabitRecordingReceipt {
   readonly entries: readonly HabitEntryChange[];
+  readonly sequences?: readonly HabitSequenceChange[];
+  readonly previousLastAction?: HabitLastAction | null;
+}
+
+export interface HabitSequenceChange {
+  readonly afterKey: string;
+  readonly targetId: string;
+  readonly operationKey: string;
+  /** `null` means the transition was inserted by the call and should be removed on undo. */
+  readonly previousCount: number | null;
 }
 
 export const MAX_HABIT_ENTRIES = 60;
@@ -1537,9 +1607,18 @@ function habitSuggestionTitle(
  */
 export class UserHabitMemory {
   entries: HabitEntry[] = [];
+  sequences: HabitSequenceEntry[] = [];
+  lastAction: HabitLastAction | null = null;
 
-  constructor(entries: readonly HabitEntry[] = []) {
-    this.entries = [...entries];
+  constructor(
+    entries: readonly HabitEntry[] = [],
+    sequences: readonly HabitSequenceEntry[] = [],
+    lastAction: HabitLastAction | null = null,
+  ) {
+    // JSON round-trips can turn the legacy "no day type" into null; normalize to undefined.
+    this.entries = entries.map((e) => ({ ...e, dayType: e.dayType ?? undefined }));
+    this.sequences = [...sequences];
+    this.lastAction = lastAction ? { ...lastAction } : null;
   }
 
   record(
@@ -1550,27 +1629,110 @@ export class UserHabitMemory {
   ): HabitRecordingReceipt | null {
     if (intents.length === 0) return null;
     const bucket = timeBucketLabel(now.getHours());
+    const dayType = habitDayType(now);
+    const nowMs = now.getTime();
     const changes: HabitEntryChange[] = [];
 
-    for (const intent of intents) {
-      const opKey = encodeHabitOperation(intent.operation);
-      if (!opKey) continue;
-      const idx = this.entries.findIndex(
-        (e) => e.bucket === bucket && e.targetId === intent.targetId && e.operationKey === opKey,
+    // Encode once: the normalized pattern keys drive entries, sequences, and lastAction.
+    const encoded = intents
+      .map((intent) => ({ targetId: intent.targetId, operationKey: encodeHabitOperation(intent.operation) }))
+      .filter((item): item is { targetId: string; operationKey: string } => item.operationKey !== null);
+    if (encoded.length === 0) return null;
+
+    for (const intent of encoded) {
+      // Exact (bucket, dayType) match first; a legacy dayType-less entry is upgraded in place.
+      let idx = this.entries.findIndex(
+        (e) =>
+          e.bucket === bucket && e.dayType === dayType
+            && e.targetId === intent.targetId && e.operationKey === intent.operationKey,
       );
+      let previousDayType: HabitDayType | null = dayType;
+      if (idx < 0) {
+        idx = this.entries.findIndex(
+          (e) =>
+            e.bucket === bucket && e.dayType === undefined
+              && e.targetId === intent.targetId && e.operationKey === intent.operationKey,
+        );
+        previousDayType = idx >= 0 ? null : dayType;
+      }
       if (idx >= 0) {
-        changes.push({ bucket, targetId: intent.targetId, operationKey: opKey, previousCount: this.entries[idx]!.count });
+        changes.push({
+          bucket,
+          targetId: intent.targetId,
+          operationKey: intent.operationKey,
+          previousCount: this.entries[idx]!.count,
+          previousDayType: this.entries[idx]!.dayType ?? null,
+        });
         this.entries[idx]!.count += 1;
+        this.entries[idx]!.dayType = dayType;
+        this.entries[idx]!.lastRecordedAtMs = nowMs;
       } else {
-        changes.push({ bucket, targetId: intent.targetId, operationKey: opKey, previousCount: null });
-        this.entries.push({ bucket, targetId: intent.targetId, operationKey: opKey, count: 1 });
+        changes.push({
+          bucket,
+          targetId: intent.targetId,
+          operationKey: intent.operationKey,
+          previousCount: null,
+          previousDayType: null,
+        });
+        this.entries.push({
+          bucket,
+          targetId: intent.targetId,
+          operationKey: intent.operationKey,
+          count: 1,
+          dayType,
+          lastRecordedAtMs: nowMs,
+        });
       }
     }
 
     this.entries.sort((a, b) => b.count - a.count);
     if (this.entries.length > MAX_HABIT_ENTRIES) this.entries.length = MAX_HABIT_ENTRIES;
 
-    return changes.length > 0 ? { entries: changes } : null;
+    // One-step transition learning: within the window, everything after the last action
+    // is a candidate "what the user does next" pattern (ADR-0009).
+    const sequenceChanges: HabitSequenceChange[] = [];
+    if (this.lastAction && nowMs - this.lastAction.recordedAtMs <= HABIT_SEQUENCE_WINDOW_MS) {
+      const afterKey = `${this.lastAction.targetId}|${this.lastAction.operationKey}`;
+      for (const intent of encoded) {
+        if (intent.targetId === this.lastAction.targetId && intent.operationKey === this.lastAction.operationKey) continue;
+        const idx = this.sequences.findIndex(
+          (s) => s.afterKey === afterKey && s.targetId === intent.targetId && s.operationKey === intent.operationKey,
+        );
+        if (idx >= 0) {
+          sequenceChanges.push({
+            afterKey,
+            targetId: intent.targetId,
+            operationKey: intent.operationKey,
+            previousCount: this.sequences[idx]!.count,
+          });
+          this.sequences[idx]!.count += 1;
+          this.sequences[idx]!.lastRecordedAtMs = nowMs;
+        } else {
+          sequenceChanges.push({
+            afterKey,
+            targetId: intent.targetId,
+            operationKey: intent.operationKey,
+            previousCount: null,
+          });
+          this.sequences.push({
+            afterKey,
+            targetId: intent.targetId,
+            operationKey: intent.operationKey,
+            count: 1,
+            lastRecordedAtMs: nowMs,
+          });
+        }
+      }
+      this.sequences.sort((a, b) => b.count - a.count);
+      if (this.sequences.length > MAX_HABIT_SEQUENCES) this.sequences.length = MAX_HABIT_SEQUENCES;
+    }
+
+    const previousLastAction = this.lastAction ? { ...this.lastAction } : null;
+    const last = encoded[encoded.length - 1];
+    if (last) this.lastAction = { targetId: last.targetId, operationKey: last.operationKey, recordedAtMs: nowMs };
+
+    if (changes.length === 0 && sequenceChanges.length === 0) return null;
+    return { entries: changes, sequences: sequenceChanges, previousLastAction };
   }
 
   /** Undoes the exact changes from one `record` call, leaving earlier habits untouched (#34). */
@@ -1582,11 +1744,36 @@ export class UserHabitMemory {
       if (idx < 0) continue;
       if (change.previousCount !== null) {
         this.entries[idx]!.count = change.previousCount;
+        this.entries[idx]!.dayType = change.previousDayType ?? undefined;
       } else {
         this.entries.splice(idx, 1);
       }
     }
     this.entries.sort((a, b) => b.count - a.count);
+
+    for (const change of [...(receipt.sequences ?? [])].reverse()) {
+      const idx = this.sequences.findIndex(
+        (s) => s.afterKey === change.afterKey && s.targetId === change.targetId && s.operationKey === change.operationKey,
+      );
+      if (idx >= 0) {
+        if (change.previousCount !== null) {
+          this.sequences[idx]!.count = change.previousCount;
+        } else {
+          this.sequences.splice(idx, 1);
+        }
+      } else if (change.previousCount === null) {
+        // A capacity-trimmed transition still comes back on undo.
+        this.sequences.push({
+          afterKey: change.afterKey,
+          targetId: change.targetId,
+          operationKey: change.operationKey,
+          count: 1,
+        });
+      }
+    }
+    this.sequences.sort((a, b) => b.count - a.count);
+
+    this.lastAction = receipt.previousLastAction ? { ...receipt.previousLastAction } : null;
   }
 
   topSuggestions(options: {
@@ -1602,8 +1789,37 @@ export class UserHabitMemory {
     const devices = options.devices;
     const scenes = options.scenes;
     const bucket = timeBucketLabel(now.getHours());
-    const bucketEntries = this.entries.filter((e) => e.bucket === bucket);
-    const candidates = bucketEntries.length > 0 ? bucketEntries : this.entries;
+    const todayDayType = habitDayType(now);
+    const nowMs = now.getTime();
+
+    // Phase 1: learned habits, most specific context first (WWDC18-211: more specific
+    // patterns outrank general ones). Tier 0 matches the current day type, tier 1 is the
+    // same bucket with another/legacy day type, and the rest of the memory is the last
+    // fallback. Within a tier, recency-decayed frequency plus the next-action boost rank.
+    const decayFactor = (entry: HabitEntry): number => {
+      if (entry.lastRecordedAtMs === undefined) return 1;
+      const days = Math.max(0, (nowMs - entry.lastRecordedAtMs) / 86_400_000);
+      return Math.pow(0.5, days / HABIT_DECAY_HALF_LIFE_DAYS);
+    };
+    const sequenceBonus = (entry: HabitEntry): number => {
+      if (!this.lastAction || nowMs - this.lastAction.recordedAtMs > HABIT_SEQUENCE_BOOST_WINDOW_MS) return 0;
+      const afterKey = `${this.lastAction.targetId}|${this.lastAction.operationKey}`;
+      const hit = this.sequences.find(
+        (s) => s.afterKey === afterKey && s.targetId === entry.targetId && s.operationKey === entry.operationKey,
+      );
+      return hit ? hit.count * HABIT_SEQUENCE_BOOST_WEIGHT : 0;
+    };
+    const candidates = this.entries
+      .filter((e) => e.bucket === bucket)
+      .map((entry) => ({
+        entry,
+        tier: entry.dayType === undefined || entry.dayType === todayDayType ? 0 : 1,
+        score: entry.count * decayFactor(entry) + sequenceBonus(entry),
+      }));
+    for (const entry of this.entries.filter((e) => e.bucket !== bucket)) {
+      candidates.push({ entry, tier: 2, score: entry.count * decayFactor(entry) + sequenceBonus(entry) });
+    }
+    candidates.sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : b.score - a.score));
 
     const results: AssistantSuggestion[] = [];
     const seenTargets = new Set<string>();
@@ -1612,9 +1828,9 @@ export class UserHabitMemory {
       results.push({ id, title, confidencePercent: null, intents: [...intents] });
     };
 
-    // Phase 1: learned habits for the current bucket (falls back to all buckets when empty).
-    for (const entry of candidates) {
-      if (results.length >= limit) break;
+    // Phase 1: learned habits for the current context.
+    for (const candidate of candidates) {
+      const entry = candidate.entry;
       if (seenTargets.has(entry.targetId)) continue;
       const op = decodeHabitOperation(entry.operationKey);
       if (!op) continue;
@@ -1624,6 +1840,7 @@ export class UserHabitMemory {
       if (title === null) continue;
       seenTargets.add(entry.targetId);
       append(`habit:${entry.bucket}:${entry.targetId}:${entry.operationKey}`, title, [intent]);
+      if (results.length >= limit) break;
     }
     if (results.length >= limit) return results;
 

@@ -8,6 +8,7 @@
   - **固定 Top 4 零延迟推荐**：`topSuggestions` 默认返回 4 项当前可执行的推荐，习惯不足时按星标常用设备、当前开启设备、「全屋关灯」内置动作与环境温湿度（室温 ≥28°C 建议降温 / ≤16°C 建议升温）确定性补齐，并过滤已处于目标状态的冗余动作。
   - **大模型后台静默增强**：打开面板 0 延迟先展示本地 Top 4；已配置大模型时，当时段切换或室温 / 湿度明显变化（1°C / 5% 阈值）在后台静默刷新缓存，不阻塞面板打开、不弹云端确认、失败时保留旧缓存。Windows 端补齐 `recommendProactiveSuggestions`（Jev SystemOne 与 OpenAI 兼容 chat 双路），与 macOS 解析语义逐字段对齐。
   - **共享语料 `habit_golden.json`**：习惯记录 / 撤销回滚与 Top-4 补齐引擎由双端 `GoldenCorpusTests` / `core.test.ts` 逐字段共同断言；Windows 设置中可查看并一键清空已学习的时段习惯。
+- **习惯排序算法对齐 Siri Suggestions 机制（[ADR-0009](docs/adr/0009-habit-ranking-algorithm.md)）**：按 WWDC18-211 公开描述的排序信号升级双端习惯引擎——①条目身份加入工作日/周末日型（time of day + day of the week），更具体上下文的习惯优先，旧数据零迁移；②推荐计分引入 14 天半衰期的时间衰减（旧习惯自然淡出，`lastRecordedAt` 与归一化模式键分离，对齐 Apple「捐赠不含时间戳」原则）；③新增一步序列预测：「关书房灯后常开卧室灯」这类先后习惯（≤30 分钟窗口学习、≤60 分钟内对下一步候选加成），撤销横幅同步回滚序列计数；常量由 `habit_golden.json` 双端钉死。
 
 ## 1.1.5
 

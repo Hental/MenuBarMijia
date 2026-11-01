@@ -251,7 +251,7 @@ const CATALOG: Readonly<Record<string, readonly [string, string]>> = {
   "撤销授权（下次发往云端前再问）": ["撤销授权（下次发往云端前再问）", "Revoke (ask again before the next cloud request)"],
   "「全关」包含哪些设备（插座、扫地机默认不包含）": ["「全关」包含哪些设备（插座、扫地机默认不包含）", "Devices included in “All off” (plugs and vacuums are excluded by default)"],
   "自动记住自然语言习惯（相同表达下次 0ms 本地直达）": ["自动记住自然语言习惯（相同表达下次 0ms 本地直达）", "Remember phrasing (the same words run locally in 0 ms next time)"],
-  "已学习 {count} 条时段习惯（用于猜你想控）": ["已学习 {count} 条时段习惯（用于猜你想控）", "Learned {count} time-of-day habits (used for proactive suggestions)"],
+  "已学习 {count} 条时段习惯、{sequences} 条先后习惯（用于猜你想控）": ["已学习 {count} 条时段习惯、{sequences} 条先后习惯（用于猜你想控）", "Learned {count} time-of-day habits and {sequences} next-action patterns (used for proactive suggestions)"],
   "清空": ["清空", "Clear"],
   "猜你想控": ["猜你想控", "For you"],
   "软件更新": ["软件更新", "Software update"],

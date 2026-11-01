@@ -801,14 +801,27 @@ struct GoldenCorpusTests {
         let devices: [CorpusDevice]
         let scenes: [AIRequestScene]
         let memoryCases: [HabitMemoryCase]
+        let sequenceCases: [SequenceCase]
         let topSuggestionCases: [HabitTopSuggestionCase]
     }
 
+    /// Input row for `entriesBefore`; `ageDays` sets `lastRecordedAt` relative to the case date.
+    private struct HabitEntryInput: Decodable {
+        let bucket: String
+        let targetId: String
+        let operationKey: String
+        let count: Int
+        let dayType: String?
+        let ageDays: Int?
+    }
+
+    /// Output projection compared against the engine's entries (no input-only fields).
     private struct HabitEntryDTO: Decodable, Equatable {
         let bucket: String
         let targetId: String
         let operationKey: String
         let count: Int
+        let dayType: String?
     }
 
     private struct HabitReceiptEntry: Decodable, Equatable {
@@ -816,17 +829,47 @@ struct GoldenCorpusTests {
         let targetId: String
         let operationKey: String
         let previousCount: Int?
+        let previousDayType: String?
     }
 
     private struct HabitMemoryCase: Decodable {
         let name: String
+        let date: String
         let hour: Int
-        let entriesBefore: [HabitEntryDTO]
+        let entriesBefore: [HabitEntryInput]
         let recordIntents: [ExpectedIntent]
         let expectReceipt: [HabitReceiptEntry]?
         let entriesAfterRecord: [HabitEntryDTO]
         let expectUnrecord: Bool
         let entriesAfterUnrecord: [HabitEntryDTO]
+    }
+
+    private struct SequenceCase: Decodable {
+        let name: String
+        let date: String
+        let hour: Int
+        let steps: [SequenceStep]
+        let expectedSequences: [HabitSequenceDTO]
+        let expectedLastAction: HabitLastActionDTO
+    }
+
+    private struct SequenceStep: Decodable {
+        /// Minutes after the previous step; `null` marks the first step.
+        let gapMinutes: Int?
+        let intents: [ExpectedIntent]
+        let unrecord: Bool?
+    }
+
+    private struct HabitSequenceDTO: Decodable, Equatable {
+        let afterKey: String
+        let targetId: String
+        let operationKey: String
+        let count: Int
+    }
+
+    private struct HabitLastActionDTO: Decodable, Equatable {
+        let targetId: String
+        let operationKey: String
     }
 
     private struct HabitReadingDTO: Decodable {
@@ -837,21 +880,61 @@ struct GoldenCorpusTests {
 
     private struct HabitTopSuggestionCase: Decodable {
         let name: String
+        let date: String
         let hour: Int
         let deviceIds: [String]
-        let entriesBefore: [HabitEntryDTO]
+        let entriesBefore: [HabitEntryInput]
         let favoriteIds: [String]
         let environment: [HabitReadingDTO]
         let limit: Int
+        let lastAction: HabitLastActionDetails?
+        let sequencesBefore: [HabitSequenceDTO]
         let expected: [[ExpectedIntent]]
     }
 
+    private struct HabitLastActionDetails: Decodable {
+        let targetId: String
+        let operationKey: String
+        let ageMinutes: Int
+    }
+
     private static func habitEntry(_ entry: UserHabitMemory.HabitEntry) -> HabitEntryDTO {
-        HabitEntryDTO(bucket: entry.bucket.rawValue, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
+        HabitEntryDTO(
+            bucket: entry.bucket.rawValue,
+            targetId: entry.targetId,
+            operationKey: entry.operationKey,
+            count: entry.count,
+            dayType: entry.dayType?.rawValue
+        )
     }
 
     private static func habitReceiptChange(_ change: UserHabitMemory.RecordingReceipt.EntryChange) -> HabitReceiptEntry {
-        HabitReceiptEntry(bucket: change.bucket.rawValue, targetId: change.targetId, operationKey: change.operationKey, previousCount: change.previousCount)
+        HabitReceiptEntry(
+            bucket: change.bucket.rawValue,
+            targetId: change.targetId,
+            operationKey: change.operationKey,
+            previousCount: change.previousCount,
+            previousDayType: change.previousDayType?.rawValue
+        )
+    }
+
+    /// Builds the case's local-time date from the pinned calendar day + hour.
+    private static func habitCaseDate(date: String, hour: Int) throws -> Date {
+        let parts = date.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { throw CocoaError(.coderInvalidValue) }
+        return try #require(Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: hour, minute: 30)))
+    }
+
+    private static func makeEntry(_ dto: HabitEntryInput, now: Date) throws -> UserHabitMemory.HabitEntry {
+        let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: dto.bucket), "unknown bucket \(dto.bucket)")
+        return UserHabitMemory.HabitEntry(
+            bucket: bucket,
+            targetId: dto.targetId,
+            operationKey: dto.operationKey,
+            count: dto.count,
+            dayType: dto.dayType.flatMap(UserHabitMemory.DayType.init(rawValue:)),
+            lastRecordedAt: now.addingTimeInterval(Double(-(dto.ageDays ?? 0)) * 86_400)
+        )
     }
 
     private static func intent(from expected: ExpectedIntent) -> DeviceIntent? {
@@ -872,7 +955,7 @@ struct GoldenCorpusTests {
         }
     }
 
-    @Test("Cross-platform habit memory corpus matches MijiaCore UserHabitMemory (#113)")
+    @Test("Cross-platform habit memory corpus matches MijiaCore UserHabitMemory (#113, ADR-0009)")
     func habitGoldenCorpusParity() throws {
         let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/habit_golden.json")
         let corpus = try JSONDecoder().decode(HabitCorpus.self, from: Data(contentsOf: fixtureURL))
@@ -880,16 +963,13 @@ struct GoldenCorpusTests {
         let scenes = corpus.scenes.map { $0.toHomeScene() }
 
         for item in corpus.memoryCases {
-            let bucketEntries = try item.entriesBefore.map { entry -> UserHabitMemory.HabitEntry in
-                let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: entry.bucket), "\(item.name): unknown bucket")
-                return UserHabitMemory.HabitEntry(bucket: bucket, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
-            }
-            var memory = UserHabitMemory(entries: bucketEntries)
-            let date = try #require(Calendar.current.date(from: DateComponents(hour: item.hour, minute: 30)))
+            let now = try Self.habitCaseDate(date: item.date, hour: item.hour)
+            let seedEntries = try item.entriesBefore.map { try Self.makeEntry($0, now: now) }
+            var memory = UserHabitMemory(entries: seedEntries)
             let intents = item.recordIntents.compactMap(Self.intent(from:))
             #expect(intents.count == item.recordIntents.count, "\(item.name): unknown operation kind")
 
-            let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: date)
+            let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: now)
             #expect(receipt?.entries.map(Self.habitReceiptChange) == item.expectReceipt, "\(item.name)")
             #expect(memory.entries.map(Self.habitEntry) == item.entriesAfterRecord, "\(item.name)")
             if item.expectUnrecord, let receipt {
@@ -898,21 +978,60 @@ struct GoldenCorpusTests {
             }
         }
 
-        for item in corpus.topSuggestionCases {
-            let bucketEntries = try item.entriesBefore.map { entry -> UserHabitMemory.HabitEntry in
-                let bucket = try #require(UserHabitMemory.TimeBucket(rawValue: entry.bucket), "\(item.name): unknown bucket")
-                return UserHabitMemory.HabitEntry(bucket: bucket, targetId: entry.targetId, operationKey: entry.operationKey, count: entry.count)
+        for item in corpus.sequenceCases {
+            let start = try Self.habitCaseDate(date: item.date, hour: item.hour)
+            var memory = UserHabitMemory()
+            var lastAt = start
+            for step in item.steps {
+                let at: Date
+                if let gap = step.gapMinutes {
+                    at = lastAt.addingTimeInterval(Double(gap) * 60)
+                } else {
+                    at = start
+                }
+                lastAt = at
+                let intents = step.intents.compactMap(Self.intent(from:))
+                let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: at)
+                if step.unrecord == true, let receipt {
+                    memory.unrecord(receipt)
+                }
             }
-            let memory = UserHabitMemory(entries: bucketEntries)
+            #expect(
+                memory.sequences.map { HabitSequenceDTO(afterKey: $0.afterKey, targetId: $0.targetId, operationKey: $0.operationKey, count: $0.count) }
+                    == item.expectedSequences,
+                "\(item.name)"
+            )
+            #expect(
+                memory.lastAction.map { HabitLastActionDTO(targetId: $0.targetId, operationKey: $0.operationKey) } == item.expectedLastAction,
+                "\(item.name)"
+            )
+        }
+
+        for item in corpus.topSuggestionCases {
+            let now = try Self.habitCaseDate(date: item.date, hour: item.hour)
+            let seedEntries = try item.entriesBefore.map { try Self.makeEntry($0, now: now) }
+            let memory = UserHabitMemory(
+                entries: seedEntries,
+                phrases: [],
+                sequences: item.sequencesBefore.map {
+                    UserHabitMemory.SequenceEntry(afterKey: $0.afterKey, targetId: $0.targetId, operationKey: $0.operationKey, count: $0.count)
+                },
+                lastAction: item.lastAction.map {
+                    UserHabitMemory.LastAction(
+                        targetId: $0.targetId,
+                        operationKey: $0.operationKey,
+                        recordedAt: now.addingTimeInterval(Double(-$0.ageMinutes) * 60)
+                    )
+                }
+            )
             let devices = try item.deviceIds.map { id in
                 try #require(allDevices.first { $0.id == id }, "\(item.name): unknown device \(id)")
             }
-            let date = try #require(Calendar.current.date(from: DateComponents(hour: item.hour, minute: 30)))
             let readings = item.environment.map {
                 EnvironmentReading(id: $0.roomName, label: $0.roomName, roomName: $0.roomName, temperature: $0.temperature, humidity: $0.humidity)
             }
             let suggestions = memory.topSuggestions(
-                for: date,
+                for: now,
                 devices: devices,
                 scenes: scenes,
                 limit: item.limit,

@@ -18,7 +18,9 @@ import {
   INSECURE_ENDPOINT_MESSAGE,
   ModelActionPolicy,
   type HabitEntry,
+  type HabitLastAction,
   type HabitRecordingReceipt,
+  type HabitSequenceEntry,
 } from "../core/assistant.js";
 import {
   type HttpRequest,
@@ -1668,7 +1670,7 @@ export class MenuMijiaWindowsApp {
           habitSummary: buildHabitSummary(
             this.settings.habitLearningEnabled,
             this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries),
+            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
             this.devices,
             this.scenes,
           ),
@@ -1893,20 +1895,52 @@ export class MenuMijiaWindowsApp {
   /** Records manual card actions into the habit memory for the current time bucket (#113). */
   private recordHabits(intents: readonly DeviceIntent[]): HabitRecordingReceipt | null {
     if (!this.settings.habitLearningEnabled || intents.length === 0) return null;
-    const memory = new UserHabitMemory(this.settings.habitEntries);
+    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
     const receipt = memory.record(intents, this.devices, this.scenes, new Date());
-    if (receipt) {
-      this.settings.habitEntries = [...memory.entries];
-      this.saveSettings();
-    }
+    if (receipt) this.saveHabitMemory(memory);
     return receipt;
   }
 
-  private unrecordHabits(receipt: HabitRecordingReceipt): void {
-    const memory = new UserHabitMemory(this.settings.habitEntries);
-    memory.unrecord(receipt);
+  /** Sequence entries and lastAction persist alongside the entries (ADR-0009). */
+  private habitSequences(): HabitSequenceEntry[] {
+    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as { sequences?: HabitSequenceEntry[]; lastAction?: HabitLastAction | null };
+      return Array.isArray(parsed.sequences) ? parsed.sequences : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private lastHabitAction(): HabitLastAction | null {
+    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { lastAction?: HabitLastAction | null };
+      return parsed.lastAction ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private saveHabitMemory(memory: UserHabitMemory): void {
     this.settings.habitEntries = [...memory.entries];
     this.saveSettings();
+    try {
+      localStorage.setItem("menumijia.windows.habit.sequences.v1", JSON.stringify({
+        sequences: memory.sequences,
+        lastAction: memory.lastAction,
+      }));
+    } catch {
+      // Quota errors only cost the sequence context, never the entries.
+    }
+  }
+
+  private unrecordHabits(receipt: HabitRecordingReceipt): void {
+    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
+    memory.unrecord(receipt);
+    this.saveHabitMemory(memory);
   }
 
   /** Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient signature (#113). */
@@ -1996,7 +2030,7 @@ export class MenuMijiaWindowsApp {
           habitSummary: buildHabitSummary(
             this.settings.habitLearningEnabled,
             this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries),
+            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
             this.devices,
             this.scenes,
           ),
@@ -4165,10 +4199,13 @@ export class MenuMijiaWindowsApp {
                 : ""
             }
             ${
-              this.settings.habitEntries.length > 0
+              this.settings.habitEntries.length > 0 || this.habitSequences().length > 0
                 ? `<div class="cc-timers-stack">
                     <div class="cc-timer-row">
-                      <span>${t("已学习 {count} 条时段习惯（用于猜你想控）", { count: this.settings.habitEntries.length })}</span>
+                      <span>${t("已学习 {count} 条时段习惯、{sequences} 条先后习惯（用于猜你想控）", {
+                        count: this.settings.habitEntries.length,
+                        sequences: this.habitSequences().length,
+                      })}</span>
                       <button class="cc-inline-pill" id="btn-clear-habits">${t("清空")}</button>
                     </div>
                   </div>`
@@ -5038,6 +5075,7 @@ export class MenuMijiaWindowsApp {
 
     this.root.querySelector("#btn-clear-habits")?.addEventListener("click", () => {
       this.settings.habitEntries = [];
+      localStorage.removeItem("menumijia.windows.habit.sequences.v1");
       this.aiProactiveSuggestions = null;
       this.aiProactiveSignature = null;
       this.saveSettings();
