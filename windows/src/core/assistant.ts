@@ -1486,6 +1486,8 @@ export interface HabitEntryChange {
   readonly bucket: string;
   readonly targetId: string;
   readonly operationKey: string;
+  /** The day type the entry carried *after* the call; part of the undo lookup key (ADR-0009). */
+  readonly dayType: HabitDayType | null;
   /** `null` means the entry was inserted by the call and should be removed on undo. */
   readonly previousCount: number | null;
   /** The day type the entry carried before the call (upgrading a legacy entry records it here). */
@@ -1660,6 +1662,7 @@ export class UserHabitMemory {
           bucket,
           targetId: intent.targetId,
           operationKey: intent.operationKey,
+          dayType,
           previousCount: this.entries[idx]!.count,
           previousDayType: this.entries[idx]!.dayType ?? null,
         });
@@ -1671,6 +1674,7 @@ export class UserHabitMemory {
           bucket,
           targetId: intent.targetId,
           operationKey: intent.operationKey,
+          dayType,
           previousCount: null,
           previousDayType: null,
         });
@@ -1739,7 +1743,9 @@ export class UserHabitMemory {
   unrecord(receipt: HabitRecordingReceipt): void {
     for (const change of [...receipt.entries].reverse()) {
       const idx = this.entries.findIndex(
-        (e) => e.bucket === change.bucket && e.targetId === change.targetId && e.operationKey === change.operationKey,
+        (e) =>
+          e.bucket === change.bucket && e.dayType === (change.dayType ?? undefined)
+            && e.targetId === change.targetId && e.operationKey === change.operationKey,
       );
       if (idx < 0) continue;
       if (change.previousCount !== null) {

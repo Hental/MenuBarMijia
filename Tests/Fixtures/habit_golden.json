@@ -149,7 +149,8 @@
           "targetId": "dev_ceiling",
           "operationKey": "power:on",
           "previousCount": null,
-          "previousDayType": null
+          "previousDayType": null,
+          "dayType": "weekday"
         }
       ],
       "entriesAfterRecord": [
@@ -191,7 +192,8 @@
           "targetId": "dev_desk",
           "operationKey": "power:on",
           "previousCount": 2,
-          "previousDayType": null
+          "previousDayType": null,
+          "dayType": "weekday"
         }
       ],
       "entriesAfterRecord": [
@@ -249,7 +251,8 @@
           "targetId": "dev_ac",
           "operationKey": "power:on",
           "previousCount": null,
-          "previousDayType": null
+          "previousDayType": null,
+          "dayType": "weekday"
         }
       ],
       "entriesAfterRecord": [

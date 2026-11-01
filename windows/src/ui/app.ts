@@ -1974,7 +1974,7 @@ export class MenuMijiaWindowsApp {
       );
       if (fresh.length > 0) return fresh;
     }
-    return new UserHabitMemory(this.settings.habitEntries).topSuggestions({
+    return new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
       devices: this.devices,
       scenes: this.scenes,
       environmentReadings: this.computedEnvironmentReadings,

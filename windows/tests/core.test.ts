@@ -1793,6 +1793,7 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
         bucket: string;
         targetId: string;
         operationKey: string;
+        dayType: string | null;
         previousCount: number | null;
         previousDayType: string | null;
       }> | null;

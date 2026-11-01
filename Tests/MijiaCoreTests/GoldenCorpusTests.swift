@@ -828,6 +828,7 @@ struct GoldenCorpusTests {
         let bucket: String
         let targetId: String
         let operationKey: String
+        let dayType: String?
         let previousCount: Int?
         let previousDayType: String?
     }
@@ -913,6 +914,7 @@ struct GoldenCorpusTests {
             bucket: change.bucket.rawValue,
             targetId: change.targetId,
             operationKey: change.operationKey,
+            dayType: change.dayType?.rawValue,
             previousCount: change.previousCount,
             previousDayType: change.previousDayType?.rawValue
         )

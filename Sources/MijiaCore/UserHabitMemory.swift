@@ -152,6 +152,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             public var bucket: TimeBucket
             public var targetId: String
             public var operationKey: String
+            /// The day type the entry carried *after* this call; part of the undo lookup key (ADR-0009).
+            public var dayType: DayType?
             /// `nil` means the entry was inserted by this call and should be removed on undo.
             public var previousCount: Int?
             /// The day type the entry carried before this call (upgrading a legacy `nil` entry records it here).
@@ -260,6 +262,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         bucket: bucket,
                         targetId: intent.targetId,
                         operationKey: intent.operationKey,
+                        dayType: dayType,
                         previousCount: entries[idx].count,
                         previousDayType: entries[idx].dayType
                     )
@@ -273,6 +276,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
                         bucket: bucket,
                         targetId: intent.targetId,
                         operationKey: intent.operationKey,
+                        dayType: dayType,
                         previousCount: nil,
                         previousDayType: nil
                     )
@@ -369,6 +373,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         for change in receipt.entries.reversed() {
             guard let idx = entries.firstIndex(where: {
                 $0.bucket == change.bucket
+                    && $0.dayType == change.dayType
                     && $0.targetId == change.targetId
                     && $0.operationKey == change.operationKey
             }) else { continue }
