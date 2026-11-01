@@ -99,6 +99,8 @@ struct ManualHabitRecordingTests {
         let (store, mock) = try await makeStore()
 
         store.executeQuickAction(.lightsOff)
+        // Freeze the banner so a loaded CI cannot expire it mid-test.
+        store.pauseUndoBannerCountdown()
         // Habits train only after the dispatched commands confirm (#113 review fix).
         for _ in 0..<100 where store.userHabitMemory.entries.isEmpty {
             try await Task.sleep(for: .milliseconds(10))
@@ -119,15 +121,15 @@ struct ManualHabitRecordingTests {
         await mock.setShouldFail(true)
 
         store.executeQuickAction(.lightsOff)
+        #expect(store.undoBanner != nil, "the banner still offers device restore")
+        store.pauseUndoBannerCountdown()
         // Wait for the dispatch task to actually attempt the command.
         for _ in 0..<100 where (await mock.executedCommands).isEmpty {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try await Task.sleep(for: .milliseconds(50))
 
         let memory = store.userHabitMemory
         #expect(memory.entries.isEmpty)
-        #expect(store.undoBanner != nil, "the banner still offers device restore")
     }
 
     @Test("turnAllOff records habits for every target and undo rolls them back")
@@ -135,6 +137,8 @@ struct ManualHabitRecordingTests {
         let (store, _) = try await makeStore()
 
         store.turnAllOff()
+        // Freeze the banner so a loaded CI cannot expire it mid-test.
+        store.pauseUndoBannerCountdown()
         for _ in 0..<100 where store.userHabitMemory.entries.count < 2 {
             try await Task.sleep(for: .milliseconds(10))
         }
