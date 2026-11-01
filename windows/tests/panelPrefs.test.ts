@@ -21,6 +21,7 @@ import {
   releaseVelocity,
   projectedOffset,
   resizePreviewScale,
+  stepsBetween,
   resolvedSize,
   spans,
 } from "../src/ui/panelPrefs.js";
@@ -108,15 +109,21 @@ describe("panel layout prefs", () => {
   });
 
   it("preview scale tracks the drag outward and rubberbands inward (#115)", () => {
-    assert.equal(resizePreviewScale("half", { width: 0, height: 0 }), 1);
+    assert.equal(resizePreviewScale("half", "half", { width: 0, height: 0 }), 1);
     // Half dragged outward: grows up to +5% at the threshold.
-    assert.equal(resizePreviewScale("half", { width: 30, height: 0 }), 1.05);
-    assert.equal(resizePreviewScale("half", { width: 15, height: 0 }), 1.025);
+    assert.equal(resizePreviewScale("half", "half", { width: 30, height: 0 }), 1.05);
+    assert.equal(resizePreviewScale("half", "half", { width: 15, height: 0 }), 1.025);
     // Half pushed inward: rubberbands down to −4%.
-    assert.equal(resizePreviewScale("half", { width: -30, height: 0 }), 0.96);
+    assert.equal(resizePreviewScale("half", "half", { width: -30, height: 0 }), 0.96);
     // Panel dragged inward (its outward direction): grows; overshoot clamps.
-    assert.equal(resizePreviewScale("panel", { width: -30, height: 0 }), 1.05);
-    assert.equal(resizePreviewScale("panel", { width: -90, height: 0 }), 1.05);
+    assert.equal(resizePreviewScale("panel", "panel", { width: -30, height: 0 }), 1.05);
+    assert.equal(resizePreviewScale("panel", "panel", { width: -90, height: 0 }), 1.05);
+    // Cumulative progress: after the half -> full step the second step's pull starts near 1 again.
+    assert.equal(resizePreviewScale("half", "full", { width: 45, height: 0 }), 1.025);
+    assert.ok(resizePreviewScale("half", "full", { width: 31, height: 0 }) < 1.002);
+    assert.equal(stepsBetween("half", "panel"), 2);
+    assert.equal(stepsBetween("full", "half"), -1);
+    assert.equal(stepsBetween("auto", "full"), 0);
   });
 
   it("moves before/after a target and keeps unknown devices in place", () => {

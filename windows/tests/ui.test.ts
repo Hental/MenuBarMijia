@@ -1591,6 +1591,7 @@ describe("Air purifier support (#98)", () => {
     window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, clientX: 220, clientY: 220 }));
     await setImmediate();
     assert.deepEqual(readSavedOrder(), []);
+    assert.equal(element(lightSelector).classList.contains("is-resizing"), false, "jiggle pause class must be cleaned up on release");
 
     // 2. Inward drag on .cc-resize-handle: panel -> full -> half without starting card reorder.
     element(handleSelector).dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 300, clientY: 260 }));

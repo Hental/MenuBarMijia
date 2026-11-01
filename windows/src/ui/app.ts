@@ -4987,8 +4987,9 @@ export class MenuMijiaWindowsApp {
       if (previewCleanupTimer !== null) { window.clearTimeout(previewCleanupTimer); previewCleanupTimer = null; }
       const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(id)}"]`);
       if (!tile) return;
+      tile.classList.remove("is-resizing");
       if (animateBack) {
-        tile.style.transition = "transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1.15)";
+        tile.style.transition = "transform 240ms var(--ease-spring)";
         tile.style.transform = "";
         previewCleanupTimer = window.setTimeout(() => { tile.style.transition = ""; }, 260);
       } else {
@@ -5047,6 +5048,7 @@ export class MenuMijiaWindowsApp {
             lastDy: 0,
             samples: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
           };
+          handleEl.closest<HTMLElement>("[data-tile-id]")?.classList.add("is-resizing");
         }
         return;
       }
@@ -5087,15 +5089,17 @@ export class MenuMijiaWindowsApp {
           this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = next;
           this.saveLayout();
           this.render();
-          return;
+          // No early return: fall through so the fresh node keeps the continuous preview.
         }
         // Live tracking preview (QuotaKeeper-style): the card leans toward the drag from
         // pixel one via a direct style write, so no re-render happens per pointermove.
-        const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(resizing.id)}"]`);
-        if (tile && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-          const scale = resizePreviewScale(resizing.startSize, { width: dx, height: dy });
-          tile.style.transformOrigin = "bottom right";
-          tile.style.transform = scale === 1 ? "" : `scale(${scale.toFixed(4)})`;
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(resizing.id)}"]`);
+          if (tile) {
+            const scale = resizePreviewScale(resizing.startSize, this.tileSize(dev), { width: dx, height: dy });
+            tile.style.transformOrigin = "bottom right";
+            tile.style.transform = scale === 1 ? "" : `scale(${scale.toFixed(4)})`;
+          }
         }
         return;
       }

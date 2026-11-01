@@ -154,11 +154,24 @@ export function projectedOffset(velocity: { x: number; y: number }, threshold = 
   return { width: project(velocity.x), height: project(velocity.y) };
 }
 
-/** Corner-anchored tracking preview while no step has fired: +5% outward, −4% inward rubberband. */
-export function resizePreviewScale(startSize: TileSize, translation: TileResizeTranslation, threshold = RESIZE_STEP_THRESHOLD): number {
+/** Ordinal distance between two sizes in the half → full → panel ladder (0 if either is auto). */
+export function stepsBetween(a: TileSize, b: TileSize): number {
+  const ia = ORDERED_CONCRETE_TILE_SIZES.indexOf(a as Exclude<TileSize, "auto">);
+  const ib = ORDERED_CONCRETE_TILE_SIZES.indexOf(b as Exclude<TileSize, "auto">);
+  return ia < 0 || ib < 0 ? 0 : ib - ia;
+}
+
+/** Corner-anchored tracking preview; cumulative progress so steps never snap the preview. */
+export function resizePreviewScale(
+  startSize: TileSize,
+  currentSize: TileSize,
+  translation: TileResizeTranslation,
+  threshold = RESIZE_STEP_THRESHOLD,
+): number {
   const distance = Math.hypot(translation.width, translation.height);
   if (distance <= 1) return 1;
-  const progress = Math.min(distance / threshold, 1);
+  const stepsCrossed = Math.abs(stepsBetween(startSize, currentSize));
+  const progress = Math.min(Math.max(distance / threshold - stepsCrossed, 0), 1);
   const outward =
     startSize === "half"
       ? translation.width > 0 || translation.height > 0

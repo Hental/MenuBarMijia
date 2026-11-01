@@ -90,10 +90,18 @@ public enum TileResizeGestureMath {
 
     /// Corner-anchored tracking preview while the drag has not crossed a step yet:
     /// growing outward scales up to +5%, pushing inward rubberbands down to −4%.
-    public static func previewScale(startSize: TileSize, translation: CGSize, threshold: CGFloat = stepThreshold) -> CGFloat {
+    /// Progress is cumulative across steps (`distance/threshold − stepsBetween`), so the
+    /// preview never snaps when a step fires — the real-size spring masks the handoff.
+    public static func previewScale(
+        startSize: TileSize,
+        currentSize: TileSize,
+        translation: CGSize,
+        threshold: CGFloat = stepThreshold
+    ) -> CGFloat {
         let distance = hypot(translation.width, translation.height)
         guard distance > 1 else { return 1 }
-        let progress = min(distance / threshold, 1)
+        let stepsCrossed = CGFloat(abs(stepsBetween(startSize, currentSize)))
+        let progress = min(max(distance / threshold - stepsCrossed, 0), 1)
         let outward: Bool
         switch startSize {
         case .half: outward = translation.width > 0 || translation.height > 0
@@ -101,6 +109,12 @@ public enum TileResizeGestureMath {
         default: outward = (abs(translation.width) >= abs(translation.height) ? translation.width : translation.height) >= 0
         }
         return 1 + (outward ? 0.05 : -0.04) * progress
+    }
+
+    /// Ordinal distance between two sizes in the half → full → panel ladder (0 if either is auto).
+    public static func stepsBetween(_ a: TileSize, _ b: TileSize) -> Int {
+        guard let ia = orderedSizes.firstIndex(of: a), let ib = orderedSizes.firstIndex(of: b) else { return 0 }
+        return ib - ia
     }
 }
 
@@ -186,10 +200,11 @@ extension EnvironmentValues {
     }
 }
 
-/// Draws a bold iOS Control Center-style quarter-circle arc hugging the card's bottom-right corner (#115).
+/// Draws an iOS Control Center-style quarter-circle arc hugging the card's bottom-right corner (#115).
+/// The visual arc is small and quiet; the enclosing 28pt frame stays the hit area.
 struct CornerArcHandleShape: Shape {
-    var cornerRadius: CGFloat = DesignTokens.Radius.card
-    var inset: CGFloat = 4
+    var cornerRadius: CGFloat = 10
+    var inset: CGFloat = 8
 
     func path(in rect: CGRect) -> Path {
         let radius = max(6, cornerRadius)
@@ -220,12 +235,17 @@ struct LayoutEditable: ViewModifier {
     let deviceId: String
     let size: TileSize
     let isDragging: Bool
+    var isResizing: Bool = false
     let dragOffset: CGSize
-    var resizePreviewScale: CGFloat = 1
     let onCycleSize: () -> Void
     var onBeginResize: () -> Void = {}
     var onResizeDrag: (CGSize) -> Void = { _ in }
-    var onEndResize: (CGSize) -> Void = { _ in }
+    var onEndResize: (CGSize, [TileResizeGestureMath.ResizeSample]) -> Void = { _, _ in }
+
+    /// Gesture-scoped tracking preview: lives here so per-pointermove updates never re-render
+    /// the whole panel (#115, QuotaKeeper-style "only the active card needs layout").
+    @State private var previewScale: CGFloat = 1
+    @State private var resizeSamples: [TileResizeGestureMath.ResizeSample] = []
 
     // Per-card phase so neighbouring cards do not swing in sync.
     private var phase: Double { Double(abs(deviceId.hashValue % 97)) / 97 * .pi * 2 }
@@ -234,16 +254,16 @@ struct LayoutEditable: ViewModifier {
         ZStack(alignment: .bottomTrailing) {
             jiggling(content.allowsHitTesting(!editing))
                 .scaleEffect(isDragging ? 1.05 : 1)
-                .scaleEffect(resizePreviewScale, anchor: .bottomTrailing)
+                .scaleEffect(previewScale, anchor: .bottomTrailing)
                 .shadowIf(isDragging, color: .black.opacity(0.3), radius: 12, y: 6)
 
             if editing && !isDragging {
                 CornerArcHandleShape()
                     .stroke(
-                        colorScheme == .dark ? Color.white.opacity(0.92) : Color.primary.opacity(0.78),
-                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        colorScheme == .dark ? Color.white.opacity(0.55) : Color.primary.opacity(0.45),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
                     )
-                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                    .shadow(color: .black.opacity(0.15), radius: 1, y: 1)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
                     .highPriorityGesture(
@@ -251,9 +271,21 @@ struct LayoutEditable: ViewModifier {
                             .onChanged { value in
                                 onBeginResize()
                                 onResizeDrag(value.translation)
+                                guard !reduceMotion else { return }
+                                let now = Date.timeIntervalSinceReferenceDate
+                                resizeSamples.append(TileResizeGestureMath.ResizeSample(offset: value.translation, time: now))
+                                resizeSamples = resizeSamples.filter { now - $0.time <= 0.12 }
+                                previewScale = TileResizeGestureMath.previewScale(
+                                    startSize: size,
+                                    currentSize: size,
+                                    translation: value.translation
+                                )
                             }
                             .onEnded { value in
-                                onEndResize(value.translation)
+                                withAnimation(AppleMotion.snappySpring) { previewScale = 1 }
+                                let samples = resizeSamples
+                                resizeSamples = []
+                                onEndResize(value.translation, samples)
                             }
                     )
                     .accessibilityElement()
@@ -263,7 +295,7 @@ struct LayoutEditable: ViewModifier {
                     .panelHelp(L10n.tr("拖拽或点击调整卡片大小：\(size.title)", "Drag or click to resize: \(size.title)"))
                     .padding(.bottom, -4)
                     .padding(.trailing, -4)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
             }
         }
         .offset(dragOffset)
@@ -274,7 +306,7 @@ struct LayoutEditable: ViewModifier {
     /// instead of freezing at the last animated angle.
     @ViewBuilder
     private func jiggling<V: View>(_ view: V) -> some View {
-        if editing && !reduceMotion && !isDragging {
+        if editing && !reduceMotion && !isDragging && !isResizing {
             TimelineView(.animation) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 view.rotationEffect(.degrees(sin(t * 2 * .pi * 3.6 + phase) * 1.1))
@@ -289,13 +321,12 @@ enum TileSpace {
     static let name = "device_tiles"
 }
 
-/// Live state of one corner-handle resize gesture (#115): the size the drag started from,
-/// whether a step already fired, and the pointer samples backing release-velocity flick.
+/// Live state of one corner-handle resize gesture (#115): the size the drag started from and
+/// whether a step already fired. Velocity samples live in `LayoutEditable`'s local state.
 struct ActiveTileResize {
     let deviceId: String
     let startSize: TileSize
     var didStep: Bool
-    var samples: [TileResizeGestureMath.ResizeSample]
 }
 
 /// Card frames in the tile coordinate space, used to find which card the pointer is over.

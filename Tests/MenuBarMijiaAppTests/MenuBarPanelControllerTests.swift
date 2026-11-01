@@ -783,16 +783,22 @@ struct MenuBarPanelControllerTests {
     @Test("TileResizeGestureMath preview scale tracks the drag outward and rubberbands inward (#115)")
     func tileResizeGestureMathPreviewScale() {
         // No movement: exactly 1.
-        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: .zero) == 1)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .half, translation: .zero) == 1)
         // Half dragged outward: grows up to +5% at the threshold.
-        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: 30, height: 0)) == 1.05)
-        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: 15, height: 0)) == 1.025)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .half, translation: CGSize(width: 30, height: 0)) == 1.05)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .half, translation: CGSize(width: 15, height: 0)) == 1.025)
         // Half pushed inward: rubberbands down to −4%.
-        #expect(TileResizeGestureMath.previewScale(startSize: .half, translation: CGSize(width: -30, height: 0)) == 0.96)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .half, translation: CGSize(width: -30, height: 0)) == 0.96)
         // Panel dragged inward (its outward direction): grows.
-        #expect(TileResizeGestureMath.previewScale(startSize: .panel, translation: CGSize(width: -30, height: 0)) == 1.05)
+        #expect(TileResizeGestureMath.previewScale(startSize: .panel, currentSize: .panel, translation: CGSize(width: -30, height: 0)) == 1.05)
         // Overshoot clamps at the threshold.
-        #expect(TileResizeGestureMath.previewScale(startSize: .panel, translation: CGSize(width: -90, height: 0)) == 1.05)
+        #expect(TileResizeGestureMath.previewScale(startSize: .panel, currentSize: .panel, translation: CGSize(width: -90, height: 0)) == 1.05)
+        // Cumulative progress: after the half -> full step the second step's pull starts near 1 again.
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .full, translation: CGSize(width: 45, height: 0)) == 1.025)
+        #expect(TileResizeGestureMath.previewScale(startSize: .half, currentSize: .full, translation: CGSize(width: 31, height: 0)) < 1.002)
+        #expect(TileResizeGestureMath.stepsBetween(.half, .panel) == 2)
+        #expect(TileResizeGestureMath.stepsBetween(.full, .half) == -1)
+        #expect(TileResizeGestureMath.stepsBetween(.auto, .full) == 0)
     }
     @Test("Long-pressing a light card enters edit mode and bottom-right corner arc handle supports both drag resizing and tap cycling without reordering (#115)")
     func longPressOnLightCardEntersEditModeWithoutExpandingAndCyclesTileSizes() async throws {
