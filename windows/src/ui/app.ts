@@ -1863,7 +1863,10 @@ export class MenuMijiaWindowsApp {
     if (succeeded > 0) {
       // Only explicit user asks train habits; model-inferred and scheduled runs do not (#34/#113).
       const habitReceipt = options.recordHabits && failed === 0 ? this.recordHabits(intents) : null;
-      this.lastUndoAction = canUndo ? {
+      // Scene activations have no inverse: an undo action must exist only when at least one
+      // device step is restorable, otherwise Undo would report success without doing anything
+      // (Codex #116 re-review).
+      this.lastUndoAction = canUndo && steps.length > 0 ? {
         summary: replyText,
         steps,
         expiresAtMs: Date.now() + 10 * 60 * 1000,
@@ -2070,10 +2073,6 @@ export class MenuMijiaWindowsApp {
       return;
     }
     const action = this.lastUndoAction;
-    // The habit records written by this action are rolled back together with the devices (#113).
-    if (action.habitReceipt) {
-      this.unrecordHabits(action.habitReceipt);
-    }
     const failedSteps: UndoStep[] = [];
     const blockedDevices = new Set<string>();
     let failureMessage = "";
@@ -2097,6 +2096,11 @@ export class MenuMijiaWindowsApp {
     this.lastUndoAction = failedSteps.length > 0
       ? { ...action, steps: failedSteps }
       : null;
+    // The habit records roll back only once every inverse command succeeded; a partially
+    // failed undo keeps them for the retry (Codex #116 re-review).
+    if (failedSteps.length === 0 && action.habitReceipt) {
+      this.unrecordHabits(action.habitReceipt);
+    }
     this.replyBanner = failedSteps.length > 0
       ? { text: t("撤销未完成，{count} 项待恢复。{message}", { count: failedSteps.length, message: failureMessage }), source: t("控制失败"), isError: true }
       : { text: t("已撤销：{summary}", { summary: action.summary }), source: t("已恢复") };

@@ -1509,6 +1509,8 @@ export interface HabitSequenceChange {
   readonly operationKey: string;
   /** `null` means the transition was inserted by the call and should be removed on undo. */
   readonly previousCount: number | null;
+  /** True when capacity trimming removed the just-inserted transition; undo must not resurrect it. */
+  insertedButTrimmed?: boolean;
 }
 
 export const MAX_HABIT_ENTRIES = 60;
@@ -1733,6 +1735,15 @@ export class UserHabitMemory {
       }
       this.sequences.sort((a, b) => b.count - a.count);
       if (this.sequences.length > MAX_HABIT_SEQUENCES) this.sequences.length = MAX_HABIT_SEQUENCES;
+      // A just-inserted transition that trimming already dropped never existed for the user;
+      // undo must not resurrect it (Codex #116 re-review).
+      for (const change of sequenceChanges) {
+        if (change.previousCount === null) {
+          change.insertedButTrimmed = !this.sequences.some(
+            (s) => s.afterKey === change.afterKey && s.targetId === change.targetId && s.operationKey === change.operationKey,
+          );
+        }
+      }
     }
 
     const previousLastAction = this.lastAction ? { ...this.lastAction } : null;
@@ -1772,8 +1783,9 @@ export class UserHabitMemory {
         } else {
           this.sequences.splice(idx, 1);
         }
-      } else if (change.previousCount === null) {
-        // A capacity-trimmed transition still comes back on undo.
+      } else if (change.previousCount === null && change.insertedButTrimmed !== true) {
+        // A capacity-trimmed pre-existing transition still comes back on undo; a transition
+        // that was trimmed on insertion never existed for the user (Codex #116 re-review).
         this.sequences.push({
           afterKey: change.afterKey,
           targetId: change.targetId,

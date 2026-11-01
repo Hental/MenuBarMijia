@@ -174,6 +174,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             public var operationKey: String
             /// `nil` means the transition was inserted by this call and should be removed on undo.
             public var previousCount: Int?
+            /// True when capacity trimming removed the just-inserted transition; undo must not resurrect it.
+            public var insertedButTrimmed: Bool = false
         }
 
         public var entries: [EntryChange] = []
@@ -338,6 +340,14 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             if sequences.count > Self.maxSequences {
                 sequences = Array(sequences.prefix(Self.maxSequences))
             }
+            // A just-inserted transition that trimming already dropped never existed for the
+            // user; undo must not resurrect it (Codex #116 re-review).
+            for index in receipt.sequences.indices where receipt.sequences[index].previousCount == nil {
+                let change = receipt.sequences[index]
+                receipt.sequences[index].insertedButTrimmed = !sequences.contains {
+                    $0.afterKey == change.afterKey && $0.targetId == change.targetId && $0.operationKey == change.operationKey
+                }
+            }
         }
 
         receipt.previousLastAction = lastAction
@@ -402,13 +412,16 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             case (let idx?, nil):
                 sequences.remove(at: idx)
             case (nil, let previousCount):
-                // A capacity-trimmed transition still comes back on undo.
-                sequences.append(SequenceEntry(
-                    afterKey: change.afterKey,
-                    targetId: change.targetId,
-                    operationKey: change.operationKey,
-                    count: previousCount ?? 1
-                ))
+                // A capacity-trimmed pre-existing transition still comes back on undo; a
+                // transition trimmed on insertion never existed for the user (Codex #116).
+                if change.insertedButTrimmed != true {
+                    sequences.append(SequenceEntry(
+                        afterKey: change.afterKey,
+                        targetId: change.targetId,
+                        operationKey: change.operationKey,
+                        count: previousCount ?? 1
+                    ))
+                }
             }
         }
         sequences.sort { $0.count > $1.count }
