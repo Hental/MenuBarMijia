@@ -72,14 +72,16 @@ public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - System Panel Look
 
-/// One system design, no skins. Tiles mirror Control Center: an opaque bright "platter" for
-/// anything that is on, and a quiet translucent well for anything that is off. Text and hairlines
-/// come from the system's semantic colours, so light and dark need no separate palettes.
+/// One system design, no skins. Tiles mirror Control Center: anything that is on gets the loudest
+/// surface the appearance allows — an opaque bright platter in light mode, a lifted well one step
+/// above the quiet off-state glass in dark mode, where a white slab would glare and force the ink
+/// inside it back to the light scheme. `TileSurface` derives ink, fill and hairline together so no
+/// caller has to reason about the pairing.
 public enum PanelLook {
     public static let tileRadius: CGFloat = 14
 
-    /// Ink for a bright platter. `Color.primary` turns white in dark mode, so the platter needs
-    /// its own fixed dark ink to stay legible.
+    /// Ink for the light-mode platter. `Color.primary` is white in dark mode, so the bright platter
+    /// carries its own fixed dark ink instead of following the window scheme.
     public static let platterInk = DesignTokens.Ink.onPlatter
 
     /// Soft drop shadow that keeps the platter above the glass; wells stay flat.
@@ -88,7 +90,7 @@ public enum PanelLook {
     }
 }
 
-/// One tile's presentation state: lit or quiet, and when lit, on the white platter or the
+/// One tile's presentation state: lit or quiet, and when lit, on the light-mode platter or the
 /// family-coloured glass. Ink, fill and hairline all derive from it, so callers pass one value
 /// instead of repeating the active/tint/scheme triple.
 public struct TileSurface: Equatable, Sendable {
@@ -102,20 +104,20 @@ public struct TileSurface: Equatable, Sendable {
         self.scheme = scheme
     }
 
-    /// Ink on the lit surface. The white platter needs the fixed dark ink; a tinted platter is
-    /// dark blue glass in dark mode, so white ink reads there instead.
+    /// Ink on the lit surface. Every lit surface in dark mode is dark glass, so it keeps white ink;
+    /// only the light-mode platter needs the fixed dark ink.
     public var ink: Color {
-        if isActive, tint != nil, scheme == .dark { return Color.white }
+        if isActive, scheme == .dark { return .white }
         return isActive ? PanelLook.platterInk : .primary
     }
 
     public var secondaryInk: Color {
-        if isActive, tint != nil, scheme == .dark { return Color.white.opacity(0.62) }
+        if isActive, scheme == .dark { return Color.white.opacity(0.62) }
         return isActive ? PanelLook.platterInk.opacity(0.55) : Color.secondary
     }
 
-    /// The tile fill: bright white platter when lit, quiet glass well when not; a tint swaps the
-    /// white platter for a wash of the family colour so the tile's hue itself carries the state.
+    /// The tile fill: bright platter when lit in light mode, one step above the well when lit in dark
+    /// mode; a tint swaps either for a wash of the family colour so the hue carries the state.
     public var fill: AnyShapeStyle {
         if isActive, let tint {
             return scheme == .dark
@@ -123,7 +125,9 @@ public struct TileSurface: Equatable, Sendable {
                 : AnyShapeStyle(LinearGradient(colors: [tint.opacity(0.14), Color.white.opacity(0.92)], startPoint: .topLeading, endPoint: .bottomTrailing))
         }
         if scheme == .dark {
-            return AnyShapeStyle(Color.white.opacity(isActive ? 0.94 : 0.07))
+            // Never a white slab in dark mode: it glares, and every bit of ink inside it would have
+            // to flip back to the light scheme. A lit tile is simply a brighter well.
+            return AnyShapeStyle(Color.white.opacity(isActive ? 0.17 : 0.07))
         }
         return isActive ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.black.opacity(0.045))
     }
@@ -132,7 +136,7 @@ public struct TileSurface: Equatable, Sendable {
         if isActive, let tint {
             return tint.opacity(scheme == .dark ? 0.38 : 0.30)
         }
-        if isActive { return Color.black.opacity(0.07) }
+        if isActive { return scheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.07) }
         return scheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.05)
     }
 }

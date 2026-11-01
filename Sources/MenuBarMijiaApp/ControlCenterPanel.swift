@@ -1489,18 +1489,21 @@ public struct ControlCenterPanel: View {
     @ViewBuilder
     private func roomPill(title: String, roomId: String?) -> some View {
         let isSelected = (store.selectedRoomId == roomId)
+        // The selected pill is a lit tile of its own, so its label takes the tile's ink: a dark
+        // capsule in dark mode would otherwise keep the light-mode platter ink.
+        let surface = TileSurface(isActive: true, scheme: effectiveScheme)
         return Button {
             selectRoom(roomId, animation: AppleMotion.snappySpring)
         } label: {
             Text(title)
                 .font(.system(size: DesignTokens.TypeSize.caption, weight: isSelected ? .semibold : .medium))
-                .foregroundStyle(isSelected ? PanelLook.platterInk : Color.secondary)
+                .foregroundStyle(isSelected ? surface.ink : Color.secondary)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 5)
                 .background {
                     if isSelected {
                         Capsule(style: .continuous)
-                            .fill(TileSurface(isActive: true, scheme: effectiveScheme).fill)
+                            .fill(surface.fill)
                             .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
                     }
                 }

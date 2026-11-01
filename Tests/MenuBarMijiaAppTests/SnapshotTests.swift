@@ -223,6 +223,13 @@ struct SnapshotTests {
         #expect(darkTinted.ink != lit.ink)
         #expect(darkTinted.secondaryInk == .white.opacity(0.62))
         #expect(darkTinted.hairline != lit.hairline)
+
+        // Dark mode never puts a white platter under the window's ink: every lit surface there is
+        // dark glass, so it keeps white ink instead of the light-mode platter ink.
+        let darkLit = TileSurface(isActive: true, scheme: .dark)
+        #expect(darkLit.ink == .white)
+        #expect(darkLit.secondaryInk == .white.opacity(0.62))
+        #expect(darkLit.ink != lit.ink)
     }
 
     @Test("Scene icons map to one visual category per family")

@@ -11,7 +11,8 @@ enum DesignTokens {
         static let reading: CGFloat = 24
     }
 
-    /// Ink that stays dark on the bright "on" platter even in dark mode.
+    /// Ink for the bright "on" platter. Dark mode has no bright platter, so this ink is light-mode
+    /// only; a dark lit tile keeps white ink.
     enum Ink {
         static let onPlatter = Color(red: 0.11, green: 0.12, blue: 0.14)
     }

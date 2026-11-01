@@ -120,7 +120,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Mi Air Purifiers** | ✅ Supported | ✅ Supported | Both platforms synthesize `air-purifier` specs: PM2.5, air quality, temp/humidity, filter life, and a 1–100% fan slider driving the favorite level |
 | **Camera Live View** | ✅ Supported | ✅ Supported | Click a card for a pinned live window: macOS uses HLS / HA snapshots; Windows ships a private P2P bridge (substream MJPEG) |
 | **Layout Editing Resize** | ✅ Supported | ✅ Supported | Edit mode shows an iOS Control Center-style corner arc handle on each card's bottom-right: drag out/in to step half ↔ full ↔ panel, or tap it to cycle sizes |
-| **Visual Look** | ✅ One system look + 4 heights | ✅ Control Center design | macOS keeps system materials only: devices that are on sit on a bright platter, everything else is glass. |
+| **Visual Look** | ✅ One system look + 4 heights | ✅ Control Center design | macOS keeps system materials only: a device that is on takes the loudest surface its appearance allows — a bright platter in light mode, a lifted well one step above the off glass in dark mode — everything else stays quiet glass. |
 | **Code Signing & Integrity** | ⚠️ Self-signed + Ed25519 updates | ⚠️ Unsigned package | macOS requires manual Gatekeeper approval; Windows shows SmartScreen prompt |
 
 ---
