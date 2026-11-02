@@ -915,6 +915,9 @@ describe("Update notice (#39)", () => {
     localStorage.removeItem("menumijia.windows.update.v1");
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
     const sha = "b".repeat(64);
+    const expectedAsset = JSON.parse(
+      readFileSync(new URL("./fixtures/windows-installer-asset.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
     const releaseBody = JSON.stringify({
       tag_name: "v9.9.9",
       html_url: "https://github.com/jryang1997/MenuBarMijia/releases/tag/v9.9.9",
@@ -951,18 +954,7 @@ describe("Update notice (#39)", () => {
     assert.match(document.body.textContent ?? "", /新增应用内直接更新/);
     await click("#btn-install-update");
     const installCall = calls.find((call) => call.name === "install_update");
-    assert.deepEqual(installCall?.args, {
-      asset: {
-        name: "MenuBarMijia-9.9.9-windows-x64-setup.exe",
-        downloadURL:
-          "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe",
-        sizeBytes: 3145728,
-        sha256: sha,
-        checksumURL: null,
-        signatureURL:
-          "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe.ed25519.sig",
-      },
-    });
+    assert.deepEqual(installCall?.args, { asset: expectedAsset });
   });
 
   it("makes no request when automatic checks are switched off", async () => {
