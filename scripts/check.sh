@@ -158,6 +158,7 @@ if [ "$LINT_ONLY" = "1" ]; then
 fi
 
 swift_status=0
+swift_skipped=0
 if [ "$(uname -s)" = "Linux" ]; then
     # Package.swift requires the macOS SDK. CI's linux-core job runs MijiaCore through this
     # shim; `swift test` at the repo root cannot compile Security/AppKit imports on Linux.
@@ -165,6 +166,7 @@ if [ "$(uname -s)" = "Linux" ]; then
     bash scripts/linux-check/run.sh || swift_status=$?
 elif ! command -v swift >/dev/null 2>&1; then
     # Windows development machines have no Swift toolchain; CI still runs the suite.
+    swift_skipped=1
     echo "⏭️  跳过 Swift 门槛：未找到 swift"
 elif [ "$SKIP_SNAPSHOTS" = "1" ]; then
     # The local macOS renderer drifts from the CI-recorded baselines on every run, so a local gate
@@ -189,4 +191,8 @@ if [ "$swift_status" -ne 0 ] || [ "$windows_status" -ne 0 ]; then
     exit 1
 fi
 
-echo "✅ [4/4] 所有门禁检查与单元测试全部通过！"
+if [ "$swift_skipped" = "1" ]; then
+    echo "✅ Windows 门禁检查与单元测试通过（Swift 未运行：未找到 swift）"
+else
+    echo "✅ [4/4] 所有门禁检查与单元测试全部通过！"
+fi
