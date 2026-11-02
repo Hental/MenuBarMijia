@@ -1414,6 +1414,64 @@
           ]
         }
       ]
+    },
+    "xiaomi.lock.s2": {
+      "type": "urn:miot-spec-v2:device:lock:0000A038:xiaomi-s2:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:lock:00007855:xiaomi-s2:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:door-state:00000407:xiaomi-s2:1",
+              "format": "uint8",
+              "access": ["read", "notify"],
+              "value-list": [
+                { "value": 1, "description": "Locked" },
+                { "value": 2, "description": "Unlocked" },
+                { "value": 3, "description": "Door Not Closed" },
+                { "value": 4, "description": "Ajar" },
+                { "value": 5, "description": "Child Lock Enabled" }
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:battery:00007805:xiaomi-s2:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:battery-level:00000014:xiaomi-s2:1",
+              "format": "uint8",
+              "access": ["read", "notify"]
+            }
+          ]
+        }
+      ]
+    },
+    "loock.lock.battery": {
+      "type": "urn:miot-spec-v2:device:lock:0000A038:loock-battery:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:lock:00007855:loock-battery:1",
+          "properties": []
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:battery:00007805:loock-battery:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:battery-level:00000014:loock-battery:1",
+              "format": "uint8",
+              "access": ["read", "notify"]
+            }
+          ]
+        }
+      ]
     }
   },
   "fallbackSpecs": [
@@ -1677,6 +1735,18 @@
       "model": "chunmi.cooker.normalcd2",
       "name": "电饭煲",
       "isOnline": true
+    },
+    {
+      "did": "did_lock_state",
+      "model": "xiaomi.lock.s2",
+      "name": "入户门锁",
+      "isOnline": true
+    },
+    {
+      "did": "did_lock_battery",
+      "model": "loock.lock.battery",
+      "name": "卧室门锁",
+      "isOnline": true
     }
   ],
   "rooms": [
@@ -1877,7 +1947,10 @@
       "siid": 2,
       "piid": 1,
       "value": 2
-    }
+    },
+    { "did": "did_lock_state", "siid": 2, "piid": 1, "value": 1 },
+    { "did": "did_lock_state", "siid": 3, "piid": 1, "value": 80 },
+    { "did": "did_lock_battery", "siid": 3, "piid": 1, "value": 40 }
   ],
   "expectedKinds": {
     "did_light": {
@@ -2109,6 +2182,20 @@
       "powerWatts": null,
       "childLockEntityId": null,
       "isChildLocked": false
+    },
+    "did_lock_state": {
+      "kind": "sensor",
+      "temperature": null,
+      "humidity": null,
+      "battery": 80,
+      "statusText": "已上锁"
+    },
+    "did_lock_battery": {
+      "kind": "sensor",
+      "temperature": null,
+      "humidity": null,
+      "battery": 40,
+      "statusText": "锁状态未知"
     }
   },
   "expectedEnvironmentReadings": [
@@ -2353,6 +2440,13 @@
         "siid": 2,
         "piid": 1
       }
+    ],
+    "did_lock_state": [
+      { "did": "did_lock_state", "siid": 3, "piid": 1 },
+      { "did": "did_lock_state", "siid": 2, "piid": 1 }
+    ],
+    "did_lock_battery": [
+      { "did": "did_lock_battery", "siid": 3, "piid": 1 }
     ]
   },
   "commandCases": [

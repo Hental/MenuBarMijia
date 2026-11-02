@@ -569,6 +569,91 @@ struct MiotSynthesizerTests {
         let lock = try #require(byId["lk1"])
         #expect(lock.sfSymbolName == "lock.shield.fill")
         #expect(lock.statusSubtitle.contains("88%"))
+        #expect(lock.statusSubtitle.contains("锁状态未知"))
+    }
+
+    @Test("Lock cards follow door-state and stay unknown without a fresh reading (#149)")
+    func lockStatusFollowsDoorState() throws {
+        let cases: [(door: String, value: Int, onDoorService: Bool, expected: String)] = [
+            ("Unlocked", 2, true, "已开锁"),
+            ("Ajar", 4, false, "门虚掩"),
+            ("门未关", 3, false, "门未关"),
+            ("Child Lock Enabled", 5, false, "锁状态未知"),
+            ("门虚掩解除", 3, false, "锁状态未知"),
+        ]
+        for item in cases {
+            let spec = Self.lockSpec(description: item.door, onDoorService: item.onDoorService)
+            let siid = item.onDoorService ? 4 : 2
+            let home = MiotSynthesizer.synthesize(
+                devices: [MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: true)],
+                rooms: [],
+                specs: ["xiaomi.lock.s2": spec],
+                values: [MiotFixtures.key("lk", siid, 1): .number(Double(item.value))]
+            )
+            let device = try #require(home.devices.first)
+            guard case .sensor(let sensor) = device.kind else {
+                Issue.record("expected a sensor card for \(item.door)")
+                continue
+            }
+            #expect(sensor.statusText == item.expected, "\(item.door)")
+            #expect(sensor.statusText != "守护中")
+        }
+
+        let missing = MiotSynthesizer.synthesize(
+            devices: [MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: true)],
+            rooms: [],
+            specs: ["xiaomi.lock.s2": Self.lockSpec(description: "Locked", onDoorService: false)],
+            values: [:]
+        )
+        guard case .sensor(let unread) = try #require(missing.devices.first).kind else {
+            Issue.record("expected a sensor card when door-state was not read")
+            return
+        }
+        #expect(unread.statusText == "锁状态未知")
+
+        let stale = MiotSynthesizer.synthesize(
+            devices: [MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: false)],
+            rooms: [],
+            specs: ["xiaomi.lock.s2": Self.lockSpec(description: "Locked", onDoorService: false)],
+            values: [MiotFixtures.key("lk", 2, 1): .number(1)]
+        )
+        let offline = try #require(stale.devices.first)
+        guard case .sensor(let staleSensor) = offline.kind else {
+            Issue.record("expected a sensor card for an offline lock")
+            return
+        }
+        #expect(staleSensor.statusText == "锁状态未知")
+        #expect(offline.statusSubtitle.contains("离线"))
+    }
+
+    private static func lockSpec(description: String, onDoorService: Bool) -> MiotDeviceSpec {
+        let door = MiotProperty(
+            iid: 1,
+            type: "urn:miot-spec-v2:property:door-state:00000001:test:1",
+            format: "uint8",
+            access: ["read", "notify"],
+            valueList: [
+                MiotValueListItem(value: 1, description: "Locked"),
+                MiotValueListItem(value: 2, description: "Unlocked"),
+                MiotValueListItem(value: 3, description: description == "门未关" || description == "门虚掩解除" ? description : "Door Not Closed"),
+                MiotValueListItem(value: 4, description: "Ajar"),
+                MiotValueListItem(value: 5, description: "Child Lock Enabled"),
+            ]
+        )
+        let lockService = MiotService(
+            iid: 2,
+            type: "urn:miot-spec-v2:service:lock:00007855:test:1",
+            properties: onDoorService ? [] : [door]
+        )
+        var services = [lockService]
+        if onDoorService {
+            services.append(MiotService(
+                iid: 4,
+                type: "urn:miot-spec-v2:service:door:00007856:test:1",
+                properties: [door]
+            ))
+        }
+        return MiotDeviceSpec(type: "urn:miot-spec-v2:device:lock:0000A038:test:1", services: services)
     }
 }
 

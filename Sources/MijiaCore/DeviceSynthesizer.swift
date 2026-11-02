@@ -850,10 +850,12 @@ public enum DeviceSynthesizer {
             )
         }
 
-        if model.contains("lock") {
+        if Self.isLockModel(model) || eids.contains(where: { $0.hasPrefix("lock.") }) {
+            let lockId = eids.first(where: { $0.hasPrefix("lock.") })
+            let lockSt = lockId.flatMap { states[$0] }
             let batSt = batId.flatMap { states[$0] }
             let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
-            let online = batSt?.isAvailable == true
+            let online = (lockSt?.isAvailable == true) || (batSt?.isAvailable == true)
             return SmartDevice(
                 id: deviceId,
                 name: name,
@@ -864,7 +866,7 @@ public enum DeviceSynthesizer {
                 kind: .sensor(
                     SensorSpec(
                         battery: bVal,
-                        statusText: "守护中"
+                        statusText: Self.haLockStatusText(lockSt)
                     )
                 )
             )
@@ -899,6 +901,39 @@ public enum DeviceSynthesizer {
         }
 
         return nil
+    }
+
+    /// `clock` and `block` contain the letters "lock" but are not door locks.
+    static func isLockModel(_ model: String) -> Bool {
+        let lower = model.lowercased()
+        if lower.contains(".lock.") || lower.hasPrefix("lock.") || lower.hasSuffix(".lock") {
+            return true
+        }
+        if lower.contains("clock") || lower.contains("block") {
+            return false
+        }
+        return lower.contains("lock")
+    }
+
+    /// Home Assistant `lock.*` states. Unavailable, unknown, and unrecognized values stay neutral.
+    static func haLockStatusText(_ state: HAEntityState?) -> String {
+        guard let state, state.isAvailable else {
+            return L10n.tr("锁状态未知", "Lock status unknown")
+        }
+        switch state.state.lowercased() {
+        case "locked":
+            return L10n.tr("已上锁", "Locked")
+        case "unlocked", "open":
+            return L10n.tr("已开锁", "Unlocked")
+        case "locking":
+            return L10n.tr("正在上锁", "Locking")
+        case "unlocking":
+            return L10n.tr("正在开锁", "Unlocking")
+        case "jammed":
+            return L10n.tr("门锁卡住", "Jammed")
+        default:
+            return L10n.tr("锁状态未知", "Lock status unknown")
+        }
     }
 
     private static func parseClimateSpec(entityId: String, state st: HAEntityState) -> ClimateSpec {
