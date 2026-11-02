@@ -87,6 +87,7 @@ import {
   localizeNightShot,
   localizeAirQuality,
   localizeFanPreset,
+  localizeFridgeMode,
   partitionDueTimers,
 } from "../core/models.js";
 import {
@@ -216,6 +217,8 @@ interface PersistedSettings {
   appearance: AppAppearance;
   panelHeight: PanelHeight;
   climatePanel: boolean;
+  showQuickActionsBar: boolean;
+  enableGrokBall: boolean;
   layout: LayoutPrefs;
   /** Selected Mi Home id; null shows every home. */
   selectedHomeId: string | null;
@@ -592,6 +595,8 @@ function loadSettings(): LoadedSettings {
               : "system",
           panelHeight: PANEL_HEIGHTS.some((h) => h.id === parsed.panelHeight) ? (parsed.panelHeight as PanelHeight) : "standard",
           climatePanel: parsed.climatePanel ?? true,
+          showQuickActionsBar: parsed.showQuickActionsBar ?? true,
+          enableGrokBall: parsed.enableGrokBall ?? false,
           interfaceLanguage:
             parsed.interfaceLanguage === "zh-Hans" || parsed.interfaceLanguage === "en"
               ? parsed.interfaceLanguage
@@ -645,6 +650,8 @@ function loadSettings(): LoadedSettings {
       appearance: "system",
       panelHeight: "standard",
       climatePanel: true,
+      showQuickActionsBar: true,
+      enableGrokBall: false,
       layout: emptyLayoutPrefs(),
       selectedHomeId: null,
       interfaceLanguage: "system",
@@ -2007,6 +2014,19 @@ export class MenuMijiaWindowsApp {
         if (k.kind === "camera" && k.nightShot !== null) {
           return [{ kind: "setSelectOption", entityId: command.entityId, option: k.nightShot }];
         }
+        if (k.kind === "fridge") {
+          return [{ kind: "setSelectOption", entityId: command.entityId, option: k.currentMode }];
+        }
+        return [];
+      case "setNumberValue":
+        if (k.kind === "fridge") {
+          if (command.entityId === k.fridgeTargetEntityId) {
+            return [{ kind: "setNumberValue", entityId: command.entityId, value: k.fridgeTargetTemp }];
+          }
+          if (command.entityId === k.freezerTargetEntityId) {
+            return [{ kind: "setNumberValue", entityId: command.entityId, value: k.freezerTargetTemp }];
+          }
+        }
         return [];
       case "vacuumAction":
       case "activateScene":
@@ -2329,6 +2349,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderGrokBallSidebar(): string {
+    if (!this.settings.enableGrokBall) return "";
     return `<aside class="cc-grok-sidebar" aria-label="${t("猜你想控")}">
       <button class="cc-grok-toggle" id="btn-grok-ball" data-grok-toggle aria-label="${t("猜你想控")}" aria-expanded="${this.isGrokBallStageExpanded}"><span data-grok-slot></span></button>
       ${this.renderGrokBallStage()}
@@ -2604,6 +2625,17 @@ export class MenuMijiaWindowsApp {
         case "setSelectOption":
           if (k.kind === "camera" && k.entityId === command.entityId) {
             k.nightShot = command.option;
+          } else if (k.kind === "fridge" && k.modeEntityId === command.entityId) {
+            k.currentMode = command.option;
+          }
+          break;
+        case "setNumberValue":
+          if (k.kind === "fridge") {
+            if (k.fridgeTargetEntityId === command.entityId) {
+              k.fridgeTargetTemp = command.value;
+            } else if (k.freezerTargetEntityId === command.entityId) {
+              k.freezerTargetTemp = command.value;
+            }
           }
           break;
         case "vacuumAction":
@@ -2639,6 +2671,13 @@ export class MenuMijiaWindowsApp {
       const k = d.kind;
       if (k.kind === "plug") return k.switchEntityId === command.entityId || k.childLockEntityId === command.entityId;
       if (k.kind === "camera") return k.entityId === command.entityId || k.motionDetectionEntityId === command.entityId;
+      if (k.kind === "fridge") {
+        return (
+          k.modeEntityId === command.entityId ||
+          k.fridgeTargetEntityId === command.entityId ||
+          k.freezerTargetEntityId === command.entityId
+        );
+      }
       if (k.kind === "sensor") return false;
       return k.entityId === command.entityId;
     });
@@ -2914,7 +2953,8 @@ export class MenuMijiaWindowsApp {
         : null;
     const scheme = this.effectiveAppearance;
     this.root.dataset.scheme = scheme;
-    this.root.classList.toggle("is-grok-expanded", this.isGrokBallStageExpanded);
+    this.root.classList.toggle("is-grok-enabled", this.settings.enableGrokBall);
+    this.root.classList.toggle("is-grok-expanded", this.settings.enableGrokBall && this.isGrokBallStageExpanded);
     this.root.classList.toggle("is-native-host", Boolean(window.__TAURI_INTERNALS__));
     this.root.dataset.grokSide = this.grokBallOnLeft ? "left" : "right";
     const popoverClass = `cc-popover skin-${this.skin} scheme-${scheme} ${this.skin === "classic" ? "" : "is-skinned"} ${this.isEditingLayout ? "is-editing" : ""}`.trim();
@@ -3092,7 +3132,9 @@ export class MenuMijiaWindowsApp {
 
         ${this.haConnectionError ? `<div class="cc-feedback-card is-error" role="alert" data-ha-error><span class="cc-feedback-badge">Home Assistant</span><span class="cc-feedback-text">${this.escapeHtml(this.haConnectionError)}</span></div>` : ""}
 
-        <section class="cc-quick-strip">
+        ${
+          this.settings.showQuickActionsBar
+            ? `<section class="cc-quick-strip">
           ${quickActions().map(
             (act) => `
             <button class="cc-quick-pill tint-${act.tint}" data-scene-cmd="${this.escapeHtml(act.command)}">
@@ -3102,7 +3144,9 @@ export class MenuMijiaWindowsApp {
           `,
           ).join("")}
           ${this.settings.connectionMode === "homeAssistant" ? this.scenes.map((scene) => `<button class="cc-quick-pill tint-blue" data-ha-scene="${this.escapeHtml(scene.id)}"><span class="cc-quick-icon">${SF_ICONS.sparkles}</span><span>${this.escapeHtml(scene.name)}</span></button>`).join("") : ""}
-        </section>
+        </section>`
+            : ""
+        }
 
 
         <div class="cc-room-bar">
@@ -3317,6 +3361,7 @@ export class MenuMijiaWindowsApp {
       case "light":
         return "palette-amber";
       case "climate":
+      case "fridge":
         return "palette-blue";
       case "fan":
         return "palette-mint";
@@ -3336,6 +3381,7 @@ export class MenuMijiaWindowsApp {
       case "light":
         return SF_ICONS.lightbulbFill;
       case "climate":
+      case "fridge":
         return SF_ICONS.snowflake;
       case "fan":
         return SF_ICONS.fanbladesFill;
@@ -3358,7 +3404,7 @@ export class MenuMijiaWindowsApp {
     const badge = this.isEditingLayout
       ? `<button class="cc-resize-handle" data-resize-handle="${this.escapeHtml(dev.id)}" data-cycle-size="${this.escapeHtml(dev.id)}" data-tile-size="${size}" title="${t("切换卡片大小")}：${sizeTitle}" aria-label="${t("切换卡片大小")}，${sizeTitle}"><svg class="cc-resize-arc" viewBox="0 0 28 28" aria-hidden="true"><path d="M 22 10 A 12 12 0 0 1 10 22" /></svg></button>`
       : "";
-    if (dev.kind.kind === "sensor" && !(this.skin === "bento" && span < 6)) {
+    if (dev.kind.kind === "sensor" && (dev.kind.temperature !== null || dev.kind.humidity !== null) && !(this.skin === "bento" && span < 6)) {
       return this.renderSensorCard(dev, dev.kind, span < 6, attrs, motion, badge);
     }
     if (dev.kind.kind === "climate" && size !== "half") {
@@ -3369,7 +3415,7 @@ export class MenuMijiaWindowsApp {
     const kind = dev.kind.kind;
     const palette = this.devicePaletteClass(dev);
     const svg = this.deviceSvgIcon(dev);
-    const hasDrawer = kind === "light" || kind === "climate" || kind === "fan" || kind === "camera";
+    const hasDrawer = kind === "light" || kind === "climate" || kind === "fan" || kind === "fridge" || kind === "camera";
     const subtitle =
       this.selectedRoom === "全部"
         ? `${dev.roomName} · ${deviceStatusSummary(dev)}`
@@ -3782,6 +3828,36 @@ export class MenuMijiaWindowsApp {
                     .map(
                       (mode) => `<button class="cc-seg-pill ${k.nightShot === mode ? "is-active" : ""}" data-cameranight="${id}:${this.escapeHtml(mode)}" aria-pressed="${k.nightShot === mode}">
                         ${this.escapeHtml(localizeNightShot(mode))}
+                      </button>`
+                    )
+                    .join("")}
+                </div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+    if (k.kind === "fridge") {
+      const id = this.escapeHtml(dev.id);
+      return `
+        <div class="cc-tile-drawer">
+          <div class="cc-segmented-pills">
+            <span class="cc-pill-label">${t("冷藏室")} (${formatTemperature(k.fridgeTargetTemp)})</span>
+            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:-1" aria-label="${t("降低冷藏室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:1" aria-label="${t("升高冷藏室温度")}">＋</button>
+          </div>
+          <div class="cc-segmented-pills">
+            <span class="cc-pill-label">${t("冷冻室")} (${formatTemperature(k.freezerTargetTemp)})</span>
+            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:-1" aria-label="${t("降低冷冻室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:1" aria-label="${t("升高冷冻室温度")}">＋</button>
+          </div>
+          ${
+            k.availableModes.length > 0
+              ? `<div class="cc-segmented-pills">
+                  ${k.availableModes
+                    .map(
+                      (mode) => `<button class="cc-seg-pill ${k.currentMode === mode ? "is-active" : ""}" data-fridgemode="${id}:${this.escapeHtml(mode)}" aria-pressed="${k.currentMode === mode}">
+                        ${this.escapeHtml(localizeFridgeMode(mode))}
                       </button>`
                     )
                     .join("")}
@@ -4488,6 +4564,16 @@ export class MenuMijiaWindowsApp {
             <input id="settings-climate-panel" type="checkbox" ${this.settings.climatePanel ? "checked" : ""} />
           </div>
 
+          <div class="cc-field cc-field-row">
+            <label for="settings-quick-actions">${t("显示顶部快捷场景栏")}</label>
+            <input id="settings-quick-actions" type="checkbox" ${this.settings.showQuickActionsBar ? "checked" : ""} />
+          </div>
+
+          <div class="cc-field cc-field-row">
+            <label for="settings-grok-ball">${t("启用侧边情绪智能球")}</label>
+            <input id="settings-grok-ball" type="checkbox" ${this.settings.enableGrokBall ? "checked" : ""} />
+          </div>
+
           <div class="cc-field">
             <div class="cc-field-row">
               <label for="settings-enable-hotkey">${t("启用全局呼出快捷键")}</label>
@@ -4644,7 +4730,7 @@ export class MenuMijiaWindowsApp {
             <label>${t("「全关」包含哪些设备（插座、扫地机默认不包含）")}</label>
             <div class="cc-timers-stack">
               ${this.devices
-                .filter((d) => d.kind.kind !== "sensor")
+                .filter((d) => d.kind.kind !== "sensor" && d.kind.kind !== "fridge")
                 .map(
                   (d) => `
                 <label class="cc-checkbox">
@@ -4988,6 +5074,20 @@ export class MenuMijiaWindowsApp {
       this.saveSettings();
       this.render();
     });
+    this.root.querySelector<HTMLInputElement>("#settings-quick-actions")?.addEventListener("change", (e) => {
+      this.settings.showQuickActionsBar = (e.target as HTMLInputElement).checked;
+      this.saveSettings();
+      this.render();
+    });
+    this.root.querySelector<HTMLInputElement>("#settings-grok-ball")?.addEventListener("change", (e) => {
+      this.settings.enableGrokBall = (e.target as HTMLInputElement).checked;
+      if (!this.settings.enableGrokBall) {
+        this.isGrokBallStageExpanded = false;
+      }
+      this.saveSettings();
+      this.applyPanelHeight();
+      this.render();
+    });
 
     this.root.querySelector<HTMLInputElement>("#settings-enable-hotkey")?.addEventListener("change", (e) => {
       this.settings.enableGlobalHotkey = (e.target as HTMLInputElement).checked;
@@ -5143,6 +5243,11 @@ export class MenuMijiaWindowsApp {
     const toggleDeviceById = (id: string) => {
       const dev = this.devices.find((d) => d.id === id);
       if (!dev || dev.kind.kind === "sensor") return;
+      if (dev.kind.kind === "fridge") {
+        this.expandedDeviceId = this.expandedDeviceId === id ? null : id;
+        this.render();
+        return;
+      }
       const nextOn = !isDeviceActiveOn(dev);
       this.poppedDeviceId = dev.id;
       const cmds = IntentValidator.commandsForIntent(
@@ -5180,7 +5285,7 @@ export class MenuMijiaWindowsApp {
             toggleDeviceById(id);
           }
           this.openCameraLiveView(id);
-        } else if (k === "light" || k === "climate" || k === "fan") {
+        } else if (k === "light" || k === "climate" || k === "fan" || k === "fridge") {
           this.expandedDeviceId = this.expandedDeviceId === id ? null : id;
           this.render();
         } else {
@@ -5361,6 +5466,45 @@ export class MenuMijiaWindowsApp {
           dev,
           { kind: "setSelectOption", entityId: dev.kind.entityId, option: mode },
           t("已将{name}设为{mode}", { name: dev.name, mode: localizeNightShot(mode) }),
+        );
+      });
+    });
+
+    this.root.querySelectorAll<HTMLElement>("[data-fridgemode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const raw = btn.dataset.fridgemode;
+        if (!raw) return;
+        const [id, mode] = raw.split(":");
+        if (!id || !mode) return;
+        const dev = this.devices.find((d) => d.id === id);
+        if (!dev || dev.kind.kind !== "fridge" || !dev.kind.modeEntityId) return;
+        void this.executeSingleCommand(
+          dev,
+          { kind: "setSelectOption", entityId: dev.kind.modeEntityId, option: mode },
+          t("已将{name}设为{mode}", { name: dev.name, mode: localizeFridgeMode(mode) }),
+        );
+      });
+    });
+
+    this.root.querySelectorAll<HTMLElement>("[data-fridgestep]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const raw = btn.dataset.fridgestep;
+        if (!raw) return;
+        const [id, zone, deltaStr] = raw.split(":");
+        const delta = Number(deltaStr);
+        if (!id || !zone || !Number.isFinite(delta)) return;
+        const dev = this.devices.find((d) => d.id === id);
+        if (!dev || dev.kind.kind !== "fridge") return;
+        const isFreezer = zone === "freezer";
+        const entityId = isFreezer ? dev.kind.freezerTargetEntityId : dev.kind.fridgeTargetEntityId;
+        if (!entityId) return;
+        const next = isFreezer
+          ? Math.max(-24, Math.min(-15, dev.kind.freezerTargetTemp + delta))
+          : Math.max(2, Math.min(8, dev.kind.fridgeTargetTemp + delta));
+        void this.executeSingleCommand(
+          dev,
+          { kind: "setNumberValue", entityId, value: next },
+          t("已将{name}设为 {temp}", { name: dev.name, temp: formatTemperature(next) }),
         );
       });
     });
@@ -6038,7 +6182,10 @@ export class MenuMijiaWindowsApp {
     this.panelGeometryUpdates = this.panelGeometryUpdates.then(async () => {
       const h = PANEL_HEIGHTS.find((item) => item.id === this.settings.panelHeight) ?? PANEL_HEIGHTS[1]!;
       const side = await invoke<boolean>("set_panel_height", {
-        height: h.px, expanded: this.isGrokBallStageExpanded, sideLeft: this.grokBallOnLeft,
+        height: h.px,
+        expanded: this.isGrokBallStageExpanded,
+        sideLeft: this.grokBallOnLeft,
+        grokEnabled: this.settings.enableGrokBall,
       });
       if (typeof side === "boolean") {
         this.grokBallOnLeft = side;

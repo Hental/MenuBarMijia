@@ -1801,7 +1801,12 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
   });
 
   it("shows four zero-delay proactive suggestions when opening the ball", async () => {
-    startDemo();
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      enableGrokBall: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
     await click("#btn-grok-ball");
     // Demo home: two lights on (全屋关灯), then running AC, plug, and camera power-offs.
     const pills = [...document.querySelectorAll<HTMLElement>("[data-proactive-id]")];
@@ -1810,7 +1815,12 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
   });
 
   it("executes a proactive suggestion and records it as a habit", async () => {
-    startDemo();
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      enableGrokBall: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
     await click("#btn-grok-ball");
     await click('[data-proactive-id^="builtin:lightsOff"]');
     await waitFor(() => habitEntries().length > 0);
@@ -2062,7 +2072,7 @@ describe("Home Assistant source", () => {
         return undefined;
       };
       Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
-      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, enableGrokBall: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
       new MenuMijiaWindowsApp(element("#app"));
       await waitFor(() => !!document.querySelector('[data-tile-id="light.study"]'));
       await click("#btn-grok-ball");
@@ -2120,7 +2130,7 @@ describe("Home Assistant source", () => {
         return undefined;
       };
       Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
-      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({ connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, enableGrokBall: true, assistantBaseURL: "http://localhost:1234/v1", assistantModel: "controlled-model" }));
       new MenuMijiaWindowsApp(element("#app"));
       await waitFor(() => !!document.querySelector('[data-body-device="study-light"]'));
       await command("让这里适合观星");
@@ -2392,8 +2402,18 @@ describe("Home Assistant source", () => {
 });
 
 describe("GrokBall side attachment (#114)", () => {
-  it("opens four side actions, executes with undo, and collapses with Escape", async () => {
+  it("stays hidden by default and opens four side actions when enabled", async () => {
     startDemo();
+    assert.equal(document.querySelector("#btn-grok-ball"), null);
+
+    await click("#btn-settings");
+    const toggle = element("#settings-grok-ball") as HTMLInputElement;
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await setImmediate();
+    await click("#btn-close-settings");
+
     await click("#btn-grok-ball");
     assert.equal(document.querySelectorAll(".cc-grok-sidebar [data-proactive-id]").length, 4);
     await click(".cc-grok-pill");
@@ -2408,7 +2428,7 @@ describe("GrokBall side attachment (#114)", () => {
 
   it("keeps learned scenes outside the reversible side attachment", async () => {
     localStorage.setItem(["menumijia", "windows", "settings", "v2"].join("."), JSON.stringify({
-      connectionMode: "demo", hasCompletedOnboarding: true,
+      connectionMode: "demo", hasCompletedOnboarding: true, enableGrokBall: true,
       habitEntries: [{ bucket: "深夜", targetId: "scene.home", operationKey: "scene:activate", count: 99 }],
     }));
     new MenuMijiaWindowsApp(element("#app"));
@@ -2425,7 +2445,7 @@ describe("GrokBall side attachment (#114)", () => {
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
     localStorage.setItem(["menumijia", "windows", "settings", "v2"].join("."), JSON.stringify({
-      connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true,
+      connectionMode: "homeAssistant", haBaseURL: "http://localhost:8123", hasCompletedOnboarding: true, enableGrokBall: true,
     }));
     new MenuMijiaWindowsApp(element("#app"));
     await waitFor(() => !!document.querySelector("[data-ha-error]"));

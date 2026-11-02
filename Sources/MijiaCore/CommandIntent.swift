@@ -120,7 +120,7 @@ public struct PendingCloudConsent: Equatable, Sendable {
 public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
     case light, climate, heater, fan, airPurifier, dehumidifier, diffuser, plug, vacuum, speaker, tv, fridge, camera, sensor
     private static let heaterNameHints = ["电暖", "暖气", "取暖", "暖风"]
-    private static let airPurifierNameHints = ["净化", "空净"]
+    private static let airPurifierNameHints = ["净化", "空净", "新风", "加湿"]
 
     public init(_ device: SmartDevice) {
         switch device.kind {
@@ -134,6 +134,8 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
             let lowerModel = device.model.lowercased()
             let isPurifier = lowerModel.contains("airp")
                 || lowerModel.contains("purifier")
+                || lowerModel.contains("airfresh")
+                || lowerModel.contains("humidifier")
                 || Self.airPurifierNameHints.contains(where: device.name.contains)
                 || s.pm25Density != nil
                 || s.airQuality != nil

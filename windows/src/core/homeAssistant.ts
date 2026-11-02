@@ -108,9 +108,10 @@ function cachedKind(value: unknown): DeviceKind {
     case "climate": return { kind: "climate", entityId: requiredText(k.entityId), isOn: requiredBoolean(k.isOn), hvacMode: requiredText(k.hvacMode), availableModes: requiredStrings(k.availableModes), targetTemperature: requiredNumber(k.targetTemperature), currentTemperature: nullableNumber(k.currentTemperature), minTemp: requiredNumber(k.minTemp), maxTemp: requiredNumber(k.maxTemp), step: requiredNumber(k.step), fanMode: nullableText(k.fanMode), availableFanModes: requiredStrings(k.availableFanModes) };
     case "fan": return { kind: "fan", entityId: requiredText(k.entityId), isOn: requiredBoolean(k.isOn), percentage: nullableNumber(k.percentage), presetMode: nullableText(k.presetMode), availablePresetModes: requiredStrings(k.availablePresetModes), isOscillating: nullableBoolean(k.isOscillating), pm25Density: nullableNumber(k.pm25Density ?? null), airQuality: nullableText(k.airQuality ?? null), temperature: nullableNumber(k.temperature ?? null), humidity: nullableNumber(k.humidity ?? null), filterLifePercent: nullableNumber(k.filterLifePercent ?? null) };
     case "plug": return { kind: "plug", switchEntityId: requiredText(k.switchEntityId), isOn: requiredBoolean(k.isOn), powerWatts: nullableNumber(k.powerWatts), energyKwh: nullableNumber(k.energyKwh ?? null), childLockEntityId: nullableText(k.childLockEntityId), isChildLocked: requiredBoolean(k.isChildLocked) };
+    case "fridge": return { kind: "fridge", modeEntityId: nullableText(k.modeEntityId), currentMode: requiredText(k.currentMode), availableModes: requiredStrings(k.availableModes), fridgeCurrentTemp: nullableNumber(k.fridgeCurrentTemp), fridgeTargetTemp: requiredNumber(k.fridgeTargetTemp), fridgeTargetEntityId: nullableText(k.fridgeTargetEntityId), freezerCurrentTemp: nullableNumber(k.freezerCurrentTemp), freezerTargetTemp: requiredNumber(k.freezerTargetTemp), freezerTargetEntityId: nullableText(k.freezerTargetEntityId) };
     case "vacuum": return { kind: "vacuum", entityId: requiredText(k.entityId), status: requiredText(k.status), battery: nullableNumber(k.battery), modeEntityId: nullableText(k.modeEntityId), currentMode: nullableText(k.currentMode), availableModes: requiredStrings(k.availableModes) };
     case "camera": return { kind: "camera", entityId: requiredText(k.entityId), isOn: requiredBoolean(k.isOn), nightShot: nullableText(k.nightShot), availableNightShots: requiredStrings(k.availableNightShots), motionDetectionEntityId: nullableText(k.motionDetectionEntityId), isMotionDetectionOn: nullableBoolean(k.isMotionDetectionOn), streamEntityId: nullableText(k.streamEntityId), snapshotPath: null };
-    case "sensor": return { kind: "sensor", temperature: nullableNumber(k.temperature), humidity: nullableNumber(k.humidity), battery: nullableNumber(k.battery) };
+    case "sensor": return { kind: "sensor", temperature: nullableNumber(k.temperature), humidity: nullableNumber(k.humidity), battery: nullableNumber(k.battery), ...(k.statusText !== undefined && k.statusText !== null ? { statusText: requiredText(k.statusText) } : {}) };
     default: throw new Error("Invalid cached device kind");
   }
 }
@@ -278,6 +279,36 @@ function buildKind(
       modeEntityId: mode?.entityId ?? null,
       currentMode: mode && mode.state !== "unknown" && mode.state !== "unavailable" ? mode.state : null,
       availableModes: strings(mode?.attributes.options),
+    };
+  } else if (
+    model.includes("fridge") ||
+    entities.some((e) => text(e.entity_id).includes("midjd6"))
+  ) {
+    const mode = find("select", (entry) => text(entry.entity_id).includes("mode"));
+    const fridgeTemp = find("sensor", (entry) => text(entry.entity_id).includes("temperature_p_3"));
+    const freezerTemp = find("sensor", (entry) => text(entry.entity_id).includes("temperature_p_4"));
+    const fridgeTarget = find("number", (entry) => text(entry.entity_id).includes("target_temperature_p_3"));
+    const freezerTarget = find("number", (entry) => text(entry.entity_id).includes("target_temperature_p_4"));
+    const fCur = number(fridgeTemp?.state);
+    const zCur = number(freezerTemp?.state);
+    const fTgt = number(fridgeTarget?.state) ?? 4;
+    const zTgt = number(freezerTarget?.state) ?? -18;
+    const online = Boolean((mode && mode.state !== "unavailable" && mode.state !== "unknown") || fCur !== null);
+    const modeOpts = strings(mode?.attributes.options);
+    return {
+      kind: {
+        kind: "fridge",
+        modeEntityId: mode?.entityId ?? null,
+        currentMode: mode && mode.state !== "unavailable" && mode.state !== "unknown" ? mode.state : "手动",
+        availableModes: modeOpts.length > 0 ? modeOpts : ["手动", "智能", "速冷", "速冻", "假日"],
+        fridgeCurrentTemp: fCur,
+        fridgeTargetTemp: fTgt,
+        fridgeTargetEntityId: fridgeTarget?.entityId ?? null,
+        freezerCurrentTemp: zCur,
+        freezerTargetTemp: zTgt,
+        freezerTargetEntityId: freezerTarget?.entityId ?? null,
+      },
+      online,
     };
   } else if ((state = find("camera") ?? (model.startsWith("chuangmi.camera") ? powerSwitch : undefined))) {
     const camera = find("camera");
@@ -585,6 +616,8 @@ export function haServiceCall(command: DeviceCommand): HaServiceCall {
       return call("oscillate", { oscillating: command.oscillating });
     case "setSelectOption":
       return call("select_option", { option: command.option });
+    case "setNumberValue":
+      return call("set_value", { value: command.value });
     case "vacuumAction":
       return call(
         command.action === "returnToBase" ? "return_to_base" : command.action,

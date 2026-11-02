@@ -535,6 +535,8 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
             return s.isOn ? "snowflake" : "air.conditioner.horizontal"
         case .fan(let s):
             if model.contains(".derh.") { return "humidity.fill" }
+            if model.contains("humidifier") || name.contains("加湿") { return "air.humidifier.fill" }
+            if model.contains("airfresh") || name.contains("新风") { return "wind" }
             if model.contains("airp") || model.contains("purifier") || name.contains("净化")
                 || s.pm25Density != nil || s.airQuality != nil || s.filterLifePercent != nil {
                 return "aqi.medium"
@@ -570,8 +572,20 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         case .camera(let s):
             return s.isOn ? "web.camera.fill" : "web.camera"
         case .sensor(let s):
-            if name.contains("门锁") {
+            if name.contains("门锁") || model.contains(".lock.") {
                 return "lock.shield.fill"
+            }
+            if model.contains("kettle") || model.contains("waterdispenser") || name.contains("水壶") || name.contains("饮水") {
+                return "mug.fill"
+            }
+            if model.contains("fryer") || model.contains("oven") || name.contains("炸锅") || name.contains("烤箱") {
+                return "frying.pan.fill"
+            }
+            if model.contains("cooker") || name.contains("饭煲") || name.contains("电锅") {
+                return "flame.fill"
+            }
+            if model.contains("motion") || model.contains("occupancy") || name.contains("人体") || name.contains("存在") {
+                return "figure.walk.motion"
             }
             if s.temperature != nil {
                 return "thermometer.medium"
@@ -658,6 +672,12 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
             return L10n.tr("已开启", "On")
 
         case .fridge(let s):
+            if s.fridgeCurrentTemp == nil && s.freezerCurrentTemp == nil {
+                let cStr = L10n.format("冷藏 %@", "Fridge %@", L10n.temperature(s.fridgeTargetTemp))
+                let fStr = L10n.format("冷冻 %@", "Freezer %@", L10n.temperature(s.freezerTargetTemp))
+                let mStr = Self.localizeFridgeMode(s.currentMode)
+                return mStr.isEmpty ? "\(cStr) · \(fStr)" : "\(mStr) · \(cStr) · \(fStr)"
+            }
             let cStr = s.fridgeCurrentTemp.map { L10n.format("冷藏 %@", "Fridge %@", L10n.temperature($0)) }
                 ?? L10n.tr("冷藏 --", "Fridge --")
             let fStr = s.freezerCurrentTemp.map { L10n.format("冷冻 %@", "Freezer %@", L10n.temperature($0)) }
@@ -766,6 +786,17 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         case "favorite", "favourite": return L10n.tr("最爱", "Favorite")
         case "manual", "none": return L10n.tr("手动", "Manual")
         case "silent": return L10n.tr("静音", "Silent")
+        default: return mode
+        }
+    }
+
+    public static func localizeFridgeMode(_ mode: String) -> String {
+        switch mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "none", "manual": return L10n.tr("手动", "Manual")
+        case "smart", "auto": return L10n.tr("智能", "Smart")
+        case "holiday": return L10n.tr("假日", "Holiday")
+        case "quick cooling", "super cool": return L10n.tr("速冷", "Super Cool")
+        case "quick frozen", "super freeze": return L10n.tr("速冻", "Super Freeze")
         default: return mode
         }
     }

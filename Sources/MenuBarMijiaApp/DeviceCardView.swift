@@ -133,7 +133,7 @@ public struct DeviceCardView: View {
            climatePanelModule || chosenSize != .auto {
             ClimatePanelModule(device: device, spec: spec, store: store, showRoomBadge: showRoomBadge, forceExpanded: resolvedSize == .panel)
                 .contextMenu { contextMenuItems }
-        } else if case .sensor(let spec) = device.kind, !isBentoTile {
+        } else if case .sensor(let spec) = device.kind, !isBentoTile, (spec.temperature != nil || spec.humidity != nil) {
             SensorCardView(
                 device: device,
                 spec: spec,
@@ -288,7 +288,7 @@ public struct DeviceCardView: View {
                         systemImage: "slider.horizontal.3"
                     )
                 }
-            } else if case .sensor = device.kind {
+            } else if case .sensor(let spec) = device.kind, (spec.temperature != nil || spec.humidity != nil) {
                 Button {
                     withAnimation(AppleMotion.snappySpring) {
                         store.toggleExpanded(device.id)
@@ -1011,7 +1011,7 @@ public struct DeviceCardView: View {
                     AdaptiveGlassContainer(spacing: 6) {
                         HStack(spacing: 6) {
                             ForEach(spec.availableModes, id: \.self) { mode in
-                                Button(mode) {
+                                Button(SmartDevice.localizeFridgeMode(mode)) {
                                     store.setFridgeMode(device.id, mode: mode)
                                 }
                                 .buttonStyle(PillActionButtonStyle(isSelected: spec.currentMode == mode, tintColor: accent))

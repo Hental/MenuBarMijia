@@ -97,6 +97,22 @@ INSTALLED_SHA="$(shasum -a 256 "$TARGET/Contents/MacOS/MenuBarMijiaApp" | awk '{
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TARGET/Contents/Info.plist")" = "$EXPECTED_BUILD" ] || \
     fail "安装后的构建号不是 ${EXPECTED_BUILD}，原应用在 $BACKUP_DIR"
 
+# Keep any sibling local MenuBarMijia.app bundles in sync so macOS nehelper's path-pinned
+# NEPathRule entries for com.jryang1997.MenuBarMijia never cache a stale LC_UUID (#LocalNetwork).
+for SIBLING in "$ROOT/MenuBarMijia.app" "$HOME/Documents/MenuBarMijia/MenuBarMijia.app" "/private/tmp/mmb-114/MenuBarMijia.app"; do
+    if [ -d "$SIBLING" ] && [ "$SIBLING" != "$TARGET" ] && [ "$SIBLING" != "$BUNDLE" ]; then
+        SIBLING_STAGING="$SIBLING.staging.$$"
+        rm -rf "$SIBLING_STAGING"
+        if ditto "$BUNDLE" "$SIBLING_STAGING" 2>/dev/null; then
+            rm -rf "$SIBLING"
+            mv "$SIBLING_STAGING" "$SIBLING"
+            echo "  ↻ 已同步副本：${SIBLING}（避免 macOS 本地网络 UUID 缓存漂移）"
+        else
+            rm -rf "$SIBLING_STAGING"
+        fi
+    fi
+done
+
 if [ "$RELAUNCH" = "1" ]; then
     killall MenuBarMijiaApp 2>/dev/null || true
     sleep 0.5

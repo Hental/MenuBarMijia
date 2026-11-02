@@ -39,6 +39,7 @@ struct GoldenCorpusTests {
         case climate(ClimatePayload)
         case fan(FanPayload)
         case plug(PlugPayload)
+        case fridge(FridgePayload)
         case vacuum(VacuumPayload)
         case camera(CameraPayload)
         case sensor(SensorPayload)
@@ -94,6 +95,18 @@ struct GoldenCorpusTests {
             let isChildLocked: Bool
         }
 
+        struct FridgePayload: Decodable {
+            let modeEntityId: String?
+            let currentMode: String
+            let availableModes: [String]
+            let fridgeCurrentTemp: Double?
+            let fridgeTargetTemp: Double
+            let fridgeTargetEntityId: String?
+            let freezerCurrentTemp: Double?
+            let freezerTargetTemp: Double
+            let freezerTargetEntityId: String?
+        }
+
         struct VacuumPayload: Decodable {
             let entityId: String
             let status: String
@@ -118,6 +131,7 @@ struct GoldenCorpusTests {
             let temperature: Double?
             let humidity: Double?
             let battery: Int?
+            let statusText: String?
         }
 
         init(from decoder: Decoder) throws {
@@ -132,6 +146,8 @@ struct GoldenCorpusTests {
                 self = .fan(try FanPayload(from: decoder))
             case "plug":
                 self = .plug(try PlugPayload(from: decoder))
+            case "fridge":
+                self = .fridge(try FridgePayload(from: decoder))
             case "vacuum":
                 self = .vacuum(try VacuumPayload(from: decoder))
             case "camera":
@@ -207,6 +223,20 @@ struct GoldenCorpusTests {
                         isChildLocked: p.isChildLocked
                     )
                 )
+            case .fridge(let p):
+                return .fridge(
+                    FridgeSpec(
+                        modeEntityId: p.modeEntityId,
+                        currentMode: p.currentMode,
+                        availableModes: p.availableModes,
+                        fridgeCurrentTemp: p.fridgeCurrentTemp,
+                        fridgeTargetTemp: p.fridgeTargetTemp,
+                        fridgeTargetEntityId: p.fridgeTargetEntityId,
+                        freezerCurrentTemp: p.freezerCurrentTemp,
+                        freezerTargetTemp: p.freezerTargetTemp,
+                        freezerTargetEntityId: p.freezerTargetEntityId
+                    )
+                )
             case .vacuum(let p):
                 return .vacuum(
                     VacuumSpec(
@@ -236,7 +266,8 @@ struct GoldenCorpusTests {
                     SensorSpec(
                         temperature: p.temperature,
                         humidity: p.humidity,
-                        battery: p.battery
+                        battery: p.battery,
+                        statusText: p.statusText
                     )
                 )
             }
@@ -419,6 +450,7 @@ struct GoldenCorpusTests {
         let presetMode: String?
         let oscillating: Bool?
         let option: String?
+        let value: Double?
         let action: String?
         func toDeviceCommand() throws -> DeviceCommand {
             switch kind {
@@ -448,6 +480,8 @@ struct GoldenCorpusTests {
                 return .setSwitch(entityId: entityId, isOn: isOn ?? false)
             case "setSelectOption":
                 return .setSelectOption(entityId: entityId, option: option ?? "")
+            case "setNumberValue":
+                return .setNumberValue(entityId: entityId, value: value ?? 0)
             case "vacuumAction":
                 let vAction: VacuumAction = switch action {
                 case "start": .start

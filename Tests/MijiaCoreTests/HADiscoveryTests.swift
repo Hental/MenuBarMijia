@@ -103,4 +103,32 @@ struct HADiscoveryTests {
         #expect(first.baseURL.hasPrefix("http://"))
         #expect(!first.locationName.isEmpty)
     }
+
+    @Test("HAWebSocketProvider.describeConnectionError explains macOS Local Network block on LAN -1009")
+    func describeConnectionErrorLANBlock() {
+        let lanOffline = URLError(.notConnectedToInternet)
+        let lanMessage = HAWebSocketProvider.describeConnectionError(
+            lanOffline,
+            baseURLString: "http://192.168.1.4:8123"
+        )
+        #expect(lanMessage.contains("本地网络") || lanMessage.contains("Local Network"))
+
+        let mdnsMessage = HAWebSocketProvider.describeConnectionError(
+            lanOffline,
+            baseURLString: "http://homeassistant.local:8123"
+        )
+        #expect(mdnsMessage.contains("本地网络") || mdnsMessage.contains("Local Network"))
+
+        let publicMessage = HAWebSocketProvider.describeConnectionError(
+            lanOffline,
+            baseURLString: "https://demo.ui.nabu.casa"
+        )
+        #expect(!publicMessage.contains("隐私与安全性") && !publicMessage.contains("Privacy & Security"))
+
+        let authMessage = HAWebSocketProvider.describeConnectionError(
+            HomeProviderError.unauthorized,
+            baseURLString: "http://192.168.1.4:8123"
+        )
+        #expect(authMessage == HomeProviderError.unauthorized.errorDescription)
+    }
 }

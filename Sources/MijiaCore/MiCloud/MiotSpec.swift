@@ -170,6 +170,79 @@ public struct MiotDeviceSpec: Codable, Equatable, Sendable {
     public func services(named name: String) -> [MiotService] {
         services.filter { $0.shortName == name }
     }
+
+    /// Fallback spec for legacy Xiaomi models whose miot-spec.org instance remains in `debug`
+    /// status (e.g. `yunmi.kettle.v1`) and is omitted from the `status=released` index.
+    public static func inferFallbackSpec(model: String) -> MiotDeviceSpec? {
+        let lower = model.lowercased()
+        if lower.contains(".kettle.") || lower.contains(".waterdispenser.") {
+            return MiotDeviceSpec(
+                type: "urn:miot-spec-v2:device:kettle:0000A009:\(model):1",
+                description: "Kettle",
+                services: [
+                    MiotService(
+                        iid: 2,
+                        type: "urn:miot-spec-v2:service:kettle:00007813:\(model):1",
+                        properties: [
+                            MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:status:00000007:\(model):1", format: "uint8", access: ["read", "notify"], valueList: [
+                                MiotValueListItem(value: 1, description: "Idle"),
+                                MiotValueListItem(value: 2, description: "Heating"),
+                                MiotValueListItem(value: 3, description: "Keep Warm")
+                            ]),
+                            MiotProperty(iid: 2, type: "urn:miot-spec-v2:property:temperature:00000020:\(model):1", format: "float", access: ["read", "notify"])
+                        ]
+                    )
+                ]
+            )
+        }
+        if lower.contains("sensor_motion") {
+            return MiotDeviceSpec(
+                type: "urn:miot-spec-v2:device:motion-sensor:0000A014:\(model):1",
+                description: "Motion Sensor",
+                services: [
+                    MiotService(
+                        iid: 2,
+                        type: "urn:miot-spec-v2:service:motion-sensor:00007825:\(model):1",
+                        properties: [
+                            MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:motion-state:0000007D:\(model):1", format: "bool", access: ["read", "notify"])
+                        ]
+                    )
+                ]
+            )
+        }
+        if lower.contains("sensor_magnet") {
+            return MiotDeviceSpec(
+                type: "urn:miot-spec-v2:device:magnet-sensor:0000A016:\(model):1",
+                description: "Magnet Sensor",
+                services: [
+                    MiotService(
+                        iid: 2,
+                        type: "urn:miot-spec-v2:service:magnet-sensor:00007827:\(model):1",
+                        properties: [
+                            MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:contact-state:0000007C:\(model):1", format: "bool", access: ["read", "notify"])
+                        ]
+                    )
+                ]
+            )
+        }
+        if lower.contains(".lock.") {
+            return MiotDeviceSpec(
+                type: "urn:miot-spec-v2:device:lock:0000A038:\(model):1",
+                description: "Lock",
+                services: [
+                    MiotService(iid: 2, type: "urn:miot-spec-v2:service:lock:00007855:\(model):1"),
+                    MiotService(
+                        iid: 3,
+                        type: "urn:miot-spec-v2:service:battery:00007805:\(model):1",
+                        properties: [
+                            MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:battery-level:00000014:\(model):1", format: "uint8", access: ["read", "notify"])
+                        ]
+                    )
+                ]
+            )
+        }
+        return nil
+    }
 }
 
 // MARK: - Spec Source & Disk-Cached Store
@@ -210,9 +283,12 @@ public actor MiotSpecStore: MiotSpecSource {
         } else if let found = try await typeIndex()[model] {
             type = found
         } else {
-            return nil
+            return MiotDeviceSpec.inferFallbackSpec(model: model)
         }
-        return try await instance(type: type)
+        if let loaded = try? await instance(type: type) {
+            return loaded
+        }
+        return MiotDeviceSpec.inferFallbackSpec(model: model)
     }
 
     private func typeIndex() async throws -> [String: String] {

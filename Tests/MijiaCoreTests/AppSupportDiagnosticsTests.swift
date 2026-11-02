@@ -106,6 +106,18 @@ struct AppSupportDiagnosticsTests {
         #expect(home.devices.map(\.id) == [key.did])
     }
 
+    @Test("Mi Cloud: gateways, routers, and repeaters are classified as infrastructure filteredDuplicate")
+    func unsupportedMiCloudInfrastructure() {
+        let gateway = MiDeviceRecord(did: "did-gw", name: "网关", model: "lumi.gateway.mgl03", isOnline: true)
+        let router = MiDeviceRecord(did: "did-rt", name: "路由器", model: "xiaomi.router.rm1800", isOnline: true)
+        let repeater = MiDeviceRecord(did: "did-rp", name: "小米 Wi-Fi 放大器 Pro", model: "xiaomi.repeater.v3", isOnline: true)
+        let home = MiotSynthesizer.synthesize(devices: [gateway, router, repeater], rooms: [], specs: [:], values: [:])
+
+        let skipped = UnsupportedDeviceCollector.miCloud(devices: [gateway, router, repeater], specs: [:], synthesized: home)
+        #expect(skipped.count == 3)
+        #expect(skipped.allSatisfy { $0.reason == .filteredDuplicate })
+    }
+
     // MARK: - #45 Unsupported devices: Home Assistant
 
     private static func haHome(

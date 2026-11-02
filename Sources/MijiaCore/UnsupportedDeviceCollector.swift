@@ -68,11 +68,18 @@ public enum UnsupportedDeviceCollector {
         for record in devices where !splitParents.contains(record.did) {
             let isBuildable = specs[record.model].map { MiotSynthesizer.supportedServiceName(for: $0) != nil } ?? false
             if isBuildable && synthesizedIds.contains(record.did) { continue }
+            let lowerModel = record.model.lowercased()
+            let isNetworkInfrastructure = lowerModel.hasPrefix("lumi.gateway")
+                || lowerModel.contains(".gateway.")
+                || lowerModel.hasPrefix("xiaomi.router")
+                || lowerModel.contains(".router.")
+                || lowerModel.hasPrefix("xiaomi.repeater")
+                || lowerModel.contains(".repeater.")
             out.append(UnsupportedDevice(
                 id: record.did,
                 name: record.name,
                 model: record.model,
-                reason: .unknownModel
+                reason: isNetworkInfrastructure ? .filteredDuplicate : .unknownModel
             ))
         }
         return sorted(out)

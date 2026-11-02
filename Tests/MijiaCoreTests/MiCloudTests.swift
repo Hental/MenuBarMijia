@@ -431,6 +431,145 @@ struct MiotSynthesizerTests {
         #expect(home.devices.isEmpty)
         #expect(MiotSynthesizer.supportedServiceName(for: MiotFixtures.specs["lumi.gateway.mgl03"]!) == nil)
     }
+
+    @Test("dmaker.airfresh.t2017 air-fresh and air-fresh-favorite synthesize to FanSpec and map speed/mode commands")
+    func airFreshFromSpec() throws {
+        let json = """
+        {"type":"urn:miot-spec-v2:device:air-fresh:0000A012:dmaker-t2017:1","services":[
+          {"iid":2,"type":"urn:miot-spec-v2:service:air-fresh:00007822:dmaker-t2017:1","properties":[
+            {"iid":1,"type":"urn:miot-spec-v2:property:on:00000006:dmaker-t2017:1","format":"bool","access":["read","write","notify"]},
+            {"iid":2,"type":"urn:miot-spec-v2:property:mode:00000008:dmaker-t2017:1","format":"uint8","access":["read","write","notify"],"value-list":[{"value":0,"description":"Auto"},{"value":1,"description":"Sleep"},{"value":2,"description":"Favorite"}]},
+            {"iid":5,"type":"urn:miot-spec-v2:property:heater:00000026:dmaker-t2017:1","format":"bool","access":["read","write","notify"]}
+          ]},
+          {"iid":3,"type":"urn:miot-spec-v2:service:environment:0000780A:dmaker-t2017:1","properties":[
+            {"iid":1,"type":"urn:miot-spec-v2:property:pm2.5-density:00000034:dmaker-t2017:1","format":"uint16","access":["read","notify"]},
+            {"iid":2,"type":"urn:miot-spec-v2:property:co2-density:0000004B:dmaker-t2017:1","format":"uint16","access":["read","notify"]},
+            {"iid":3,"type":"urn:miot-spec-v2:property:temperature:00000020:dmaker-t2017:1","format":"float","access":["read","notify"]}
+          ]},
+          {"iid":7,"type":"urn:miot-spec-v2:service:air-fresh-favorite:00007842:dmaker-t2017:1","properties":[
+            {"iid":1,"type":"urn:miot-spec-v2:property:fan-level:00000016:dmaker-t2017:1","format":"uint16","access":["read","write","notify"],"value-range":[60,300,5]}
+          ]}
+        ]}
+        """
+        let spec = MiotFixtures.decode(json)
+        let record = MiDeviceRecord(did: "af1", name: "新风机 客厅", model: "dmaker.airfresh.t2017", isOnline: true)
+        let values: [MiotPropKey: JSONValue] = [
+            MiotFixtures.key("af1", 2, 1): .bool(true),
+            MiotFixtures.key("af1", 2, 2): .number(2),
+            MiotFixtures.key("af1", 2, 5): .bool(true),
+            MiotFixtures.key("af1", 3, 1): .number(12),
+            MiotFixtures.key("af1", 3, 2): .number(540),
+            MiotFixtures.key("af1", 3, 3): .number(23.5),
+            MiotFixtures.key("af1", 7, 1): .number(180),
+        ]
+        let home = MiotSynthesizer.synthesize(
+            devices: [record],
+            rooms: [MiRoom(id: "r1", name: "客厅", dids: ["af1"])],
+            specs: ["dmaker.airfresh.t2017": spec],
+            values: values
+        )
+        let device = try #require(home.devices.first)
+        #expect(device.sfSymbolName == "wind")
+        guard case .fan(let fan) = device.kind else {
+            Issue.record("expected fan")
+            return
+        }
+        #expect(fan.isOn)
+        #expect(fan.presetMode == "Favorite")
+        #expect(fan.percentage == 50)
+        #expect(fan.pm25Density == 12)
+        #expect(fan.temperature == 23.5)
+
+        let speedWrite = try MiotCommandMapper.map(.setFanPercentage(entityId: "miot:af1:2", percent: 50), spec: spec)
+        #expect(speedWrite == .setProps([
+            MiotPropWrite(did: "af1", siid: 2, piid: 1, value: .bool(true)),
+            MiotPropWrite(did: "af1", siid: 2, piid: 2, value: .number(2)),
+            MiotPropWrite(did: "af1", siid: 7, piid: 1, value: .number(180)),
+        ]))
+    }
+
+    @Test("Fridge, kitchen appliances, locks, and fallback specs synthesize into controllable or status cards")
+    func fridgeAppliancesAndSensorsFromSpec() throws {
+        let fridgeJson = """
+        {"type":"urn:miot-spec-v2:device:fridge:0000A01F:midjd6-v1:1","services":[
+          {"iid":2,"type":"urn:miot-spec-v2:service:fridge:00007819:midjd6-v1:1","properties":[
+            {"iid":2,"type":"urn:miot-spec-v2:property:mode:00000008:midjd6-v1:1","format":"uint8","access":["read","write","notify"],"value-list":[{"value":0,"description":"None"},{"value":1,"description":"Smart"},{"value":2,"description":"Holiday"}]}
+          ]},
+          {"iid":3,"type":"urn:miot-spec-v2:service:fridge-chamber:0000781A:midjd6-v1:1","properties":[
+            {"iid":2,"type":"urn:miot-spec-v2:property:target-temperature:00000021:midjd6-v1:1","format":"int8","access":["read","write","notify"],"value-range":[2,8,1]}
+          ]},
+          {"iid":4,"type":"urn:miot-spec-v2:service:fridge-chamber:0000781A:midjd6-v1:1","properties":[
+            {"iid":2,"type":"urn:miot-spec-v2:property:target-temperature:00000021:midjd6-v1:1","format":"int8","access":["read","write","notify"],"value-range":[-24,-15,1]}
+          ]}
+        ]}
+        """
+        let cookerJson = """
+        {"type":"urn:miot-spec-v2:device:cooker:0000A00B:chunmi-normalcd2:1","services":[
+          {"iid":2,"type":"urn:miot-spec-v2:service:cooker:0000781C:chunmi-normalcd2:1","properties":[
+            {"iid":1,"type":"urn:miot-spec-v2:property:status:00000007:chunmi-normalcd2:1","format":"uint8","access":["read","notify"],"value-list":[{"value":1,"description":"Idle"},{"value":2,"description":"Running"}]}
+          ],"actions":[
+            {"iid":1,"type":"urn:miot-spec-v2:action:start-cook:00002806:chunmi-normalcd2:1"},
+            {"iid":2,"type":"urn:miot-spec-v2:action:cancel-cooking:00002807:chunmi-normalcd2:1"}
+          ]}
+        ]}
+        """
+        let fridgeSpec = MiotFixtures.decode(fridgeJson)
+        let cookerSpec = MiotFixtures.decode(cookerJson)
+        let kettleSpec = try #require(MiotDeviceSpec.inferFallbackSpec(model: "yunmi.kettle.v1"))
+        let lockSpec = try #require(MiotDeviceSpec.inferFallbackSpec(model: "loock.lock.v1"))
+
+        let home = MiotSynthesizer.synthesize(
+            devices: [
+                MiDeviceRecord(did: "fr1", name: "米家互联网对开门冰箱 540L", model: "midjd6.fridge.v1", isOnline: true),
+                MiDeviceRecord(did: "ck1", name: "电饭煲", model: "chunmi.cooker.normalcd2", isOnline: true),
+                MiDeviceRecord(did: "kt1", name: "电水壶", model: "yunmi.kettle.v1", isOnline: true),
+                MiDeviceRecord(did: "lk1", name: "门锁", model: "loock.lock.v1", isOnline: true),
+            ],
+            rooms: [],
+            specs: [
+                "midjd6.fridge.v1": fridgeSpec,
+                "chunmi.cooker.normalcd2": cookerSpec,
+                "yunmi.kettle.v1": kettleSpec,
+                "loock.lock.v1": lockSpec,
+            ],
+            values: [
+                MiotFixtures.key("fr1", 2, 2): .number(1),
+                MiotFixtures.key("fr1", 3, 2): .number(4),
+                MiotFixtures.key("fr1", 4, 2): .number(-18),
+                MiotFixtures.key("ck1", 2, 1): .number(2),
+                MiotFixtures.key("kt1", 2, 1): .number(3),
+                MiotFixtures.key("kt1", 2, 2): .number(55),
+                MiotFixtures.key("lk1", 3, 1): .number(88),
+            ]
+        )
+        let byId = Dictionary(uniqueKeysWithValues: home.devices.map { ($0.id, $0) })
+        let fridge = try #require(byId["fr1"])
+        guard case .fridge(let fridgeKind) = fridge.kind else {
+            Issue.record("expected fridge")
+            return
+        }
+        #expect(fridgeKind.currentMode == "Smart")
+        #expect(fridgeKind.fridgeTargetTemp == 4)
+        #expect(fridgeKind.freezerTargetTemp == -18)
+        #expect(fridge.statusSubtitle.contains(L10n.temperature(4)))
+        #expect(fridge.statusSubtitle.contains(L10n.temperature(-18)))
+        #expect(fridge.statusSubtitle.contains("智能"))
+        #expect(try MiotCommandMapper.map(.setNumberValue(entityId: "miot:fr1:3", value: 5), spec: fridgeSpec)
+            == .setProps([MiotPropWrite(did: "fr1", siid: 3, piid: 2, value: .number(5))]))
+
+        let cooker = try #require(byId["ck1"])
+        #expect(cooker.isActiveOn == true)
+        #expect(try MiotCommandMapper.map(.setSwitch(entityId: "miot:ck1:2", isOn: false), spec: cookerSpec)
+            == .action(MiotActionCall(did: "ck1", siid: 2, aiid: 2)))
+
+        let kettle = try #require(byId["kt1"])
+        #expect(kettle.statusSubtitle.contains("55"))
+        #expect(kettle.statusSubtitle.contains("保温中"))
+
+        let lock = try #require(byId["lk1"])
+        #expect(lock.sfSymbolName == "lock.shield.fill")
+        #expect(lock.statusSubtitle.contains("88%"))
+    }
 }
 
 struct MiotCommandMapperTests {

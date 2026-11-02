@@ -1070,7 +1070,13 @@ fn panel_sidecar_on_left(room_left: f64, room_right: f64, scale: f64) -> bool {
 
 /// Keep the main card column fixed while reserving space for the side-mounted assistant.
 #[tauri::command]
-fn set_panel_height(app: AppHandle, height: f64, expanded: bool, side_left: bool) -> bool {
+fn set_panel_height(
+    app: AppHandle,
+    height: f64,
+    expanded: bool,
+    side_left: bool,
+    grok_enabled: Option<bool>,
+) -> bool {
     let Some(window) = app.get_webview_window("main") else { return side_left };
     let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
     let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
@@ -1085,9 +1091,10 @@ fn set_panel_height(app: AppHandle, height: f64, expanded: bool, side_left: bool
     let right = monitor.as_ref().map(|m| (m.position().x as f64) + m.size().width as f64).unwrap_or(1920.0 * scale) - 12.0 * scale;
     let room_right = right - main_x - main_width;
     let room_left = main_x - left;
-    let on_left = panel_sidecar_on_left(room_left, room_right, scale);
-    let rail_width: f64 = if expanded { 232.0 } else { 84.0 };
-    let target_w = (472.0 + rail_width + 20.0).min((right - left) / scale);
+    let enabled = grok_enabled.unwrap_or(true);
+    let on_left = if enabled { panel_sidecar_on_left(room_left, room_right, scale) } else { false };
+    let rail_width: f64 = if !enabled { 0.0 } else if expanded { 232.0 } else { 84.0 };
+    let target_w = (472.0 + if enabled { rail_width + 20.0 } else { 8.0 }).min((right - left) / scale);
     let desired_x = main_x - if on_left { (rail_width + 12.0) * scale } else { 0.0 };
     let x = desired_x.clamp(left, (right - target_w * scale).max(left));
     let top = monitor.as_ref().map(|m| m.position().y).unwrap_or(0) + (12.0 * scale) as i32;

@@ -60,6 +60,19 @@ export interface PlugSpec {
   isChildLocked: boolean;
 }
 
+export interface FridgeSpec {
+  readonly kind: "fridge";
+  readonly modeEntityId: string | null;
+  currentMode: string;
+  readonly availableModes: readonly string[];
+  readonly fridgeCurrentTemp: number | null;
+  fridgeTargetTemp: number;
+  readonly fridgeTargetEntityId: string | null;
+  readonly freezerCurrentTemp: number | null;
+  freezerTargetTemp: number;
+  readonly freezerTargetEntityId: string | null;
+}
+
 export interface VacuumSpec {
   readonly kind: "vacuum";
   readonly entityId: string;
@@ -88,6 +101,7 @@ export interface SensorSpec {
   readonly temperature: number | null;
   readonly humidity: number | null;
   readonly battery: number | null;
+  readonly statusText?: string | null;
 }
 
 export type DeviceKind =
@@ -95,6 +109,7 @@ export type DeviceKind =
   | ClimateSpec
   | FanSpec
   | PlugSpec
+  | FridgeSpec
   | VacuumSpec
   | CameraSpec
   | SensorSpec;
@@ -153,6 +168,7 @@ export type DeviceCommand =
   | { readonly kind: "setFanOscillating"; readonly entityId: string; readonly oscillating: boolean }
   | { readonly kind: "setSwitch"; readonly entityId: string; readonly isOn: boolean }
   | { readonly kind: "setSelectOption"; readonly entityId: string; readonly option: string }
+  | { readonly kind: "setNumberValue"; readonly entityId: string; readonly value: number }
   | { readonly kind: "vacuumAction"; readonly entityId: string; readonly action: VacuumAction }
   | { readonly kind: "activateScene"; readonly entityId: string };
 
@@ -200,6 +216,7 @@ export interface ScheduledCommand {
 export function joinsAllOffByDefault(device: SmartDevice): boolean {
   return (
     device.kind.kind !== "plug" &&
+    device.kind.kind !== "fridge" &&
     device.kind.kind !== "vacuum" &&
     device.kind.kind !== "camera"
   );
@@ -257,6 +274,7 @@ export function isDeviceActiveOn(device: SmartDevice): boolean {
       return device.kind.isOn;
     case "vacuum":
       return device.kind.status === "cleaning";
+    case "fridge":
     case "sensor":
       return false;
     default: {
@@ -377,6 +395,27 @@ export function localizeFanPreset(mode: string): string {
   }
 }
 
+export function localizeFridgeMode(mode: string): string {
+  switch (mode.trim().toLowerCase()) {
+    case "none":
+    case "manual":
+      return t("手动");
+    case "smart":
+    case "auto":
+      return t("智能");
+    case "holiday":
+      return t("假日");
+    case "quick cooling":
+    case "super cool":
+      return t("速冷");
+    case "quick frozen":
+    case "super freeze":
+      return t("速冻");
+    default:
+      return mode;
+  }
+}
+
 export function localizeAirQuality(raw: string | null | undefined, pm25?: number | null): string | null {
   if (raw && raw.trim() !== "") {
     switch (raw.trim().toLowerCase()) {
@@ -481,6 +520,23 @@ export function deviceStatusSummary(device: SmartDevice): string {
       if (!k.isOn) return t("已断电");
       return k.powerWatts !== null ? t("供电中 · {watts}W", { watts: k.powerWatts.toFixed(1) }) : t("供电中");
     }
+    case "fridge": {
+      if (k.fridgeCurrentTemp === null && k.freezerCurrentTemp === null) {
+        const cStr = `${t("冷藏")} ${formatTemperature(k.fridgeTargetTemp)}`;
+        const fStr = `${t("冷冻")} ${formatTemperature(k.freezerTargetTemp)}`;
+        const mStr = localizeFridgeMode(k.currentMode);
+        return mStr ? `${mStr} · ${cStr} · ${fStr}` : `${cStr} · ${fStr}`;
+      }
+      const cStr =
+        k.fridgeCurrentTemp !== null
+          ? `${t("冷藏")} ${formatTemperature(k.fridgeCurrentTemp)}`
+          : t("冷藏 --");
+      const fStr =
+        k.freezerCurrentTemp !== null
+          ? `${t("冷冻")} ${formatTemperature(k.freezerCurrentTemp)}`
+          : t("冷冻 --");
+      return `${cStr} · ${fStr}`;
+    }
     case "vacuum": {
       const map: Record<string, string> = {
         cleaning: t("清扫中"),
@@ -504,7 +560,11 @@ export function deviceStatusSummary(device: SmartDevice): string {
       const parts: string[] = [];
       if (k.temperature !== null) parts.push(formatTemperature(k.temperature, undefined, 1));
       if (k.humidity !== null) parts.push(`${Math.round(k.humidity)}%`);
-      return parts.length > 0 ? parts.join(" · ") : t("在线");
+      if (parts.length > 0) return parts.join(" · ");
+      if (k.statusText) {
+        return k.battery !== null ? `${k.statusText} · ${t("电量")} ${k.battery}%` : k.statusText;
+      }
+      return t("在线");
     }
     default: {
       const _exhaustive: never = k;

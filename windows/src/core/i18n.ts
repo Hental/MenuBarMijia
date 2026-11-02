@@ -459,6 +459,22 @@ const CATALOG: Readonly<Record<string, readonly [string, string]>> = {
   "复制诊断": ["复制诊断", "Copy Diagnostics"],
   "已复制脱敏诊断信息": ["已复制脱敏诊断信息", "Desensitized diagnostics copied"],
   "摄像机诊断": ["摄像机诊断", "Camera Diagnostics"],
+  "显示顶部快捷场景栏": ["显示顶部快捷场景栏", "Show top quick actions bar"],
+  "启用侧边情绪智能球": ["启用侧边情绪智能球", "Enable side emotion ball"],
+  "电量": ["电量", "Battery"],
+  "冷藏室": ["冷藏室", "Fridge"],
+  "降低冷藏室温度": ["降低冷藏室温度", "Lower fridge temperature"],
+  "升高冷藏室温度": ["升高冷藏室温度", "Raise fridge temperature"],
+  "冷冻室": ["冷冻室", "Freezer"],
+  "降低冷冻室温度": ["降低冷冻室温度", "Lower freezer temperature"],
+  "升高冷冻室温度": ["升高冷冻室温度", "Raise freezer temperature"],
+  "假日": ["假日", "Holiday"],
+  "速冷": ["速冷", "Super Cool"],
+  "速冻": ["速冻", "Super Freeze"],
+  "冷藏": ["冷藏", "Fridge"],
+  "冷冻": ["冷冻", "Freezer"],
+  "冷藏 --": ["冷藏 --", "Fridge --"],
+  "冷冻 --": ["冷冻 --", "Freezer --"],
 };
 
 export const LANGUAGE_STORAGE_KEY = "menumijia.windows.language";

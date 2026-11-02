@@ -260,6 +260,11 @@ struct MenuBarPanelControllerTests {
         let controller = makeController(store: store)
         defer { controller.uninstall() }
 
+        #expect(store.enableGrokBall == false)
+        controller.showPanel()
+        #expect(controller.grokBallSidecarWindow?.isVisible == false)
+
+        store.enableGrokBall = true
         controller.showPanel()
         let panel = try #require(controller.panelWindow)
         let sidecar = try #require(controller.grokBallSidecarWindow)
@@ -312,6 +317,7 @@ struct MenuBarPanelControllerTests {
     func grokBallSidecarOutsideClickAndKeyOwnership() async throws {
         let (store, suite) = try await makeStore()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        store.enableGrokBall = true
         let controller = makeController(store: store)
         defer { controller.uninstall() }
         controller.showPanel()
@@ -331,6 +337,7 @@ struct MenuBarPanelControllerTests {
     func grokBallSidecarEscapeClosesInOrder() async throws {
         let (store, suite) = try await makeStore()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        store.enableGrokBall = true
         let controller = makeController(store: store)
         defer { controller.uninstall() }
         controller.showPanel()
@@ -353,6 +360,7 @@ struct MenuBarPanelControllerTests {
     func grokBallSidecarFollowsParentGeometry() async throws {
         let (store, suite) = try await makeStore()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        store.enableGrokBall = true
         let controller = makeController(store: store)
         defer { controller.uninstall() }
         controller.showPanel()
@@ -426,6 +434,7 @@ struct MenuBarPanelControllerTests {
     func grokBallDragsWithoutActivating() async throws {
         let (store, suite) = try await makeStore()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        store.enableGrokBall = true
         let controller = makeController(store: store)
         defer { controller.uninstall() }
         controller.showPanel()
@@ -465,6 +474,7 @@ struct MenuBarPanelControllerTests {
     func grokBallHoldStartsVoiceOnly() async throws {
         let (store, suite) = try await makeStore()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        store.enableGrokBall = true
         let speech = SpeechInputController.shared
         let controller = makeController(store: store)
         defer { speech.stop(andSubmit: false, store: nil); controller.uninstall() }
@@ -863,6 +873,7 @@ struct MenuBarPanelControllerTests {
         guard let defaults = UserDefaults(suiteName: suite) else { return }
         defaults.set(true, forKey: "has_completed_onboarding")
         defaults.set(false, forKey: "automatically_checks_for_updates")
+        defaults.set(false, forKey: "show_quick_actions_bar")
 
         let store = HomeStore(provider: MockHomeProvider(snapshot: base), defaultsSuiteName: suite)
         for _ in 0..<50 where store.rooms.count < rooms.count {
@@ -1036,6 +1047,7 @@ struct MenuBarPanelControllerTests {
         defaults.set(true, forKey: "has_completed_onboarding")
         defaults.set(AppLanguagePreference.zhHans.rawValue, forKey: "app_language")
         defaults.set(TemperatureUnitPreference.celsius.rawValue, forKey: TemperatureUnitPreference.storageKey)
+        defaults.set(false, forKey: "show_quick_actions_bar")
         defaults.set(false, forKey: "automatically_checks_for_updates")
         defaults.set(true, forKey: "compact_grid_mode")
 

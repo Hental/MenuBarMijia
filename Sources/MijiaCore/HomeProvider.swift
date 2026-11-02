@@ -189,13 +189,13 @@ public actor HAWebSocketProvider: HomeProvider {
             } catch {
                 if Task.isCancelled { break }
                 if case HomeProviderError.unauthorized = error {
-                    let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    let msg = Self.describeConnectionError(error, baseURLString: baseURLString)
                     logger.error("WebSocket unauthorized: \(msg, privacy: .public)")
                     continuation?.yield(.statusChanged(.disconnected(msg)))
                 } else {
                     consecutiveFailures += 1
                     await suggestOtherAddressIfDue(consecutiveFailures: consecutiveFailures)
-                    let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    let msg = Self.describeConnectionError(error, baseURLString: baseURLString)
                     logger.error("WebSocket disconnected: \(msg, privacy: .public)")
                     continuation?.yield(.statusChanged(.disconnected(msg)))
                 }
@@ -244,6 +244,7 @@ public actor HAWebSocketProvider: HomeProvider {
         }
 
         snapshot = HAHomeSnapshot()
+        logger.info("Connected to Home Assistant WebSocket: \(self.baseURLString, privacy: .public)")
 
         continuation?.yield(.statusChanged(.connected))
 
@@ -578,5 +579,19 @@ public actor HAWebSocketProvider: HomeProvider {
             wsStr = "ws://" + wsStr.dropFirst("http://".count)
         }
         return URL(string: "\(wsStr)/api/websocket")
+    }
+
+    public static func describeConnectionError(_ error: Error, baseURLString: String) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           nsError.code == URLError.notConnectedToInternet.rawValue,
+           let host = URL(string: normalizeBaseURL(baseURLString))?.host?.lowercased(),
+           (HADiscovery.isPrivateLANIPv4(host) || host.hasSuffix(".local")) {
+            return L10n.tr(
+                "局域网连接被系统拦截（请检查「系统设置 → 隐私与安全性 → 本地网络」中的 MenuBarMijia 权限，或重新安装对齐本地应用签名）",
+                "Local network connection blocked by macOS (check System Settings → Privacy & Security → Local Network for MenuBarMijia)"
+            )
+        }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }

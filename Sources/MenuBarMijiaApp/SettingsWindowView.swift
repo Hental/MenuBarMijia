@@ -297,6 +297,22 @@ private struct GeneralSettingsTab: View {
                     )
 
                     SettingsToggleRow(
+                        title: L10n.tr("显示顶部快捷场景栏", "Show Quick Actions Strip"),
+                        isOn: Binding(
+                            get: { store.showQuickActionsBar },
+                            set: { store.showQuickActionsBar = $0 }
+                        )
+                    )
+
+                    SettingsToggleRow(
+                        title: L10n.tr("启用侧边情绪智能球", "Enable Sidecar Grok Ball"),
+                        isOn: Binding(
+                            get: { store.enableGrokBall },
+                            set: { store.enableGrokBall = $0 }
+                        )
+                    )
+
+                    SettingsToggleRow(
                         title: L10n.tr("操作声音反馈", "Play Feedback Sounds"),
                         isOn: $soundFeedbackEnabled
                     )
@@ -509,6 +525,7 @@ private struct ConnectionSettingsTab: View {
                         Text(connectionBadgeText)
                             .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
                             .foregroundStyle(connectionBadgeColor)
+                            .help(disconnectReason ?? "")
                     }
 
                     Picker(
@@ -599,6 +616,12 @@ private struct ConnectionSettingsTab: View {
                                 .textFieldStyle(.roundedBorder)
                                 .controlSize(.regular)
                                 .font(.system(size: DesignTokens.TypeSize.body, design: .monospaced))
+                            if let reason = disconnectReason {
+                                Label(reason, systemImage: "exclamationmark.octagon.fill")
+                                    .font(.system(size: DesignTokens.TypeSize.caption))
+                                    .foregroundStyle(.red)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
 
                         HStack {
@@ -671,6 +694,15 @@ private struct ConnectionSettingsTab: View {
         case .connecting: return .orange
         case .disconnected: return .red
         }
+    }
+
+    private var disconnectReason: String? {
+        guard store.homeBackend != .demo,
+              case .disconnected(let reason) = store.connectionStatus else {
+            return nil
+        }
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -853,7 +885,7 @@ private struct PrivacySettingsTab: View {
 
                             Spacer()
 
-                            if let url = feedbackURL(for: device) {
+                            if device.reason != .filteredDuplicate, let url = feedbackURL(for: device) {
                                 Link(destination: url) {
                                     HStack(spacing: 3) {
                                         Image(systemName: "arrow.up.right.square")

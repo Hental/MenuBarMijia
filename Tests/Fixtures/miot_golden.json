@@ -1341,6 +1341,79 @@
           ]
         }
       ]
+    },
+    "midjd6.fridge.v1": {
+      "type": "urn:miot-spec-v2:device:fridge:0000A01F:midjd6-v1:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:fridge:00007819:midjd6-v1:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:mode:00000008:midjd6-v1:1",
+              "format": "uint8",
+              "access": ["read", "write", "notify"],
+              "value-list": [
+                { "value": 0, "description": "None" },
+                { "value": 1, "description": "Smart" },
+                { "value": 2, "description": "Holiday" }
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:midjd6-v1:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:target-temperature:00000021:midjd6-v1:1",
+              "format": "int8",
+              "access": ["read", "write", "notify"],
+              "value-range": [2, 8, 1]
+            }
+          ]
+        },
+        {
+          "iid": 4,
+          "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:midjd6-v1:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:target-temperature:00000021:midjd6-v1:1",
+              "format": "int8",
+              "access": ["read", "write", "notify"],
+              "value-range": [-24, -15, 1]
+            }
+          ]
+        }
+      ]
+    },
+    "chunmi.cooker.normalcd2": {
+      "type": "urn:miot-spec-v2:device:cooker:0000A00B:chunmi-normalcd2:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:cooker:0000781C:chunmi-normalcd2:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:status:00000007:chunmi-normalcd2:1",
+              "format": "uint8",
+              "access": ["read", "notify"],
+              "value-list": [
+                { "value": 1, "description": "Idle" },
+                { "value": 2, "description": "Running" }
+              ]
+            }
+          ],
+          "actions": [
+            { "iid": 1, "type": "urn:miot-spec-v2:action:start-cook:00002806:chunmi-normalcd2:1" },
+            { "iid": 2, "type": "urn:miot-spec-v2:action:cancel-cooking:00002807:chunmi-normalcd2:1" }
+          ]
+        }
+      ]
     }
   },
   "fallbackSpecs": [
@@ -1592,6 +1665,18 @@
       "model": "fixture.plug.unknown",
       "name": "unknown",
       "isOnline": true
+    },
+    {
+      "did": "did_fridge",
+      "model": "midjd6.fridge.v1",
+      "name": "米家互联网对开门冰箱 540L",
+      "isOnline": true
+    },
+    {
+      "did": "did_cooker",
+      "model": "chunmi.cooker.normalcd2",
+      "name": "电饭煲",
+      "isOnline": true
     }
   ],
   "rooms": [
@@ -1768,6 +1853,30 @@
       "siid": 11,
       "piid": 2,
       "value": 11904
+    },
+    {
+      "did": "did_fridge",
+      "siid": 2,
+      "piid": 2,
+      "value": 1
+    },
+    {
+      "did": "did_fridge",
+      "siid": 3,
+      "piid": 2,
+      "value": 4
+    },
+    {
+      "did": "did_fridge",
+      "siid": 4,
+      "piid": 2,
+      "value": -18
+    },
+    {
+      "did": "did_cooker",
+      "siid": 2,
+      "piid": 1,
+      "value": 2
     }
   ],
   "expectedKinds": {
@@ -1972,6 +2081,30 @@
     "did_power_unknown": {
       "kind": "plug",
       "switchEntityId": "miot:did_power_unknown:2",
+      "isOn": true,
+      "powerWatts": null,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_fridge": {
+      "kind": "fridge",
+      "modeEntityId": "miot:did_fridge:2",
+      "currentMode": "Smart",
+      "availableModes": [
+        "None",
+        "Smart",
+        "Holiday"
+      ],
+      "fridgeCurrentTemp": null,
+      "fridgeTargetTemp": 4,
+      "fridgeTargetEntityId": "miot:did_fridge:3",
+      "freezerCurrentTemp": null,
+      "freezerTargetTemp": -18,
+      "freezerTargetEntityId": "miot:did_fridge:4"
+    },
+    "did_cooker": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_cooker:2",
       "isOn": true,
       "powerWatts": null,
       "childLockEntityId": null,
@@ -2195,6 +2328,30 @@
         "did": "did_power_unknown",
         "siid": 11,
         "piid": 2
+      }
+    ],
+    "did_fridge": [
+      {
+        "did": "did_fridge",
+        "siid": 2,
+        "piid": 2
+      },
+      {
+        "did": "did_fridge",
+        "siid": 3,
+        "piid": 2
+      },
+      {
+        "did": "did_fridge",
+        "siid": 4,
+        "piid": 2
+      }
+    ],
+    "did_cooker": [
+      {
+        "did": "did_cooker",
+        "siid": 2,
+        "piid": 1
       }
     ]
   },
@@ -2463,6 +2620,97 @@
           }
         ]
       }
+    },
+    {
+      "model": "midjd6.fridge.v1",
+      "command": {
+        "kind": "setSelectOption",
+        "entityId": "miot:did_fridge:2",
+        "option": "Holiday"
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_fridge",
+            "siid": 2,
+            "piid": 2,
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "model": "midjd6.fridge.v1",
+      "command": {
+        "kind": "setNumberValue",
+        "entityId": "miot:did_fridge:3",
+        "value": 5
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_fridge",
+            "siid": 3,
+            "piid": 2,
+            "value": 5
+          }
+        ]
+      }
+    },
+    {
+      "model": "midjd6.fridge.v1",
+      "command": {
+        "kind": "setNumberValue",
+        "entityId": "miot:did_fridge:4",
+        "value": -20
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_fridge",
+            "siid": 4,
+            "piid": 2,
+            "value": -20
+          }
+        ]
+      }
+    },
+    {
+      "model": "chunmi.cooker.normalcd2",
+      "command": {
+        "kind": "setSwitch",
+        "entityId": "miot:did_cooker:2",
+        "isOn": true
+      },
+      "expected": {
+        "kind": "action",
+        "call": {
+          "did": "did_cooker",
+          "siid": 2,
+          "aiid": 1,
+          "inputs": []
+        }
+      }
+    },
+    {
+      "model": "chunmi.cooker.normalcd2",
+      "command": {
+        "kind": "setSwitch",
+        "entityId": "miot:did_cooker:2",
+        "isOn": false
+      },
+      "expected": {
+        "kind": "action",
+        "call": {
+          "did": "did_cooker",
+          "siid": 2,
+          "aiid": 2,
+          "inputs": []
+        }
+      }
     }
   ],
   "selectionCases": [
@@ -2528,7 +2776,8 @@
         "did_power_kw",
         "did_power_milliwatt",
         "did_power_negative",
-        "did_power_unknown"
+        "did_power_unknown",
+        "did_cooker"
       ]
     },
     {
@@ -2544,7 +2793,8 @@
         "did_power_kw",
         "did_power_milliwatt",
         "did_power_negative",
-        "did_power_unknown"
+        "did_power_unknown",
+        "did_cooker"
       ]
     }
   ]

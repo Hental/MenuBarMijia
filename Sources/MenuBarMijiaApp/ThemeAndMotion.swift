@@ -149,6 +149,23 @@ public enum DevicePalette {
     }
 }
 
+// MARK: - Scene Semantic Colours
+
+public enum ScenePalette {
+    /// Scene pill icon tint per visual family; the model owns the category, this owns the colour.
+    /// Unrecognised scene icons fall into `.light` — scene strips read as "actions" first.
+    public static func tint(for category: SceneVisualCategory) -> Color {
+        switch category {
+        case .night: return DesignTokens.Orb.vacuum
+        case .climate: return DesignTokens.Orb.fan
+        case .water: return DesignTokens.Orb.climate
+        case .heat: return DesignTokens.Orb.light
+        case .media: return DesignTokens.Orb.speaker
+        case .light: return DesignTokens.Orb.light
+        }
+    }
+}
+
 // MARK: - Panel Tile Surface
 
 /// Tile surface: a bright platter when the device is on, a quiet glass well when it is off.

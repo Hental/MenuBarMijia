@@ -401,8 +401,12 @@ function isAirPurifierDevice(dev: SmartDevice): boolean {
   return (
     m.includes("airp") ||
     m.includes("purifier") ||
+    m.includes("airfresh") ||
+    m.includes("humidifier") ||
     dev.name.includes("净化") ||
     dev.name.includes("空净") ||
+    dev.name.includes("新风") ||
+    dev.name.includes("加湿") ||
     dev.kind.pm25Density != null ||
     dev.kind.airQuality != null ||
     dev.kind.filterLifePercent != null
@@ -546,6 +550,7 @@ const EN_CATEGORY_WORDS: ReadonlyArray<readonly [string, IntentCategory]> = [
   ["robot vacuum", "vacuum"], ["smart plug", "plug"], ["space heater", "heater"],
   ["standing fan", "fan"], ["air purifiers", "airPurifier"], ["air purifier", "airPurifier"],
   ["purifiers", "airPurifier"], ["purifier", "airPurifier"],
+  ["fresh air", "airPurifier"], ["humidifiers", "airPurifier"], ["humidifier", "airPurifier"],
   ["lights", "light"], ["light", "light"], ["lamps", "light"], ["lamp", "light"],
   ["climate", "climate"], ["ac", "climate"],
   ["heater", "heater"], ["dehumidifier", "dehumidifier"], ["diffuser", "diffuser"],
@@ -760,7 +765,7 @@ export const LocalIntentParser = {
       if (clean.includes("除湿机")) wanted.add("dehumidifier");
       if (clean.includes("香氛机")) wanted.add("diffuser");
       if (clean.includes("插座")) wanted.add("plug");
-      if (clean.includes("净化器") || clean.includes("空净")) wanted.add("airPurifier");
+      if (clean.includes("净化器") || clean.includes("空净") || clean.includes("新风") || clean.includes("加湿")) wanted.add("airPurifier");
       else if (clean.includes("风扇")) wanted.add("fan");
       if (clean.includes("摄像") || clean.includes("监控")) wanted.add("camera");
       const effectiveWanted = wanted.size > 0 ? wanted : implied;
@@ -2086,6 +2091,7 @@ export function assistantDeviceCategory(device: SmartDevice): string | null {
     case "fan":
       // Same classification the local parser and the macOS catalog use (#98).
       return isAirPurifierDevice(device) ? "airPurifier" : "fan";
+    case "fridge":
     case "sensor":
       return null;
   }
@@ -2135,6 +2141,7 @@ export function catalogStateSummary(device: SmartDevice): string {
       return kind.status === "cleaning" || kind.status === "on" ? "清扫中" : "待机";
     case "camera":
       return kind.isOn ? "开" : "关";
+    case "fridge":
     case "sensor":
       return "";
   }
@@ -2863,7 +2870,7 @@ export class ModelIntentResolver {
   ): Promise<IntentPlan> {
     const url = this.endpointURL("/chat/completions");
     const aliasToIds = new Map<string, string[]>();
-    const controllable = devices.filter((d) => d.kind.kind !== "sensor");
+    const controllable = devices.filter((d) => d.kind.kind !== "sensor" && d.kind.kind !== "fridge");
 
     const catalogLines: string[] = [];
     controllable.forEach((d, idx) => {

@@ -44,11 +44,29 @@ public enum MiotSynthesizer {
         ("light", buildLight),
         ("fan", buildFan),
         ("air-purifier", buildAirPurifier),
+        ("air-fresh", buildAirPurifier),
+        ("humidifier", buildAirPurifier),
         ("vacuum", buildVacuum),
+        ("fridge", buildFridge),
         ("camera-control", buildCamera),
         ("video-doorbell", buildCamera),
         ("outlet", buildPlug),
         ("switch", buildPlug),
+        ("kettle", buildAppliance),
+        ("ble-kettle", buildAppliance),
+        ("water-dispenser", buildAppliance),
+        ("cooker", buildAppliance),
+        ("air-fryer", buildAppliance),
+        ("oven", buildAppliance),
+        ("microwave-oven", buildAppliance),
+        ("health-pot", buildAppliance),
+        ("lock", buildSensor),
+        ("motion-sensor", buildSensor),
+        ("occupancy-sensor", buildSensor),
+        ("magnet-sensor", buildSensor),
+        ("submersion-sensor", buildSensor),
+        ("illumination-sensor", buildSensor),
+        ("air-monitor", buildSensor),
         ("temperature-humidity-sensor", buildSensor),
     ]
 
@@ -152,6 +170,7 @@ public enum MiotSynthesizer {
         let preferredServices: [String] = switch deviceType {
         case "outlet": ["outlet", "switch"]
         case "camera", "cateye", "video-doorbell": ["camera-control", "video-doorbell"]
+        case "kettle", "ble-kettle": ["kettle", "ble-kettle", "water-dispenser"]
         default: [deviceType]
         }
         for serviceName in preferredServices {
@@ -254,6 +273,7 @@ public enum MiotSynthesizer {
         let mode = r.ref("mode", in: s)
         let levels = r.refs("fan-level", in: s)
         let favServices = r.spec.services(named: "air-purifier-favorite")
+            + r.spec.services(named: "air-fresh-favorite")
             + r.spec.services(named: "motor-speed")
             + r.spec.services(named: "custom-service")
             + r.spec.services(named: "fan-control")
@@ -405,15 +425,131 @@ public enum MiotSynthesizer {
         ))
     }
 
+    static func buildFridge(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
+        let mode = r.ref("mode", in: s)
+        let chambers = r.spec.services(named: "fridge-chamber")
+        let fridgeChamber = chambers.first(where: { ($0.property(named: "target-temperature")?.rangeMin ?? 0) >= 0 }) ?? chambers.first
+        let freezerChamber = chambers.first(where: { ($0.property(named: "target-temperature")?.rangeMin ?? 0) < 0 }) ?? (chambers.count > 1 ? chambers[1] : nil)
+
+        let fridgeTemp = fridgeChamber.flatMap { r.ref("temperature", in: $0) }
+        let fridgeTarget = fridgeChamber.flatMap { r.ref("target-temperature", in: $0) }
+        let freezerTemp = freezerChamber.flatMap { r.ref("temperature", in: $0) }
+        let freezerTarget = freezerChamber.flatMap { r.ref("target-temperature", in: $0) }
+
+        return .fridge(FridgeSpec(
+            modeEntityId: mode?.property.isWritable == true ? MiotAddress.make(did: r.did, siid: s.iid) : nil,
+            currentMode: mode?.valueDescription ?? "None",
+            availableModes: mode?.property.isWritable == true ? (mode?.property.valueList?.map(\.description) ?? []) : [],
+            fridgeCurrentTemp: fridgeTemp?.value?.doubleValue,
+            fridgeTargetTemp: fridgeTarget?.value?.doubleValue ?? 4,
+            fridgeTargetEntityId: fridgeTarget?.property.isWritable == true ? fridgeChamber.map { MiotAddress.make(did: r.did, siid: $0.iid) } : nil,
+            freezerCurrentTemp: freezerTemp?.value?.doubleValue,
+            freezerTargetTemp: freezerTarget?.value?.doubleValue ?? -18,
+            freezerTargetEntityId: freezerTarget?.property.isWritable == true ? freezerChamber.map { MiotAddress.make(did: r.did, siid: $0.iid) } : nil
+        ))
+    }
+
+    static func buildAppliance(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
+        if s.properties.contains(where: { $0.shortName == "on" && $0.isWritable }) {
+            return buildPlug(r, s)
+        }
+        let status = r.ref("status", in: s)
+        let hasActionControl = s.actions.contains {
+            ["start-cook", "cancel-cooking", "pause"].contains($0.shortName) && $0.inputProperties.isEmpty
+        }
+        if hasActionControl {
+            let desc = (status?.valueDescription ?? "").lowercased()
+            let isActive = desc.contains("running") || desc.contains("cooking") || desc.contains("heating")
+                || desc.contains("boiling") || desc.contains("preheat") || desc.contains("keep warm")
+                || desc.contains("warming") || desc.contains("busy")
+            return .plug(PlugSpec(
+                switchEntityId: MiotAddress.make(did: r.did, siid: s.iid),
+                isOn: isActive
+            ))
+        }
+        let temp = r.ref("temperature", in: s) ?? r.ref("target-temperature", in: s)
+        let leftTime = r.ref("left-time", in: s)
+        _ = r.ref("ble-keep-warm-time", in: s)
+
+        var parts: [String] = []
+        if let desc = status?.valueDescription {
+            parts.append(applianceStatusText(forDescription: desc))
+        }
+        if let t = temp?.value?.doubleValue, t.isFinite {
+            parts.append("\(Int(t.rounded()))°C")
+        }
+        if let left = leftTime?.value?.intValue, left > 0 {
+            parts.append(L10n.tr("剩余 \(left) 分", "\(left) min left"))
+        }
+        let fallbackText: String = switch s.shortName {
+        case "kettle", "ble-kettle", "water-dispenser":
+            L10n.tr("保温监控", "Water Monitor")
+        default:
+            L10n.tr("待机", "Standby")
+        }
+        return .sensor(SensorSpec(
+            temperature: nil,
+            humidity: nil,
+            battery: nil,
+            statusText: parts.isEmpty ? fallbackText : parts.joined(separator: " · ")
+        ))
+    }
+
     static func buildSensor(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
         let readingServices = [s] + r.spec.services(named: "environment") + r.spec.services(named: "temperature-humidity-sensor")
         let temp = r.first("temperature", in: readingServices)
         let hum = r.first("relative-humidity", in: readingServices)
-        let battery = r.first("battery-level", in: r.spec.services(named: "battery"))
+        let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
+
+        var statusText: String?
+        if temp == nil && hum == nil {
+            switch s.shortName {
+            case "lock":
+                statusText = L10n.tr("守护中", "Guarding")
+            case "motion-sensor", "occupancy-sensor":
+                let motion = r.ref("motion-state", in: s) ?? r.ref("occupancy-status", in: s)
+                let lux = r.first("illumination", in: [s] + r.spec.services(named: "illumination-sensor"))
+                var parts: [String] = []
+                if let m = motion?.value?.miotBool {
+                    parts.append(m ? L10n.tr("有人移动", "Motion") : L10n.tr("无人移动", "Clear"))
+                } else {
+                    parts.append(L10n.tr("移动监测", "Motion Sensor"))
+                }
+                if let lx = lux?.value?.doubleValue, lx.isFinite {
+                    parts.append("\(Int(lx.rounded())) lx")
+                }
+                statusText = parts.joined(separator: " · ")
+            case "magnet-sensor":
+                let contact = r.ref("contact-state", in: s)
+                if let open = contact?.value?.miotBool {
+                    statusText = open ? L10n.tr("已闭合", "Closed") : L10n.tr("已打开", "Open")
+                } else {
+                    statusText = L10n.tr("门窗监测", "Contact Sensor")
+                }
+            case "submersion-sensor":
+                let sub = r.ref("submersion-state", in: s)
+                if let wet = sub?.value?.miotBool {
+                    statusText = wet ? L10n.tr("浸水告警", "Leak Detected") : L10n.tr("正常", "Dry")
+                } else {
+                    statusText = L10n.tr("水浸监测", "Leak Sensor")
+                }
+            case "illumination-sensor":
+                let lux = r.ref("illumination", in: s)
+                if let lx = lux?.value?.doubleValue, lx.isFinite {
+                    statusText = "\(Int(lx.rounded())) lx"
+                } else {
+                    statusText = L10n.tr("光照监测", "Light Sensor")
+                }
+            default:
+                break
+            }
+        }
+
         return .sensor(SensorSpec(
             temperature: temp?.value?.doubleValue,
             humidity: hum?.value?.doubleValue,
-            battery: battery?.value?.intValue
+            battery: battery?.value?.intValue,
+            statusText: statusText
         ))
     }
 
@@ -531,6 +667,35 @@ public enum MiotSynthesizer {
         }
         if d.contains("charg") || d.contains("dock") || d.contains("full") { return "docked" }
         return "idle"
+    }
+
+    static func applianceStatusText(forDescription description: String) -> String {
+        let lower = description.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.contains("idle") || lower.contains("standby") || lower.contains("off") || lower.contains("shutdown") {
+            return L10n.tr("待机", "Standby")
+        }
+        if lower.contains("keep warm") || lower.contains("keep-warm") || lower.contains("warm") || lower.contains("insulation") {
+            return L10n.tr("保温中", "Keep Warm")
+        }
+        if lower.contains("cook") || lower.contains("work") || lower.contains("busy") || lower.contains("run") || lower.contains("boil") || lower.contains("heat") {
+            return L10n.tr("运行中", "Running")
+        }
+        if lower.contains("preheat") {
+            return L10n.tr("预热中", "Preheating")
+        }
+        if lower.contains("delay") || lower.contains("appoint") || lower.contains("reservation") {
+            return L10n.tr("预约中", "Scheduled")
+        }
+        if lower.contains("paus") {
+            return L10n.tr("已暂停", "Paused")
+        }
+        if lower.contains("finish") || lower.contains("complete") || lower.contains("cooked") {
+            return L10n.tr("已完成", "Completed")
+        }
+        if lower.contains("error") || lower.contains("fault") {
+            return L10n.tr("故障", "Fault")
+        }
+        return description
     }
 }
 

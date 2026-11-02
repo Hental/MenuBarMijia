@@ -654,6 +654,7 @@ export interface MiotProperty {
 export interface MiotAction {
   readonly iid: number;
   readonly type: string;
+  readonly in?: readonly number[];
 }
 
 export interface MiotService {
@@ -782,8 +783,15 @@ export function parseMiotDeviceSpec(raw: unknown): MiotDeviceSpec | null {
       const aObj = a as Record<string, unknown>;
       const aIid = typeof aObj["iid"] === "number" ? Math.trunc(aObj["iid"]) : NaN;
       const aType = typeof aObj["type"] === "string" ? aObj["type"] : "";
+      const rawIn = Array.isArray(aObj["in"])
+        ? aObj["in"].map((v) => Math.trunc(Number(v))).filter((v) => Number.isInteger(v))
+        : undefined;
       if (Number.isInteger(aIid) && aType) {
-        actions.push({ iid: aIid, type: aType });
+        actions.push({
+          iid: aIid,
+          type: aType,
+          ...(rawIn && rawIn.length > 0 ? { in: rawIn } : {}),
+        });
       }
     }
 
@@ -938,8 +946,12 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
   if (
     m.includes("airp") ||
     m.includes("airpurifier") ||
+    m.includes("airfresh") ||
+    m.includes("humidifier") ||
     n.includes("净化器") ||
-    n.includes("空净")
+    n.includes("空净") ||
+    n.includes("新风") ||
+    n.includes("加湿")
   ) {
     return {
       type: "urn:miot-spec-v2:device:air-purifier:0000A007:fallback:1",
@@ -1071,6 +1083,107 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "float", access: ["read"] },
             { iid: 2, type: "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", format: "uint8", access: ["read"] },
+          ],
+          actions: [],
+        },
+      ],
+    };
+  }
+
+  if (m.includes(".kettle.") || m.includes(".waterdispenser.") || n.includes("水壶") || n.includes("饮水")) {
+    return {
+      type: "urn:miot-spec-v2:device:kettle:0000A009:fallback:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:kettle:00007813:fallback:1",
+          properties: [
+            {
+              iid: 1,
+              type: "urn:miot-spec-v2:property:status:00000007:fallback:1",
+              format: "uint8",
+              access: ["read"],
+              valueList: [
+                { value: 1, description: "Idle" },
+                { value: 2, description: "Heating" },
+                { value: 3, description: "Keep Warm" },
+              ],
+            },
+            { iid: 2, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "float", access: ["read"] },
+          ],
+          actions: [],
+        },
+      ],
+    };
+  }
+
+  if (m.includes("sensor_motion") || n.includes("人体")) {
+    return {
+      type: "urn:miot-spec-v2:device:motion-sensor:0000A014:fallback:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:motion-sensor:00007825:fallback:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:motion-state:0000007D:fallback:1", format: "bool", access: ["read"] },
+          ],
+          actions: [],
+        },
+      ],
+    };
+  }
+
+  if (m.includes(".lock.") || n.includes("门锁")) {
+    return {
+      type: "urn:miot-spec-v2:device:lock:0000A038:fallback:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:lock:00007855:fallback:1",
+          properties: [],
+          actions: [],
+        },
+      ],
+    };
+  }
+
+  if (m.includes(".fridge.") || n.includes("冰箱")) {
+    return {
+      type: "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
+          properties: [
+            {
+              iid: 3,
+              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
+              format: "uint8",
+              access: ["read", "write"],
+              valueList: [
+                { value: 0, description: "None" },
+                { value: 1, description: "Holiday" },
+                { value: 2, description: "Smart" },
+              ],
+            },
+          ],
+          actions: [],
+        },
+        {
+          iid: 3,
+          type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-30, 100, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [2, 8, 1] },
+          ],
+          actions: [],
+        },
+        {
+          iid: 4,
+          type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-50, 100, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [-24, -15, 1] },
           ],
           actions: [],
         },
@@ -1427,11 +1540,29 @@ export const MiotSynthesizer = {
       "light",
       "fan",
       "air-purifier",
+      "air-fresh",
+      "humidifier",
       "video-doorbell",
       "vacuum",
+      "fridge",
       "camera-control",
       "outlet",
       "switch",
+      "kettle",
+      "ble-kettle",
+      "water-dispenser",
+      "cooker",
+      "air-fryer",
+      "oven",
+      "microwave-oven",
+      "health-pot",
+      "lock",
+      "motion-sensor",
+      "occupancy-sensor",
+      "magnet-sensor",
+      "submersion-sensor",
+      "illumination-sensor",
+      "air-monitor",
       "temperature-humidity-sensor",
     ];
     const devShort = miotShortName(spec.type);
@@ -1440,7 +1571,9 @@ export const MiotSynthesizer = {
         ? ["outlet", "switch"]
         : devShort === "camera" || devShort === "cateye" || devShort === "video-doorbell"
           ? ["camera-control", "video-doorbell"]
-          : [devShort];
+          : devShort === "kettle" || devShort === "ble-kettle"
+            ? ["kettle", "ble-kettle", "water-dispenser"]
+            : [devShort];
     let primaryService: MiotService | undefined = spec.services.find((s) => {
       const sShort = miotShortName(s.type);
       return preferredServices.includes(sShort) && priority.includes(sShort);
@@ -1625,12 +1758,13 @@ export const MiotSynthesizer = {
       };
     }
 
-    if (sName === "air-purifier") {
+    if (sName === "air-purifier" || sName === "air-fresh" || sName === "humidifier") {
       const on = readProp(primaryService, "on");
       const mode = readProp(primaryService, "mode");
       const levels = readProps(primaryService, "fan-level");
       const favServices = [
         ...spec.services.filter((s) => miotShortName(s.type) === "air-purifier-favorite"),
+        ...spec.services.filter((s) => miotShortName(s.type) === "air-fresh-favorite"),
         ...spec.services.filter((s) => miotShortName(s.type) === "motor-speed"),
         ...spec.services.filter((s) => miotShortName(s.type) === "custom-service"),
         ...spec.services.filter((s) => miotShortName(s.type) === "fan-control"),
@@ -1769,6 +1903,48 @@ export const MiotSynthesizer = {
       };
     }
 
+    if (sName === "fridge") {
+      const mode = readProp(primaryService, "mode");
+      const chambers = spec.services.filter((s) => miotShortName(s.type) === "fridge-chamber");
+      const fridgeChamber =
+        chambers.find((s) => {
+          const target = s.properties.find((p) => miotShortName(p.type) === "target-temperature");
+          return (target?.valueRange?.[0] ?? 0) >= 0;
+        }) ?? chambers[0];
+      const freezerChamber =
+        chambers.find((s) => {
+          const target = s.properties.find((p) => miotShortName(p.type) === "target-temperature");
+          return (target?.valueRange?.[0] ?? 0) < 0;
+        }) ?? (chambers.length > 1 ? chambers[1] : undefined);
+
+      const fridgeTemp = fridgeChamber ? readProp(fridgeChamber, "temperature") : null;
+      const fridgeTarget = fridgeChamber ? readProp(fridgeChamber, "target-temperature") : null;
+      const freezerTemp = freezerChamber ? readProp(freezerChamber, "temperature") : null;
+      const freezerTarget = freezerChamber ? readProp(freezerChamber, "target-temperature") : null;
+
+      const modeVal = typeof mode?.val === "number" ? Math.trunc(mode.val) : null;
+      const currentMode =
+        modeVal !== null
+          ? (mode?.prop.valueList?.find((i) => i.value === modeVal)?.description ?? "None")
+          : "None";
+      const modeWritable = Boolean(mode?.prop.access.includes("write"));
+      const fridgeTargetWritable = Boolean(fridgeTarget?.prop.access.includes("write"));
+      const freezerTargetWritable = Boolean(freezerTarget?.prop.access.includes("write"));
+
+      return {
+        kind: "fridge",
+        modeEntityId: modeWritable ? makeMiotAddress(did, primaryService.iid) : null,
+        currentMode,
+        availableModes: modeWritable ? (mode?.prop.valueList?.map((i) => i.description) ?? []) : [],
+        fridgeCurrentTemp: typeof fridgeTemp?.val === "number" ? fridgeTemp.val : null,
+        fridgeTargetTemp: typeof fridgeTarget?.val === "number" ? fridgeTarget.val : 4,
+        fridgeTargetEntityId: fridgeTargetWritable && fridgeChamber ? makeMiotAddress(did, fridgeChamber.iid) : null,
+        freezerCurrentTemp: typeof freezerTemp?.val === "number" ? freezerTemp.val : null,
+        freezerTargetTemp: typeof freezerTarget?.val === "number" ? freezerTarget.val : -18,
+        freezerTargetEntityId: freezerTargetWritable && freezerChamber ? makeMiotAddress(did, freezerChamber.iid) : null,
+      };
+    }
+
     if (sName === "camera-control" || sName === "video-doorbell") {
       const on = readProp(primaryService, "on");
       const nightShot = readProp(primaryService, "night-shot");
@@ -1797,7 +1973,93 @@ export const MiotSynthesizer = {
       };
     }
 
-    if (sName === "temperature-humidity-sensor" || sName === "environment") {
+    if (
+      [
+        "kettle",
+        "ble-kettle",
+        "water-dispenser",
+        "cooker",
+        "air-fryer",
+        "oven",
+        "microwave-oven",
+        "health-pot",
+      ].includes(sName) &&
+      !primaryService.properties.some((p) => miotShortName(p.type) === "on" && p.access.includes("write"))
+    ) {
+      const status = readProp(primaryService, "status");
+      const statusVal = typeof status?.val === "number" ? Math.trunc(status.val) : null;
+      const statusDesc =
+        statusVal !== null
+          ? (status?.prop.valueList?.find((i) => i.value === statusVal)?.description ?? null)
+          : null;
+      const hasActionControl = primaryService.actions.some(
+        (a) =>
+          ["start-cook", "cancel-cooking", "pause"].includes(miotShortName(a.type)) &&
+          (a.in?.length ?? 0) === 0
+      );
+      if (hasActionControl) {
+        const desc = (statusDesc ?? "").toLowerCase();
+        const isActive =
+          desc.includes("running") ||
+          desc.includes("cooking") ||
+          desc.includes("heating") ||
+          desc.includes("boiling") ||
+          desc.includes("preheat") ||
+          desc.includes("keep warm") ||
+          desc.includes("warming") ||
+          desc.includes("busy");
+        return {
+          kind: "plug",
+          switchEntityId: makeMiotAddress(did, primaryService.iid),
+          isOn: isActive,
+          powerWatts: null,
+          childLockEntityId: null,
+          isChildLocked: false,
+        };
+      }
+      const temp = readProp(primaryService, "temperature") ?? readProp(primaryService, "target-temperature");
+      const leftTime = readProp(primaryService, "left-time");
+      readProp(primaryService, "ble-keep-warm-time");
+      const parts: string[] = [];
+      if (statusDesc) {
+        const lower = statusDesc.toLowerCase();
+        if (lower.includes("idle") || lower.includes("standby") || lower.includes("off")) parts.push("待机");
+        else if (lower.includes("warm") || lower.includes("insulation")) parts.push("保温中");
+        else if (lower.includes("cook") || lower.includes("work") || lower.includes("busy") || lower.includes("boil") || lower.includes("heat")) parts.push("运行中");
+        else if (lower.includes("preheat")) parts.push("预热中");
+        else if (lower.includes("delay") || lower.includes("appoint") || lower.includes("reservation")) parts.push("预约中");
+        else if (lower.includes("paus")) parts.push("已暂停");
+        else parts.push(statusDesc);
+      }
+      if (typeof temp?.val === "number" && Number.isFinite(temp.val)) {
+        parts.push(`${Math.round(temp.val)}°C`);
+      }
+      if (typeof leftTime?.val === "number" && leftTime.val > 0) {
+        parts.push(`剩余 ${Math.round(leftTime.val)} 分`);
+      }
+      const fallback = ["kettle", "ble-kettle", "water-dispenser"].includes(sName) ? "保温监控" : "待机";
+      return {
+        kind: "sensor",
+        temperature: null,
+        humidity: null,
+        battery: null,
+        statusText: parts.length > 0 ? parts.join(" · ") : fallback,
+      };
+    }
+
+    if (
+      [
+        "temperature-humidity-sensor",
+        "environment",
+        "lock",
+        "motion-sensor",
+        "occupancy-sensor",
+        "magnet-sensor",
+        "submersion-sensor",
+        "illumination-sensor",
+        "air-monitor",
+      ].includes(sName)
+    ) {
       const readingServices = [
         primaryService,
         ...spec.services.filter((s) => miotShortName(s.type) === "environment"),
@@ -1806,14 +2068,42 @@ export const MiotSynthesizer = {
       const temp = readFirst(readingServices, "temperature");
       const hum = readFirst(readingServices, "relative-humidity");
       const battery = readFirst(
-        spec.services.filter((s) => miotShortName(s.type) === "battery"),
+        [...spec.services.filter((s) => miotShortName(s.type) === "battery"), primaryService],
         "battery-level"
       );
+      let statusText: string | null = null;
+      if (temp === null && hum === null) {
+        if (sName === "lock") {
+          statusText = "守护中";
+        } else if (sName === "motion-sensor" || sName === "occupancy-sensor") {
+          const motion = readProp(primaryService, "motion-state") ?? readProp(primaryService, "occupancy-status");
+          const lux = readFirst(
+            [primaryService, ...spec.services.filter((s) => miotShortName(s.type) === "illumination-sensor")],
+            "illumination"
+          );
+          const mBool = miotBool(motion?.val);
+          const parts = [mBool === true ? "有人移动" : mBool === false ? "无人移动" : "移动监测"];
+          if (typeof lux?.val === "number" && Number.isFinite(lux.val)) {
+            parts.push(`${Math.round(lux.val)} lx`);
+          }
+          statusText = parts.join(" · ");
+        } else if (sName === "magnet-sensor") {
+          const contact = miotBool(readProp(primaryService, "contact-state")?.val);
+          statusText = contact === true ? "已闭合" : contact === false ? "已打开" : "门窗监测";
+        } else if (sName === "submersion-sensor") {
+          const wet = miotBool(readProp(primaryService, "submersion-state")?.val);
+          statusText = wet === true ? "浸水告警" : wet === false ? "正常" : "水浸监测";
+        } else if (sName === "illumination-sensor") {
+          const lux = readProp(primaryService, "illumination");
+          statusText = typeof lux?.val === "number" && Number.isFinite(lux.val) ? `${Math.round(lux.val)} lx` : "光照监测";
+        }
+      }
       return {
         kind: "sensor",
         temperature: typeof temp?.val === "number" ? temp.val : null,
         humidity: typeof hum?.val === "number" ? hum.val : null,
         battery: typeof battery?.val === "number" ? Math.round(battery.val) : null,
+        ...(statusText ? { statusText } : {}),
       };
     }
 
@@ -1908,6 +2198,7 @@ export const MiotCommandMapper = {
           ? [
               ...spec.services.filter((s) => miotShortName(s.type) === "fan-control"),
               ...spec.services.filter((s) => miotShortName(s.type) === "air-purifier-favorite"),
+              ...spec.services.filter((s) => miotShortName(s.type) === "air-fresh-favorite"),
               ...spec.services.filter((s) => s.iid !== service.iid),
             ]
           : []),
@@ -2055,6 +2346,7 @@ export const MiotCommandMapper = {
         if (!speedFound) {
           const favServices = [
             ...spec.services.filter((s) => miotShortName(s.type) === "air-purifier-favorite"),
+            ...spec.services.filter((s) => miotShortName(s.type) === "air-fresh-favorite"),
             ...spec.services.filter((s) => miotShortName(s.type) === "motor-speed"),
             ...spec.services.filter((s) => miotShortName(s.type) === "custom-service"),
             ...spec.services.filter((s) => miotShortName(s.type) === "fan-control"),
@@ -2135,18 +2427,50 @@ export const MiotCommandMapper = {
         };
       }
       case "setSwitch": {
-        const onProp =
+        const sShort = miotShortName(service.type);
+        const targetProp =
           service.properties.find(
             (p) => miotShortName(p.type) === "on" && p.access.includes("write")
           ) ??
+          (sShort === "speaker"
+            ? service.properties.find(
+                (p) => miotShortName(p.type) === "mute" && p.access.includes("write")
+              )
+            : undefined) ??
+          (sShort === "intelligent-speaker"
+            ? service.properties.find(
+                (p) => miotShortName(p.type) === "sleep-mode" && p.access.includes("write")
+              )
+            : undefined) ??
           service.properties.find(
             (p) => miotShortName(p.type) === "motion-detection" && p.access.includes("write")
+          ) ??
+          service.properties.find(
+            (p) => miotShortName(p.type) === "physical-controls-locked" && p.access.includes("write")
           );
-        const targetProp = onProp ?? findProp("physical-controls-locked").prop;
-        return {
-          kind: "setProps",
-          writes: [{ did: addr.did, siid: service.iid, piid: targetProp.iid, value: command.isOn }],
-        };
+        if (targetProp) {
+          return {
+            kind: "setProps",
+            writes: [{ did: addr.did, siid: service.iid, piid: targetProp.iid, value: command.isOn }],
+          };
+        }
+        const candidates = command.isOn
+          ? ["start-cook", "resume-cook"]
+          : ["cancel-cooking", "pause"];
+        for (const name of candidates) {
+          for (const s of [service, ...spec.services.filter((sv) => sv.iid !== service.iid)]) {
+            const act = s.actions.find(
+              (a) => miotShortName(a.type) === name && (a.in?.length ?? 0) === 0
+            );
+            if (act) {
+              return {
+                kind: "action",
+                call: { did: addr.did, siid: s.iid, aiid: act.iid, inputs: [] },
+              };
+            }
+          }
+        }
+        throw new Error("Unsupported property: on");
       }
       case "setSelectOption": {
         const found = findListProp("mode", command.option) ?? findListProp("night-shot", command.option);
@@ -2154,6 +2478,13 @@ export const MiotCommandMapper = {
         return {
           kind: "setProps",
           writes: [{ did: addr.did, siid: found.service.iid, piid: found.prop.iid, value: found.item.value }],
+        };
+      }
+      case "setNumberValue": {
+        const { prop } = findProp("target-temperature");
+        return {
+          kind: "setProps",
+          writes: [{ did: addr.did, siid: service.iid, piid: prop.iid, value: coerce(prop, command.value) }],
         };
       }
       case "vacuumAction": {

@@ -195,6 +195,13 @@ public struct ControlCenterPanel: View {
                     .transition(AppleMotion.drawerTransition)
             }
 
+            if store.showQuickActionsBar {
+                quickActionsAndScenesBar
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .transition(AppleMotion.drawerTransition)
+            }
+
             // #60: while a search is open the query bar replaces the room pills, so the empty-query
             // layout is untouched and results are not silently narrowed by the selected room.
             if search.isSearching {
@@ -1251,6 +1258,67 @@ public struct ControlCenterPanel: View {
         )
     }
 
+    // MARK: - 1B. Quick Actions & HA Scenes Strip
+
+    /// Scene strip: equal-width glass pills, four across when there are four or fewer.
+    private var quickActionsAndScenesBar: some View {
+        let itemCount = QuickAction.allCases.count + store.scenes.count
+        return Group {
+            if itemCount <= 4 {
+                scenePillRow(expand: true)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    scenePillRow(expand: false)
+                        .horizontalWheelScroll()
+                }
+            }
+        }
+    }
+
+    private func scenePillRow(expand: Bool) -> some View {
+        HStack(spacing: 6) {
+            ForEach(QuickAction.allCases) { action in
+                Button {
+                    withAnimation(AppleMotion.snappySpring) {
+                        store.executeQuickAction(action)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: action.sfSymbolName)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                            .foregroundStyle(ScenePalette.tint(for: action.visualCategory))
+                        Text(action.title)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillActionButtonStyle())
+                .frame(maxWidth: expand ? .infinity : nil)
+            }
+
+            ForEach(store.scenes) { scene in
+                Button {
+                    withAnimation(AppleMotion.snappySpring) {
+                        _ = store.triggerScene(scene)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: scene.iconName)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                            .foregroundStyle(ScenePalette.tint(for: scene.visualCategory))
+                        Text(scene.name)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillActionButtonStyle())
+                .frame(maxWidth: expand ? .infinity : nil)
+            }
+        }
+    }
+
     // MARK: - 2. Room Filter Strip & Grid Toggle
 
     private var roomPillsRow: some View {
@@ -1745,6 +1813,19 @@ public struct ControlCenterPanel: View {
             .buttonStyle(.plain)
             .accessibilityLabel(Text(L10n.tr("打开设置", "Open Settings")))
             .panelHelp(L10n.tr("偏好设置与连接配置（⌘,）", "Preferences & connection settings (⌘,)"))
+
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.72))
+                    .frame(width: 24, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(L10n.tr("退出应用", "Quit App")))
+            .panelHelp(L10n.tr("完全退出 MenuBarMijia（⌘Q）", "Quit MenuBarMijia (⌘Q)"))
         }
     }
 

@@ -119,8 +119,14 @@ public enum MiotCommandMapper {
                 name = "sleep-mode"
             } else if ctx.property("motion-detection") != nil {
                 name = "motion-detection"
-            } else {
+            } else if ctx.property("physical-controls-locked") != nil {
                 name = "physical-controls-locked"
+            } else {
+                let candidates = isOn ? ["start-cook", "resume-cook"] : ["cancel-cooking", "pause"]
+                if let call = try? ctx.action(candidates, requireEmptyInputs: true) {
+                    return .action(call)
+                }
+                name = "on"
             }
             return .setProps([try ctx.write(name, .bool(isOn))])
 
@@ -145,7 +151,10 @@ public enum MiotCommandMapper {
             let min = volume.property.rangeMin ?? 0
             return .setProps([ctx.write(volume, .number(min + Swift.max(0, Swift.min(1, level)) * (max - min)))])
 
-        case .setClimateSwingMode, .setNumberValue, .mediaSelectSource,
+        case .setNumberValue(_, let value):
+            return .setProps([try ctx.write("target-temperature", .number(value))])
+
+        case .setClimateSwingMode, .mediaSelectSource,
              .pressButton, .sendNotifyMessage, .activateScene:
             throw MiotCommandError.unsupported(String(describing: command).components(separatedBy: "(").first ?? "")
         }
@@ -196,6 +205,7 @@ public enum MiotCommandMapper {
         func writeListValue(_ name: String, description: String, searchDevice: Bool = false) throws -> MiotPropWrite {
             let extraServices = spec.services(named: "fan-control")
                 + spec.services(named: "air-purifier-favorite")
+                + spec.services(named: "air-fresh-favorite")
                 + spec.services.filter { $0.iid != service.iid }
             let services = [service] + (searchDevice ? extraServices : [])
             for s in services {
@@ -213,6 +223,7 @@ public enum MiotCommandMapper {
                 return Found(service: service, property: p)
             }
             let favServices = spec.services(named: "air-purifier-favorite")
+                + spec.services(named: "air-fresh-favorite")
                 + spec.services(named: "motor-speed")
                 + spec.services(named: "custom-service")
                 + spec.services(named: "fan-control")
@@ -254,11 +265,11 @@ public enum MiotCommandMapper {
             return write(found, .number(clamped))
         }
 
-        func action(_ candidates: [String]) throws -> MiotActionCall {
+        func action(_ candidates: [String], requireEmptyInputs: Bool = false) throws -> MiotActionCall {
             let ordered = [service] + spec.services.filter { $0.iid != service.iid }
             for name in candidates {
                 for s in ordered {
-                    if let a = s.action(named: name) {
+                    if let a = s.action(named: name), !requireEmptyInputs || a.inputProperties.isEmpty {
                         return MiotActionCall(did: did, siid: s.iid, aiid: a.iid)
                     }
                 }

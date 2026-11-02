@@ -78,6 +78,14 @@ public final class HomeStore {
         didSet { userDefaults.set(isCompactGridMode, forKey: "compact_grid_mode") }
     }
 
+    public var showQuickActionsBar: Bool {
+        didSet { userDefaults.set(showQuickActionsBar, forKey: "show_quick_actions_bar") }
+    }
+
+    public var enableGrokBall: Bool {
+        didSet { userDefaults.set(enableGrokBall, forKey: "enable_grok_ball") }
+    }
+
     public var favoriteDeviceIds: Set<String> {
         didSet {
             userDefaults.set(Array(favoriteDeviceIds), forKey: "favorite_device_ids")
@@ -320,6 +328,8 @@ public final class HomeStore {
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
         self.isCompactGridMode = (ud.object(forKey: "compact_grid_mode") as? Bool) ?? true
+        self.showQuickActionsBar = boolOrDefaultTrue("show_quick_actions_bar")
+        self.enableGrokBall = ud.bool(forKey: "enable_grok_ball")
         self.menuBarTargetId = ud.string(forKey: "menubar_target_id") ?? "auto:primary"
         self.lastManuallyUsedLightId = ud.string(forKey: Self.lastManualLightIdKey)
         self.lowBatteryAlertedAt = Self.loadLowBatteryAlertedAt(from: ud)
