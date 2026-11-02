@@ -1,6 +1,13 @@
 # 更新记录
 
-## Unreleased
+## 1.1.6
+
+### 修复与设备支持
+- **同一账号下多个家庭与共享家庭（[#134](https://github.com/jryang1997/MenuBarMijia/issues/134)）**：现在会加载账号被分享的家庭，家庭成员扫码后不再一直停在「同步设备中」。
+- **智能插座功率显示异常（[#129](https://github.com/jryang1997/MenuBarMijia/issues/129)）**：按设备上报的比例换算功率，不再出现巨大的数值；同时支持云端上报但此前未识别的设备。
+- **新风机与更多家电（[#124](https://github.com/jryang1997/MenuBarMijia/issues/124)–[#127](https://github.com/jryang1997/MenuBarMijia/issues/127)，[#142](https://github.com/jryang1997/MenuBarMijia/pull/142)）**：新增新风机、除湿机、水暖毯、香氛机、音箱等家电的识别与控制，恢复快捷动作，并更清楚地提示 Home Assistant 局域网限制。
+- **Intel Mac 支持（[#118](https://github.com/jryang1997/MenuBarMijia/issues/118)）**：本版 DMG 为通用二进制（Apple Silicon + Intel）。
+
 
 ### 新功能与体验提升
 - **GrokBall 情绪球与侧边推荐（[#114](https://github.com/jryang1997/MenuBarMijia/issues/114), [#123](https://github.com/jryang1997/MenuBarMijia/pull/123)）**：小球悬挂在面板侧边并跟随鼠标注视，点击后在外侧纵向展开四项推荐；再次点击或按 Esc 收起。屏幕边缘自动左右镜像，展开保持小球与主面板卡片位置；macOS 使用独立透明附属窗口，Windows 扩展窗口侧栏。睡眠、聆听、思考、成功与报错状态对应不同表情，成功后短暂撒花，可逆设备动作提供撤销。系统开启减弱动态效果时静态绘制表情，停止旋转、眨眼与粒子动画。Windows 内置 [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball) 的 MIT 运行时，macOS 使用原生 Canvas 绘制。
