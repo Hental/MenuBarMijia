@@ -1,6 +1,11 @@
 [English](README.md) | 简体中文
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/309141?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-309141" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/309141/daily?language=Swift" alt="jryang1997%2FMenuBarMijia | Trendshift" width="250" height="55"/></a>
+  <a href="https://trendshift.io/repositories/309141?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-309141" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/309141/weekly?language=Swift" alt="jryang1997%2FMenuBarMijia | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
@@ -17,6 +22,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/jryang1997/MenuBarMijia/stargazers"><img src="https://img.shields.io/github/stars/jryang1997/MenuBarMijia?style=social" alt="GitHub Stars"></a>
   <a href="https://github.com/jryang1997/MenuBarMijia/releases/latest"><img src="https://img.shields.io/github/v/release/jryang1997/MenuBarMijia?color=0A84FF&label=release" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Windows_11-Tauri_v2-0078D4?logo=windows11&logoColor=white" alt="Windows 11">
@@ -30,6 +36,7 @@
   <a href="#快速开始">安装与连接</a> ·
   <a href="#功能概览与双端对照">平台能力对照</a> ·
   <a href="#安全隐私与限制">安全与限制</a> ·
+  <a href="#star-history">Star 曲线</a> ·
   <a href="CHANGELOG.md">更新日志</a>
 </p>
 
@@ -103,7 +110,7 @@ MenuBarMijia 的 macOS 版本采用 Swift 6 原生开发，Windows 11 版本基�
 
 | 功能维度 | macOS 原生版 (14+) | Windows 11 托盘版 | 说明 |
 | :--- | :---: | :---: | :--- |
-| **米家云端扫码直连** | ✅ 支持 | ✅ 支持 | 手机米家 App 扫码登录，支持中/欧/美/俄/新加坡多区域服务器 |
+| **米家云端扫码直连** | ✅ 支持 | ✅ 支持 | 手机米家 App 扫码登录，支持中/欧/美/俄/新加坡多区域服务器；同时加载自有家庭与被分享给该账号的家庭 |
 | **Home Assistant 接入** | ✅ 支持 | ✅ 支持 | 双端支持局域网原生 WebSocket 直连与官方 `xiaomi_home` 物理设备聚合 |
 | **键盘搜索与设备控制** | ✅ 支持 | — 暂不支持 | macOS 支持拼音首字母（如 `sftd`）与设备名搜索，以及方向键控制 |
 | **全局快捷键呼出** | ✅ `⌥M`（支持自定义） | ✅ `Alt+M`（支持自定义） | 1.1.4 Windows 版已补齐自定义热键录制与占用冲突检测 |
@@ -111,14 +118,18 @@ MenuBarMijia 的 macOS 版本采用 Swift 6 原生开发，Windows 11 版本基�
 | **本地口令解析** | ✅ 支持 | ✅ 支持 | 开关、调光、调温、风速、延时等常规口令双端均在本地解析 |
 | **自选 AI 决策助手** | ✅ 支持 | ✅ 支持 | 可选接入 Jev、DeepSeek、Ollama 等；把握度低于 80% 需手动确认 |
 | **「猜你想控」主动推荐** | ✅ 最多 4 项 | ✅ 最多 4 项 | 手动点卡片也按时段与工作日/周末计入习惯记忆，带 14 天半衰期衰减与动作序列预测（撤销同步回滚，详见 [ADR-0009](docs/adr/0009-habit-ranking-algorithm.md)）；本地推荐立即显示，大模型在后台刷新。可执行动作不足四项时显示实际数量。 |
-| **GrokBall 情绪球与侧边推荐** | ✅ 原生 Canvas | ✅ 内置 SVG 引擎 | 轻点小球展开最多四项可撤销设备推荐，再点或按 Esc 收起；macOS 默认黑球白眼，可自由拖动，长按 0.5 秒进入语音输入，胶囊随球相对面板的位置向外展开，并根据屏幕空间调整行列。Mac 顶部快捷动作栏已移除，场景仍可通过语音或文字指令执行；Windows 保留固定侧挂。眼睛跟随光标，减弱动态效果下静态显示。基于 [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball)（MIT）。 |
+| **GrokBall 情绪球与侧边推荐** | ✅ 原生 Canvas | ✅ 内置 SVG 引擎 | 轻点小球展开最多四项可撤销设备推荐，再点或按 Esc 收起；macOS 默认黑球白眼，可自由拖动，长按 0.5 秒进入语音输入，胶囊随球相对面板的位置向外展开，并根据屏幕空间调整行列。Windows 保留固定侧挂。眼睛跟随光标，减弱动态效果下静态显示。基于 [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball)（MIT）。 |
+| **顶部快捷动作与场景栏** | ✅ 3 个动作 | ✅ 4 个动作 | 通过设置里的「显示顶部快捷场景栏」开关。macOS 提供 全屋关灯 / 柔和夜灯 / 关温控风扇，Windows 提供 全开主灯 / 睡眠关灯 / 25°制冷 / 调亮灯光；接入 Home Assistant 后双端都会追加你的场景胶囊。macOS 下动作与场景合计不超过四项时等宽铺满，更多则支持普通鼠标滚轮横向滚动。 |
 | **批量全关与即刻撤销** | ✅ 支持 | ✅ 支持 | 长按 0.6 秒触发；插座与扫地机默认不参与，可调整；操作可撤销时提供 10–15 秒横幅 |
 | **Mac 状态自动化** | ✅ 支持 | — 暂不支持 | 支持锁屏、唤醒、外接显示器连接等系统事件联动 |
 | **系统快捷指令集成** | ✅ 支持 (4 个动作) | — 暂不支持 | 提供设备切换、执行场景、一句话控制、查询温湿度 4 项 App Intents |
 | **URL Scheme 控制** | ✅ 支持 | — 暂不支持 | `menumijia://toggle` 等调用默认需确认，可在设置中允许直接执行 |
 | **传感器历史折线图** | ✅ 24h / 7d 趋势 | ⚠️ 基础读数显示 | macOS 可切换温度或湿度及时间范围，Windows 显示基础读数 |
 | **插座电量统计** | ✅ 支持 | — 暂不支持历史统计 | macOS 仅统计插座上报的真实累计电量增量，无数据不凭空估算 |
-| **米家空气净化器** | ✅ 支持 | ✅ 支持 | 双端合成 `air-purifier` 规格：PM2.5 / 空气质量 / 温湿度 / 滤芯余量，风速 1–100% 联动最爱挡位 |
+| **米家空净 / 新风机 / 加湿器** | ✅ 支持 | ✅ 支持 | 双端合成 `air-purifier`、`air-fresh`、`humidifier` 规格：PM2.5 / 空气质量 / 温湿度 / 滤芯余量，风速 1–100% 联动最爱挡位 |
+| **冰箱与厨房家电** | ✅ 支持 | ✅ 支持 | 冰箱按冷藏、冷冻分室显示当前与目标温度，支持 手动 / 智能 / 假日 / 速冷 / 速冻 模式；电水壶、饮水机、电饭煲、空气炸锅、烤箱、微波炉、养生壶显示工作状态、温度与剩余分钟数，带 `start-cook` / `pause` 动作的机型可直接启停 |
+| **除湿机 / 水暖毯 / 香氛机 / 音箱** | ✅ 支持 | ✅ 支持 | 除湿机合成为风扇卡，按其上报的模式列表切换并读取自身温湿度，水暖毯合成为温控卡，香氛机作为可开关插座，音箱作为媒体卡支持音量、静音、播放状态、睡眠模式与文本播报 |
+| **门锁与人体、环境传感器** | ✅ 只读卡片 | ✅ 只读卡片 | 门锁显示电量，人体移动/存在、门窗磁、水浸、光照与空气质量监测合成为传感器卡片；MIoT 不开放远程开锁，门锁只作状态展示。米家网关、路由器、中继器按网络基础设施过滤，不再混进未知设备列表 |
 | **摄像机实时画面** | ✅ 支持 | ✅ 支持 | 点击卡片放大弹出置顶实时小窗：macOS 走 HLS / HA 抓拍流，Windows 内置私有 P2P 桥（子码流 MJPEG） |
 | **布局编辑调大小** | ✅ 支持 | ✅ 支持 | 编辑模式下卡片右下角显示 iOS 控制中心风格圆弧手柄：向外/向内拖拽逐档切换 半行 ↔ 整行 ↔ 展开面板，轻点则循环切换 |
 | **界面外观** | ✅ 一套系统外观 + 4 档高度 | ✅ 控制中心风格 | macOS 只用系统材质：开启的设备取当前外观下最亮的表面——浅色是亮色磁贴，深色是比关闭态高一级的玻璃——其余是安静玻璃。 |
@@ -163,7 +174,8 @@ brew install --cask jryang1997/tap/menubarmijia
 - **方式一：米家云端扫码直连（推荐）：**<br>
   在设置中选择「米家云端直连」，屏幕上将显示登录二维码。使用手机「米家」App 扫码并确认登录，全屋家庭、房间与设备将自动同步到面板中。
 - **方式二：接入已有 Home Assistant：**<br>
-  选择「Home Assistant」，填写实例根地址（如 `http://192.168.1.100:8123`）与长期访问令牌。Windows 保存设置后需在原生对话框允许该来源，令牌保存在 Windows 凭据管理器。拒绝授权或连接失败不会切换到演示模式。Windows 支持现有灯、温控、风扇、插座、扫地机、摄像机控制和传感器卡片，以及场景和脚本。macOS 独有设备类型与 HA 摄像机实时流不在本次 Windows 后端范围内。
+  选择「Home Assistant」，填写实例根地址（如 `http://192.168.1.100:8123`）与长期访问令牌。Windows 保存设置后需在原生对话框允许该来源，令牌保存在 Windows 凭据管理器。拒绝授权或连接失败不会切换到演示模式。Windows 支持现有灯、温控、风扇、插座、冰箱、扫地机、摄像机控制和传感器卡片，以及场景和脚本。macOS 独有设备类型与 HA 摄像机实时流不在本次 Windows 后端范围内。<br>
+  macOS 上连接局域网地址或 `.local` 主机时，可能被系统的本地网络隐私开关拦截。面板会直接提示「局域网连接被系统拦截」，而不是一句笼统的套接字错误。请在 **「系统设置 → 隐私与安全性 → 本地网络」** 中允许 MenuBarMijia；若仍然失败，重新安装一次以对齐本地应用签名。
 - **方式三：离线演示模式（Demo Home）：**<br>
   无需账号即可使用虚拟设备体验界面和控制操作。
 
@@ -242,7 +254,7 @@ npm run build
 感谢为 MenuBarMijia 提交代码、修补协议细节与打磨交互体验的贡献者：
 
 - [@jryang1997](https://github.com/jryang1997)（一群小羊说）— 项目发起与维护
-- [@almightyYantao](https://github.com/almightyYantao)（Alimighty.Yantao）— 多键 Mesh 开关分键设备识别与合成（[#6](https://github.com/jryang1997/MenuBarMijia/issues/6)、[#7](https://github.com/jryang1997/MenuBarMijia/pull/7)）、米家多家庭切换与灯组情景过滤（[#8](https://github.com/jryang1997/MenuBarMijia/pull/8)）、多主题面板皮肤、空调/温湿度计独立模块、长按拖拽自由布局与自定义分组（[#9](https://github.com/jryang1997/MenuBarMijia/pull/9)）、macOS 应用图标打包集成（[#10](https://github.com/jryang1997/MenuBarMijia/pull/10)）、面板下落动画、本地设备重命名与房间栏细节打磨（[#11](https://github.com/jryang1997/MenuBarMijia/pull/11)）
+- [@almightyYantao](https://github.com/almightyYantao)（Alimighty.Yantao）— 多键 Mesh 开关分键设备识别与合成（[#6](https://github.com/jryang1997/MenuBarMijia/issues/6)、[#7](https://github.com/jryang1997/MenuBarMijia/pull/7)）、米家多家庭切换与灯组情景过滤（[#8](https://github.com/jryang1997/MenuBarMijia/pull/8)）、多主题面板皮肤、空调/温湿度计独立模块、长按拖拽自由布局与自定义分组（[#9](https://github.com/jryang1997/MenuBarMijia/pull/9)）、macOS 应用图标打包集成（[#10](https://github.com/jryang1997/MenuBarMijia/pull/10)）、面板下落动画、本地设备重命名与房间栏细节打磨（[#11](https://github.com/jryang1997/MenuBarMijia/pull/11)）、Windows 功能对齐与跨端界面修复（[#12](https://github.com/jryang1997/MenuBarMijia/pull/12)），以及连接源快照的冗余写入优化（[#66](https://github.com/jryang1997/MenuBarMijia/pull/66)）
 
 ## 协议与致谢
 
@@ -251,3 +263,19 @@ npm run build
 - **商标声明：** 「小米」「米家」「Xiaomi」「Mijia」等为小米科技有限责任公司注册商标；「美的」为美的集团股份有限公司注册商标。本文档与本项目仅用于描述设备兼容性。
 
 感谢所有为 MenuBarMijia 提交代码、报告缺陷与改进建议的贡献者！如果这个小工具让你在工作时少掏了几次手机，欢迎在 GitHub 上点一个 ⭐ Star。
+
+---
+
+## Star History
+
+每一个 Star 都是一次「少掏手机」。下方曲线由 [star-history.com](https://star-history.com/#jryang1997/MenuBarMijia&Date) 生成。
+
+<p align="center">
+  <a href="https://star-history.com/#jryang1997/MenuBarMijia&amp;Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date&amp;theme=dark">
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date">
+      <img src="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date" alt="jryang1997/MenuBarMijia 的 Star 增长曲线" width="720">
+    </picture>
+  </a>
+</p>

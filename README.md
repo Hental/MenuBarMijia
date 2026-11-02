@@ -1,6 +1,11 @@
 English | [简体中文](README.zh-CN.md)
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/309141?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-309141" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/309141/daily?language=Swift" alt="jryang1997%2FMenuBarMijia | Trendshift" width="250" height="55"/></a>
+  <a href="https://trendshift.io/repositories/309141?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-309141" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/309141/weekly?language=Swift" alt="jryang1997%2FMenuBarMijia | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
@@ -17,6 +22,7 @@ English | [简体中文](README.zh-CN.md)
 </p>
 
 <p align="center">
+  <a href="https://github.com/jryang1997/MenuBarMijia/stargazers"><img src="https://img.shields.io/github/stars/jryang1997/MenuBarMijia?style=social" alt="GitHub Stars"></a>
   <a href="https://github.com/jryang1997/MenuBarMijia/releases/latest"><img src="https://img.shields.io/github/v/release/jryang1997/MenuBarMijia?color=0A84FF&label=release" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Windows_11-Tauri_v2-0078D4?logo=windows11&logoColor=white" alt="Windows 11">
@@ -30,6 +36,7 @@ English | [简体中文](README.zh-CN.md)
   <a href="#quick-start">Install & Connect</a> ·
   <a href="#features--platform-matrix">Platform Comparison</a> ·
   <a href="#safety-privacy--limitations">Safety & Privacy</a> ·
+  <a href="#star-history">Star History</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -103,7 +110,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 
 | Feature Area | macOS Native (14+) | Windows 11 Tray | Details |
 | :--- | :---: | :---: | :--- |
-| **Mi Home Direct QR Connect** | ✅ Supported | ✅ Supported | Scan with Mi Home app; supports CN, SG, DE, US, and RU regional servers |
+| **Mi Home Direct QR Connect** | ✅ Supported | ✅ Supported | Scan with Mi Home app; supports CN, SG, DE, US, and RU regional servers; loads homes you own plus homes shared with your account |
 | **Home Assistant Integration** | ✅ Supported | ✅ Supported | Native WebSocket connection with `xiaomi_home` entity synthesis and physical-device grouping |
 | **Keyboard Search & Control** | ✅ Supported | — Not yet | On macOS, search by device name or pinyin initials and use arrow keys to control devices |
 | **Global Activation Hotkey** | ✅ `⌥M` (Customizable) | ✅ `Alt+M` (Customizable) | Windows 1.1.4 adds custom key recording with collision detection |
@@ -111,14 +118,18 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Local Command Parsing** | ✅ Supported | ✅ Supported | Power, brightness, temp, fan speeds, and timers are parsed locally |
 | **Optional AI Assistant** | ✅ Supported | ✅ Supported | Connect Jev, DeepSeek, Ollama, etc. Actions with <80% confidence require confirmation |
 | **Proactive "For You" Suggestions** | ✅ Up to 4 chips | ✅ Up to 4 pills | Manual card actions train time-bucket and weekday/weekend habits with a 14-day decay half-life and next-action prediction (undo rolls them back; see [ADR-0009](docs/adr/0009-habit-ranking-algorithm.md)). Local picks appear immediately; a configured model refreshes the cache in the background. Homes with fewer executable actions show their actual count. |
-| **GrokBall & Side Suggestions** | ✅ Native Canvas | ✅ Bundled SVG engine | Click the ball for up to four reversible device actions; click again or press Esc to collapse. On macOS, neutral expressions use a black ball with white eyes, dragging repositions it, and a 0.5-second hold starts voice input. Suggestions follow its side of the panel and adapt their rows near screen edges. The Mac top quick-actions row is removed; scenes remain available through spoken or typed commands. Windows retains the fixed side attachment. Eyes follow the pointer, and Reduce Motion uses static expressions. Based on [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball) (MIT). |
+| **GrokBall & Side Suggestions** | ✅ Native Canvas | ✅ Bundled SVG engine | Click the ball for up to four reversible device actions; click again or press Esc to collapse. On macOS, neutral expressions use a black ball with white eyes, dragging repositions it, and a 0.5-second hold starts voice input. Suggestions follow its side of the panel and adapt their rows near screen edges. Windows retains the fixed side attachment. Eyes follow the pointer, and Reduce Motion uses static expressions. Based on [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball) (MIT). |
+| **Quick Actions & Scenes Strip** | ✅ 3 actions | ✅ 4 actions | Toggle in Settings — "Show Quick Actions Strip" on macOS, "Show top quick actions bar" on Windows. macOS ships All Lights Off, Soft Night Light, and Sleep Climate Off; Windows ships All main lights on, Lights off for sleep, 25° cool, and Brighten lights. Home Assistant scenes are appended on both. On macOS, four or fewer pills stretch edge to edge and the rest scroll horizontally with a normal mouse wheel. |
 | **All-Off & Instant Undo** | ✅ Supported | ✅ Supported | A 0.6s hold confirms the action; plugs and vacuums are excluded by default; reversible actions show an undo banner for 10–15s |
 | **Mac Event Automation** | ✅ Supported | — Not yet | Event triggers on screen lock, sleep, wake, and external display connections |
 | **Apple Shortcuts (App Intents)** | ✅ Supported (4 actions) | — Not yet | Toggle Device, Run Scene, Voice Command, Query Room Climate |
 | **URL Scheme Control** | ✅ Supported | — Not yet | `menumijia://toggle` calls require confirmation by default; direct control can be enabled in settings |
 | **Sensor Trend Line Charts** | ✅ 24h / 7d trends | ⚠️ Real-time value only | macOS charts temperature or humidity over selectable periods; Windows shows current readings |
 | **Smart Plug Energy Logs** | ✅ Supported | — No history yet | macOS counts changes in cumulative hardware readings; missing data is not estimated |
-| **Mi Air Purifiers** | ✅ Supported | ✅ Supported | Both platforms synthesize `air-purifier` specs: PM2.5, air quality, temp/humidity, filter life, and a 1–100% fan slider driving the favorite level |
+| **Mi Air Purifiers, Air Fresheners & Humidifiers** | ✅ Supported | ✅ Supported | Both platforms synthesize `air-purifier`, `air-fresh`, and `humidifier` specs: PM2.5, air quality, temp/humidity, filter life, and a 1–100% fan slider driving the favorite level |
+| **Fridges & Kitchen Appliances** | ✅ Supported | ✅ Supported | Fridges expose per-chamber current/target temperature and modes (Manual, Smart, Holiday, Super Cool, Super Freeze). Kettles, water dispensers, cookers, air fryers, ovens, microwaves, and health pots show working status, temperature, and minutes remaining; models exposing `start-cook` / `pause` actions can be started and stopped |
+| **Dehumidifiers, Blankets, Diffusers & Speakers** | ✅ Supported | ✅ Supported | Dehumidifiers become fan cards driven by their reported mode list plus their own temp/humidity reading, electric blankets become climate cards, aroma diffusers become switchable plugs, and speakers become media cards with volume, mute, play state, sleep mode, and TTS |
+| **Locks & Presence Sensors** | ✅ Read-only cards | ✅ Read-only cards | Door locks report battery, and motion/occupancy, contact, water-leak, illumination, and air-quality monitors synthesize as sensor cards. MIoT exposes no remote unlock, so locks stay status-only. Mi gateways, routers, and repeaters are filtered out as network infrastructure instead of showing up as unknown devices. |
 | **Camera Live View** | ✅ Supported | ✅ Supported | Click a card for a pinned live window: macOS uses HLS / HA snapshots; Windows ships a private P2P bridge (substream MJPEG) |
 | **Layout Editing Resize** | ✅ Supported | ✅ Supported | Edit mode shows an iOS Control Center-style corner arc handle on each card's bottom-right: drag out/in to step half ↔ full ↔ panel, or tap it to cycle sizes |
 | **Visual Look** | ✅ One system look + 4 heights | ✅ Control Center design | macOS keeps system materials only: a device that is on takes the loudest surface its appearance allows — a bright platter in light mode, a lifted well one step above the off glass in dark mode — everything else stays quiet glass. |
@@ -163,7 +174,8 @@ Click the menu bar icon to reveal the panel, then open Settings `⚙️`:
 - **Option A: Mi Home Direct Cloud Connect (Recommended):**<br>
   Select "Mi Cloud Connect" in Settings. A QR code appears on screen. Scan it with the official Mi Home app on your phone to link your account. All your homes, rooms, and supported devices sync instantly.
 - **Option B: Home Assistant local connection:**<br>
-  Select "Home Assistant" and enter your instance origin, such as `http://192.168.1.100:8123`, and Long-Lived Access Token. On Windows, save settings and approve the endpoint in the native dialog. The token stays in Windows Credential Manager. A rejected or failed connection never switches to demo. Windows supports the existing light, climate, fan, plug, vacuum, camera-control, and sensor card models, plus scenes and scripts. macOS-only device types and HA camera live streams are outside this Windows backend.
+  Select "Home Assistant" and enter your instance origin, such as `http://192.168.1.100:8123`, and Long-Lived Access Token. On Windows, save settings and approve the endpoint in the native dialog. The token stays in Windows Credential Manager. A rejected or failed connection never switches to demo. Windows supports the existing light, climate, fan, plug, fridge, vacuum, camera-control, and sensor card models, plus scenes and scripts. macOS-only device types and HA camera live streams are outside this Windows backend.<br>
+  On macOS, connecting to a LAN address or `.local` host can be blocked by the system's local-network privacy gate. The panel says so explicitly ("Local network connection blocked by macOS") instead of showing a generic socket error. Grant MenuBarMijia permission under **System Settings → Privacy & Security → Local Network**; if it still fails, reinstall so the local app signature lines up.
 - **Option C: Offline Demo Home:**<br>
   Explore the interface and controls without an account using simulated devices.
 
@@ -251,3 +263,19 @@ Thanks to everyone who has contributed features, fixes, and feedback:
 - **Trademarks:** "Xiaomi", "Mijia", and "Midea" are registered trademarks of their respective owners. Used here solely to indicate device compatibility.
 
 Thanks to all contributors who have submitted PRs, reported issues, and helped refine the desktop smart home experience! If MenuBarMijia helps you keep your hands on the keyboard, please give it a ⭐ Star on GitHub.
+
+---
+
+## Star History
+
+Every star is one fewer trip to the phone. The curve below is powered by [star-history.com](https://star-history.com/#jryang1997/MenuBarMijia&Date).
+
+<p align="center">
+  <a href="https://star-history.com/#jryang1997/MenuBarMijia&amp;Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date&amp;theme=dark">
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date">
+      <img src="https://api.star-history.com/svg?repos=jryang1997/MenuBarMijia&amp;type=Date" alt="Star History Chart for jryang1997/MenuBarMijia" width="720">
+    </picture>
+  </a>
+</p>
