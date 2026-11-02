@@ -98,7 +98,8 @@ for f in $(search_files 'UNUserNotificationCenter\.current\(\)' Sources || true)
 done
 
 for f in $(search_files '\.glassEffect\(|GlassEffectContainer' Sources || true); do
-    if [ "$f" != "Sources/MenuBarMijiaApp/ThemeAndMotion.swift" ]; then
+    # ripgrep prints Windows paths with backslashes; compare in one separator style.
+    if [ "${f//\\//}" != "Sources/MenuBarMijiaApp/ThemeAndMotion.swift" ]; then
         echo "❌ $f 直接使用了 macOS 26 专属的 .glassEffect 或 GlassEffectContainer，请改用 ThemeAndMotion.swift 中的 adaptiveGlass / AdaptiveGlassContainer 以保持 macOS 14+ 兼容！"
         exit 1
     fi
@@ -162,6 +163,9 @@ if [ "$(uname -s)" = "Linux" ]; then
     # shim; `swift test` at the repo root cannot compile Security/AppKit imports on Linux.
     echo "🧪 [3/4] 运行 Linux 上的 MijiaCore 测试（scripts/linux-check）与双端黄金语料校验..."
     bash scripts/linux-check/run.sh || swift_status=$?
+elif ! command -v swift >/dev/null 2>&1; then
+    # Windows development machines have no Swift toolchain; CI still runs the suite.
+    echo "⏭️  跳过 Swift 门槛：未找到 swift"
 elif [ "$SKIP_SNAPSHOTS" = "1" ]; then
     # The local macOS renderer drifts from the CI-recorded baselines on every run, so a local gate
     # that includes SnapshotTests can never pass. CI still records and compares the baselines.
