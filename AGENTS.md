@@ -20,7 +20,11 @@ Read `CODING_STANDARDS.md` when reviewing diffs (`/code-review`) or modifying sy
 
 Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`. On this Mac the renderer never matches the CI-recorded snapshot baselines, so use `bash scripts/check.sh --skip-snapshots` for a green local gate; CI still records and compares them. The pre-commit hook runs the same snapshot-skipping gate. Run `bash scripts/install_local_app.sh` to build, verify, and install into the bundle the user launches (it keeps the previous version for rollback); `bash scripts/build_app.sh` only packages the bundle inside the worktree. Run `swift scripts/generate_app_icon.swift` when modifying `Resources/AppIcon/AppIcon-*.svg` to regenerate macOS `.icns`, `Assets.car`, README logos, and Windows Tauri icons.
 
-本机存在已知的 `SnapshotTests` 渲染漂移：干净 HEAD 上也同样失配，`bash scripts/check.sh` 会因此变红。本地提交可用 `--no-verify`，以 CI 的 macos job 为准；用 `bash scripts/snapshot-drift-check.sh` 甄别本次改动是否**新增**了失配（输出为空即只有既有漂移）。
+CI 的快照比对以 CI 录制的结果为准。本机渲染漂移时，用 `bash scripts/snapshot-drift-check.sh` 判断是否**新增**了失配（输出为空即只有既有漂移）。漂移甄别回答不了「这次 UI 改动是否欠一批新基线」：改到 `Sources/MenuBarMijiaApp/` 就要按 `bash scripts/check_snapshot_baselines.sh` 的提示重录快照，CI 的 `snapshot-baselines` 工作流守这一条。`check.sh` 会跑完 Swift 与 Windows 两端再汇总失败。
+
+### Tooling
+
+本仓库的 Swift 与 Rust 没有语言服务器：引用与定义检索用 `grep` 或 `xd://ast_grep`，不要反复尝试 `xd://lsp`。
 
 ### Commit & PR policy
 
@@ -31,6 +35,7 @@ Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`.
 - 检查失败原因尚未确认时，走 PR 排查，解决后再合并。已复现并确认与本轮无关的既有失败，需记录证据及例外原因；跳过检查不是默认流程。
 - 一个完整问题对应一次提交或一个 PR；同一问题的后续调整继续使用原 PR。
 - 直接 push 后确认云端检查的最终结果；交付时区分“已推送”与“检查已通过”。直接 push 不等于发布新版本。
+- PR 创建后用 `gh pr checks <n>`（或 `gh pr view <n> --json statusCheckRollup`）确认云端结果；首次查询为空时按退避重试，不要据此报告「还没有 CI」。
 
 ### Worktrees
 

@@ -64,17 +64,22 @@ struct GrokBallSidecarPlacement {
     }
 
     private static func suggestionLayout(side: Side, ball: NSRect, safe: NSRect) -> (frame: NSRect, columns: Int) {
+        let metrics = GrokBallSuggestionMetrics.self
         if side.isVertical {
-            let x = side == .right ? ball.maxX + 16 : ball.minX - 16 - 132
-            let y = clamp(ball.maxY - 206, lower: safe.minY + 6, upper: safe.maxY - 206 - 6)
-            return (NSRect(x: x, y: y, width: 132, height: 206), 1)
+            let x = side == .right ? ball.maxX + metrics.gapToBall
+                : ball.minX - metrics.gapToBall - metrics.columnWidth
+            let y = clamp(ball.maxY - metrics.columnHeight,
+                          lower: safe.minY + 6, upper: safe.maxY - metrics.columnHeight - 6)
+            return (NSRect(x: x, y: y, width: metrics.columnWidth, height: metrics.columnHeight), 1)
         }
-        let available = side == .above ? safe.maxY - 6 - ball.maxY - 16 : ball.minY - 16 - safe.minY - 6
-        let columns = available < 98 && safe.width >= 570 ? 4 : 2
-        let width: CGFloat = columns == 4 ? 558 : 274
-        let height: CGFloat = columns == 4 ? 44 : 98
+        let available = side == .above
+            ? safe.maxY - 6 - ball.maxY - metrics.gapToBall
+            : ball.minY - metrics.gapToBall - safe.minY - 6
+        let columns = available < metrics.rowHeight && safe.width >= metrics.singleRowWidth + 12 ? 4 : 2
+        let width = columns == 4 ? metrics.singleRowWidth : metrics.rowWidth
+        let height = columns == 4 ? metrics.pillHeight : metrics.rowHeight
         let x = clamp(ball.midX - width / 2, lower: safe.minX + 6, upper: safe.maxX - width - 6)
-        let y = side == .above ? ball.maxY + 16 : ball.minY - 16 - height
+        let y = side == .above ? ball.maxY + metrics.gapToBall : ball.minY - metrics.gapToBall - height
         return (NSRect(x: x, y: y, width: width, height: height), columns)
     }
 

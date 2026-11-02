@@ -64,3 +64,12 @@ When a test asserts on state that a production timer can change (undo banner exp
 - Poll a deterministic signal that the path under test actually produces. When the failure path records nothing, the reliable signal is "the timer is frozen and the assertion runs immediately", not a spin on a success-only collection.
 
 A wall-clock sleep before the assertion is the failure mode: on a loaded CI runner the sleep stretches past the timer's expiry, so the assertion fails nondeterministically while passing locally. This shipped once: `failedQuickActionRecordsNothing` spun on `executedCommands` (empty on failures) for 18 s in CI, past the 10 s banner expiry.
+
+## 10. Overlay Geometry Has One Owner
+
+Placement math that reserves space and the view that draws inside it must read the same dimensions:
+
+- Pill sizes and spacing live once beside the content (`GrokBallSuggestionMetrics`); placement math derives its column, row, and footprint from them instead of repeating literals like 132, 44, 206, and 558.
+- A view never hardcodes a size the placement reserves. When the two drift apart the content clips silently: #123's English empty state needed 65 pt inside a 44 pt row.
+- Empty and fallback states fill the reserved width (`.frame(maxWidth: .infinity)`) so they reflow instead of assuming a fixed column.
+

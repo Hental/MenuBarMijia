@@ -155,17 +155,28 @@ if [ "$LINT_ONLY" = "1" ]; then
     exit 0
 fi
 
+swift_status=0
 if [ "$SKIP_SNAPSHOTS" = "1" ]; then
     # The local macOS renderer drifts from the CI-recorded baselines on every run, so a local gate
     # that includes SnapshotTests can never pass. CI still records and compares the baselines.
     echo "🧪 [3/4] 运行 Swift 单元测试（跳过快照）与双端黄金语料校验..."
-    swift test --skip SnapshotTests
+    swift test --skip SnapshotTests || swift_status=$?
 else
     echo "🧪 [3/4] 运行 Swift 单元测试 (swift test) 与双端黄金语料校验..."
-    swift test
+    swift test || swift_status=$?
 fi
+
+echo "🧪 [4/4] 运行 Windows 前端测试与类型检查..."
+windows_status=0
 if [ -x "windows/node_modules/.bin/tsx" ]; then
-    (cd windows && npm test && npm run typecheck)
+    (cd windows && npm test && npm run typecheck) || windows_status=$?
+else
+    echo "⏭️  跳过 Windows 门槛：未找到 windows/node_modules（先 cd windows && npm ci）"
+fi
+
+if [ "$swift_status" -ne 0 ] || [ "$windows_status" -ne 0 ]; then
+    echo "❌ 门禁未通过：swift=$swift_status windows=$windows_status" >&2
+    exit 1
 fi
 
 echo "✅ [4/4] 所有门禁检查与单元测试全部通过！"

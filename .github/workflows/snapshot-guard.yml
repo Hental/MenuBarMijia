@@ -1,0 +1,30 @@
+name: Snapshot Guard
+
+# 独立工作流：改动只在面板渲染源码、却没刷新 UI 快照基线时失败。
+# 单独成流的原因：标签变更（labeled / unlabeled）只重跑这条几秒钟的检查，
+# 不会连带重跑 CI 里的 macOS 构建与 Windows 安装包。
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot-baselines:
+    # 确实不影响渲染时，给 PR 加 no-snapshot-change 标签；加/删标签都会触发本工作流重评。
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-snapshot-change') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Snapshot baselines cover UI changes
+        run: >-
+          bash scripts/check_snapshot_baselines.sh
+          '${{ github.event.pull_request.base.sha }}'
+          '${{ github.event.pull_request.head.sha }}'

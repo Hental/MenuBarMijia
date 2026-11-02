@@ -475,6 +475,21 @@ struct GrokBallControl: View {
     }
 }
 
+/// Single owner for the sizes the placement math reserves and the pills actually draw.
+/// Both sides read these, so a wider pill can never silently clip inside a narrower footprint (#123).
+enum GrokBallSuggestionMetrics {
+    static let pillWidth: CGFloat = 132
+    static let pillHeight: CGFloat = 44
+    static let spacing: CGFloat = 10
+    static let gapToBall: CGFloat = 16
+
+    static let columnWidth = pillWidth
+    static let columnHeight = 4 * pillHeight + 3 * spacing
+    static let rowWidth = 2 * pillWidth + spacing
+    static let rowHeight = 2 * pillHeight + spacing
+    static let singleRowWidth = 4 * pillWidth + 3 * spacing
+}
+
 /// Suggestions use a column beside the ball and adapt to one or two rows above/below it.
 struct GrokBallSuggestions: View {
     let store: HomeStore
@@ -482,7 +497,8 @@ struct GrokBallSuggestions: View {
 
     var body: some View {
         let items = store.grokBallRadialSuggestions
-        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+        Grid(horizontalSpacing: GrokBallSuggestionMetrics.spacing,
+             verticalSpacing: GrokBallSuggestionMetrics.spacing) {
             if columnCount == 4 {
                 GridRow { ForEach(items) { suggestionPill($0.suggestion) } }
             } else if columnCount == 2 {
@@ -528,12 +544,12 @@ struct GrokBallSuggestions: View {
             }
             .font(.system(size: DesignTokens.TypeSize.control, weight: .medium))
             .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: GrokBallSuggestionMetrics.pillHeight)
             .adaptiveGlass(in: Capsule(), interactive: true)
         }
         .buttonStyle(.plain)
         .accessibilityHint(Text(L10n.tr("立即执行，可撤销", "Run now; undo is available")))
         .help(L10n.tr("点击立即执行，可撤销", "Click to execute with undo"))
-        .frame(width: 132, height: 44)
+        .frame(width: GrokBallSuggestionMetrics.pillWidth, height: GrokBallSuggestionMetrics.pillHeight)
     }
 }
