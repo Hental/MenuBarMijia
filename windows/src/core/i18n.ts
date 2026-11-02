@@ -453,6 +453,12 @@ const CATALOG: Readonly<Record<string, readonly [string, string]>> = {
   "严重污染": ["严重污染", "Hazardous"],
   "空气质量": ["空气质量", "Air quality"],
   "滤芯余量": ["滤芯余量", "Filter life"],
+  "本地视频桥接未返回可用流，请检查网络后重试": ["本地视频桥接未返回可用流，请检查网络后重试", "Local video bridge returned no playable stream; please check your network and retry"],
+  "该摄像机型号暂不支持自动获取局域网 P2P 密钥，可在下方填写本地 go2rtc / HLS 流地址观看": ["该摄像机型号暂不支持自动获取局域网 P2P 密钥，可在下方填写本地 go2rtc / HLS 流地址观看", "This camera model does not expose automatic LAN P2P keys; enter a local go2rtc / HLS URL below"],
+  "未获取到摄像机局域网 IP，请确认电脑与摄像机处于同一局域网": ["未获取到摄像机局域网 IP，请确认电脑与摄像机处于同一局域网", "Camera LAN IP not found; make sure your PC and camera are on the same local network"],
+  "复制诊断": ["复制诊断", "Copy Diagnostics"],
+  "已复制脱敏诊断信息": ["已复制脱敏诊断信息", "Desensitized diagnostics copied"],
+  "摄像机诊断": ["摄像机诊断", "Camera Diagnostics"],
 };
 
 export const LANGUAGE_STORAGE_KEY = "menumijia.windows.language";

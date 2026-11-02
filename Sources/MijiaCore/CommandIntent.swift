@@ -183,7 +183,13 @@ public enum IntentValidator {
     /// Returns the operation adjusted to the device's limits, or nil when the device cannot perform it.
     public static func normalize(_ operation: IntentOperation, for device: SmartDevice) -> IntentOperation? {
         switch (operation, device.kind) {
-        case (.power, .light), (.power, .climate), (.power, .fan), (.power, .plug), (.power, .vacuum), (.power, .tv), (.power, .camera):
+        case (.power(let on), .plug(let s)):
+            if s.switchEntityId.hasPrefix("button."), !on {
+                return nil
+            }
+            return operation
+
+        case (.power, .light), (.power, .climate), (.power, .fan), (.power, .vacuum), (.power, .tv), (.power, .camera):
             return operation
 
         case (.brightness(let percent), .light):

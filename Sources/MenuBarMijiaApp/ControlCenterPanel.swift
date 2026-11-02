@@ -1565,7 +1565,7 @@ public struct ControlCenterPanel: View {
 
                 Button(L10n.tr("撤销", "Undo")) {
                     withAnimation(AppleMotion.snappySpring) {
-                        store.undoTurnAllOff()
+                        _ = store.undoTurnAllOff()
                     }
                 }
                 .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: DesignTokens.active))

@@ -20,6 +20,7 @@ import {
   timeBucketLabel,
   INSECURE_ENDPOINT_MESSAGE,
   ModelActionPolicy,
+  partitionHabitReceipt,
   resolveGrokBallEmotion,
   type HabitEntry,
   type HabitLastAction,
@@ -1846,6 +1847,13 @@ export class MenuMijiaWindowsApp {
         this.replyBanner = { text: plan.reply || ModelActionPolicy.confirmationReply(null), source: t("需要确认") };
         return;
       }
+      if (sanitized.length === 0) {
+        this.replyBanner =
+          plan.intents.length > 0
+            ? { text: t("无法找到指令对应的设备"), source: t("控制失败"), isError: true }
+            : { text: plan.reply || t("无法找到指令对应的设备"), source: sourceLabel, isError: !plan.reply };
+        return;
+      }
       const replyText =
         plan.reply || IntentReply.describe(sanitized, aliasedDevices, this.scenes);
       const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel, {
@@ -1953,6 +1961,7 @@ export class MenuMijiaWindowsApp {
         ] : [];
       case "setSwitch":
         if (k.kind === "plug") {
+          if (command.entityId.startsWith("button.")) return [];
           return [{ kind: "setSwitch", entityId: command.entityId, isOn: command.entityId === k.childLockEntityId ? k.isChildLocked : k.isOn }];
         }
         if (k.kind === "camera") {
@@ -1982,31 +1991,51 @@ export class MenuMijiaWindowsApp {
     options: { recordHabits?: boolean } = {},
   ): Promise<boolean> {
     const sourceRevision = this.sourceRevision;
-    const commands: Array<{ deviceId: string; command: DeviceCommand }> = [];
+    const commands: Array<{ deviceId: string; command: DeviceCommand; intentIndex: number }> = [];
+    const candidateIntents: Array<{ intent: DeviceIntent; commandCount: number; succeededCount: number }> = [];
+    let failed = 0;
+    let failureMessage = "";
     for (const intent of intents) {
       if (intent.operation.kind === "activateScene") {
         const scene = this.scenes.find((s) => s.id === intent.targetId);
-        if (scene) commands.push({ deviceId: scene.id, command: { kind: "activateScene", entityId: scene.entityId } });
+        if (scene) {
+          const intentIndex = candidateIntents.length;
+          candidateIntents.push({ intent, commandCount: 1, succeededCount: 0 });
+          commands.push({ deviceId: scene.id, command: { kind: "activateScene", entityId: scene.entityId }, intentIndex });
+        }
         continue;
       }
       const dev = this.devices.find((d) => d.id === intent.targetId);
       if (!dev) continue;
-      for (const command of IntentValidator.commandsForIntent(intent, dev)) {
-        commands.push({ deviceId: dev.id, command });
+      if (!dev.isOnline) {
+        failed += 1;
+        failureMessage = `${dev.name} (${t("离线")})`;
+        continue;
+      }
+      const intentCommands = IntentValidator.commandsForIntent(intent, dev);
+      if (intentCommands.length === 0) {
+        failed += 1;
+        failureMessage = t("无法找到指令对应的设备");
+        continue;
+      }
+      const intentIndex = candidateIntents.length;
+      candidateIntents.push({ intent, commandCount: intentCommands.length, succeededCount: 0 });
+      for (const command of intentCommands) {
+        commands.push({ deviceId: dev.id, command, intentIndex });
       }
     }
 
     const steps: UndoStep[] = [];
     let succeeded = 0;
     let canUndo = true;
-    let failed = 0;
-    let failureMessage = "";
-    for (const { deviceId, command } of commands) {
+    for (const { deviceId, command, intentIndex } of commands) {
       if (sourceRevision !== this.sourceRevision) return false;
       // Scenes have no device row and no inverse; they simply run and count as applied (#113).
       if (command.kind === "activateScene") {
         if (await this.applyCommand(command)) {
           succeeded += 1;
+          const entry = candidateIntents[intentIndex];
+          if (entry) entry.succeededCount += 1;
         } else {
           failed += 1;
           failureMessage = this.replyBanner?.text ?? "设备未响应";
@@ -2019,11 +2048,18 @@ export class MenuMijiaWindowsApp {
         failureMessage = t("设备列表已更新，请重新执行");
         continue;
       }
-      const inverseCommands = this.buildInverseCommand(device, command);
+      const isMomentaryButton = command.kind === "setSwitch" && command.entityId.startsWith("button.");
+      const inverseCommands = isMomentaryButton ? [] : this.buildInverseCommand(device, command);
       if (await this.applyCommand(command)) {
         succeeded += 1;
-        canUndo = canUndo && inverseCommands.length > 0;
-        steps.unshift({ deviceId, commands: inverseCommands });
+        const entry = candidateIntents[intentIndex];
+        if (entry) entry.succeededCount += 1;
+        if (!isMomentaryButton) {
+          canUndo = canUndo && inverseCommands.length > 0;
+          if (inverseCommands.length > 0) {
+            steps.unshift({ deviceId, commands: inverseCommands });
+          }
+        }
       } else {
         failed += 1;
         failureMessage = this.replyBanner?.text ?? "设备未响应";
@@ -2032,8 +2068,11 @@ export class MenuMijiaWindowsApp {
     if (sourceRevision !== this.sourceRevision) return false;
     if (succeeded > 0) {
       if (failed === 0) this.grokBallCelebrationUntil = Date.now() + 2400;
-      // Only explicit user asks train habits; model-inferred and scheduled runs do not (#34/#113).
-      const habitReceipt = options.recordHabits && failed === 0 ? this.recordHabits(intents) : null;
+      const succeededIntents = candidateIntents
+        .filter((entry) => entry.succeededCount === entry.commandCount && entry.commandCount > 0)
+        .map((entry) => entry.intent);
+      // Only explicit user asks train habits, and only for intents that actually succeeded (#34/#113/#116).
+      const habitReceipt = options.recordHabits && succeededIntents.length > 0 ? this.recordHabits(succeededIntents) : null;
       // Scene activations have no inverse: an undo action must exist only when at least one
       // device step is restorable, otherwise Undo would report success without doing anything
       // (Codex #116 re-review).
@@ -2044,8 +2083,13 @@ export class MenuMijiaWindowsApp {
         habitReceipt: habitReceipt ?? undefined,
       } : null;
     }
+    if (succeeded === 0 && failed === 0) {
+      this.replyBanner = { text: t("无法找到指令对应的设备"), source: t("控制失败"), isError: true };
+      this.render();
+      return false;
+    }
     this.replyBanner = failed > 0
-      ? { text: t("已执行 {ok} 项，{failed} 项失败。{message}", { ok: commands.length - failed, failed: failed, message: failureMessage }), source: t("控制失败"), isError: true }
+      ? { text: t("已执行 {ok} 项，{failed} 项失败。{message}", { ok: succeeded, failed: failed, message: failureMessage }), source: t("控制失败"), isError: true }
       : { text: replyText, source: sourceLabel };
     this.render();
     return failed === 0;
@@ -2364,6 +2408,7 @@ export class MenuMijiaWindowsApp {
       return;
     }
     const action = this.lastUndoAction;
+    this.lastUndoAction = null;
     const sourceRevision = this.sourceRevision;
     const failedSteps: UndoStep[] = [];
     const blockedDevices = new Set<string>();
@@ -2387,13 +2432,21 @@ export class MenuMijiaWindowsApp {
       }
     }
     if (sourceRevision !== this.sourceRevision) return;
-    this.lastUndoAction = failedSteps.length > 0
-      ? { ...action, steps: failedSteps }
-      : null;
-    // The habit records roll back only once every inverse command succeeded; a partially
-    // failed undo keeps them for the retry (Codex #116 re-review).
-    if (failedSteps.length === 0 && action.habitReceipt) {
-      this.unrecordHabits(action.habitReceipt);
+    let remainingReceipt = action.habitReceipt;
+    if (action.habitReceipt) {
+      if (failedSteps.length === 0) {
+        this.unrecordHabits(action.habitReceipt);
+        remainingReceipt = undefined;
+      } else {
+        const { succeeded, remaining } = partitionHabitReceipt(action.habitReceipt, blockedDevices);
+        if (succeeded) {
+          this.unrecordHabits(succeeded);
+        }
+        remainingReceipt = remaining ?? undefined;
+      }
+    }
+    if (failedSteps.length > 0 && this.lastUndoAction === null) {
+      this.lastUndoAction = { ...action, steps: failedSteps, habitReceipt: remainingReceipt };
     }
     this.replyBanner = failedSteps.length > 0
       ? { text: t("撤销未完成，{count} 项待恢复。{message}", { count: failedSteps.length, message: failureMessage }), source: t("控制失败"), isError: true }
@@ -2496,7 +2549,7 @@ export class MenuMijiaWindowsApp {
           }
           break;
         case "setSwitch":
-          if (k.kind === "plug" && k.switchEntityId === command.entityId) {
+          if (k.kind === "plug" && k.switchEntityId === command.entityId && !command.entityId.startsWith("button.")) {
             k.isOn = command.isOn;
           } else if (k.kind === "camera") {
             if (k.entityId === command.entityId) {
@@ -3730,7 +3783,7 @@ export class MenuMijiaWindowsApp {
     this.liveCameraShowingURLInput = false;
     this.liveCameraStreamURL = this.cameraStreamURLs[dev.id]
       ? this.normalizeWindowsCameraStreamUrl(this.cameraStreamURLs[dev.id]!)
-      : null;
+      : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraLoading = false;
     invokeTauriVoid("set_pin_popover", { pin: true });
     if (dev.kind.isOn) {
@@ -3741,6 +3794,17 @@ export class MenuMijiaWindowsApp {
       }
     }
     this.render();
+  }
+
+  private resolveHaCameraStreamUrl(dev: SmartDevice): string | null {
+    if (this.settings.connectionMode !== "homeAssistant" || dev.kind.kind !== "camera") return null;
+    const rawPath = dev.kind.snapshotPath?.trim() ?? "";
+    if (!rawPath) return null;
+    const streamPath = rawPath.replace(/^\/api\/camera_proxy\//i, "/api/camera_proxy_stream/");
+    if (/^https?:\/\//i.test(streamPath)) return streamPath;
+    const base = this.settings.haBaseURL.trim().replace(/\/+$/, "");
+    if (!base) return null;
+    return `${base}${streamPath.startsWith("/") ? "" : "/"}${streamPath}`;
   }
 
   /** Hides the modal but keeps the stream hot, so reopening is instant (#97). */
@@ -3776,9 +3840,11 @@ export class MenuMijiaWindowsApp {
     this.liveCameraLoading = false;
     this.liveCameraError = null;
     this.liveCameraShowingURLInput = false;
-    if (this.settings.connectionMode === "xiaomiCloud" && closingId) {
-      if (closingDev) void this.releaseCameraP2PSession(closingDev, this.liveCameraToken);
-      // Release the P2P session so the next open negotiates a fresh one instead of a dead relay.
+    if (closingId) {
+      if (this.settings.connectionMode === "xiaomiCloud" && closingDev) {
+        void this.releaseCameraP2PSession(closingDev, this.liveCameraToken);
+      }
+      // Release the P2P session or bridged stream so the next open negotiates a fresh one.
       invokeTauriVoid("stop_xiaomi_camera_bridge", { did: closingId });
     }
     invokeTauriVoid("set_pin_popover", { pin: false });
@@ -3790,7 +3856,11 @@ export class MenuMijiaWindowsApp {
    * negotiation for the same camera so a delayed stop-stream never kills a
    * freshly reopened stream (#97).
    */
-  private releaseCameraP2PSession(dev: SmartDevice, releaseToken = this.liveCameraToken): Promise<void> {
+  private releaseCameraP2PSession(
+    dev: SmartDevice,
+    releaseToken = this.liveCameraToken,
+    allowActiveCamera = false,
+  ): Promise<void> {
     if (!this.settings.miSession) return Promise.resolve();
     const run = (async () => {
       try {
@@ -3801,7 +3871,7 @@ export class MenuMijiaWindowsApp {
           isOnline: dev.isOnline,
           specType: null,
         });
-        if (this.liveCameraToken !== releaseToken || this.activeLiveCameraId === dev.id) return;
+        if (this.liveCameraToken !== releaseToken || (!allowActiveCamera && this.activeLiveCameraId === dev.id)) return;
         const p2pSvc = spec.services.find((s) => s.actions.some((a) => a.type.includes("stop-stream")));
         const stopAct = p2pSvc?.actions.find((a) => a.type.includes("stop-stream"));
         if (!p2pSvc || !stopAct) return;
@@ -3865,22 +3935,27 @@ export class MenuMijiaWindowsApp {
   private normalizeWindowsCameraStreamUrl(rawUrl: string): string {
     return rawUrl
       .trim()
+      .replace(/^https?:\/\/localhost:1984(\/|$)/i, "http://127.0.0.1:1984$1")
       .replace(
-        /^(https?:\/\/(?:127\.0\.0\.1|localhost):1984\/api\/)stream\.m3u8(\?|$)/i,
+        /^(https?:\/\/127\.0\.0\.1:1984\/api\/)stream\.m3u8(\?|$)/i,
         "$1stream.mjpeg$2",
       );
   }
 
   private needsHlsTranscodeBridge(url: string): boolean {
-    if (!/\.m3u8(\?|$|#)/i.test(url)) return false;
-    const probe = document.createElement("video");
-    const canPlayNative =
-      typeof probe.canPlayType === "function" &&
-      Boolean(
-        probe.canPlayType("application/vnd.apple.mpegurl") ||
-          probe.canPlayType("application/x-mpegURL"),
-      );
-    return !canPlayNative && Boolean(window.__TAURI_INTERNALS__?.invoke);
+    if (!window.__TAURI_INTERNALS__?.invoke) return false;
+    if (/^http:\/\/127\.0\.0\.1:1984(\/|$)/i.test(url)) return false;
+    if (/\.m3u8(\?|$|#)/i.test(url)) {
+      const probe = document.createElement("video");
+      const canPlayNative =
+        typeof probe.canPlayType === "function" &&
+        Boolean(
+          probe.canPlayType("application/vnd.apple.mpegurl") ||
+            probe.canPlayType("application/x-mpegURL"),
+        );
+      return !canPlayNative;
+    }
+    return /^https?:\/\//i.test(url);
   }
 
   private async bridgeHlsStreamToMjpeg(did: string, hlsUrl: string): Promise<boolean> {
@@ -3889,6 +3964,10 @@ export class MenuMijiaWindowsApp {
     this.liveCameraLoading = true;
     this.render();
     try {
+      if (this.settings.connectionMode === "homeAssistant") {
+        await this.endpointSubmission;
+        if (this.liveCameraToken !== token || this.activeLiveCameraId !== did) return false;
+      }
       const mjpegName = await window.__TAURI_INTERNALS__.invoke<string>("bridge_hls_camera_stream", {
         did,
         hlsUrl,
@@ -3903,6 +3982,8 @@ export class MenuMijiaWindowsApp {
         this.attachLiveMedia();
         return true;
       }
+      this.liveCameraLoading = false;
+      this.render();
     } catch (err) {
       if (this.liveCameraToken === token && this.activeLiveCameraId === did) {
         this.liveCameraError = err instanceof Error ? err.message : String(err);
@@ -3919,7 +4000,7 @@ export class MenuMijiaWindowsApp {
     this.stopLiveTransport();
     this.liveCameraStreamURL = this.cameraStreamURLs[dev.id]
       ? this.normalizeWindowsCameraStreamUrl(this.cameraStreamURLs[dev.id]!)
-      : null;
+      : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraError = null;
     this.liveCameraLoading = false;
     if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
@@ -3938,6 +4019,14 @@ export class MenuMijiaWindowsApp {
     // a negotiation that outlives its modal must not start a bridge afterwards.
     const token = this.liveCameraToken;
     const stale = () => this.liveCameraToken !== token || this.activeLiveCameraId !== dev.id;
+    let startedP2PSession = false;
+    let failureReason: string | null = null;
+    const releaseIfStarted = () => {
+      if (startedP2PSession) {
+        startedP2PSession = false;
+        void this.releaseCameraP2PSession(dev, token, true);
+      }
+    };
     try {
       const pendingRelease = this.pendingCameraReleases.get(dev.id);
       if (pendingRelease) {
@@ -4022,11 +4111,15 @@ export class MenuMijiaWindowsApp {
       }
       if (stale()) return;
       if (p2pSvc && p2pAct) {
-        await client
+        startedP2PSession = await client
           .callAction({ did: dev.id, siid: p2pSvc.iid, aiid: p2pAct.iid, inputs: [] })
-          .catch(() => {});
+          .then(() => true)
+          .catch(() => false);
       }
-      if (stale()) return;
+      if (stale()) {
+        if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
+        return;
+      }
 
       // 3. Negotiate MISS CS2/TUTK P2P keys & start native Tauri bridge
       if (window.__TAURI_INTERNALS__?.invoke) {
@@ -4036,7 +4129,10 @@ export class MenuMijiaWindowsApp {
           get_split_device: false,
           support_smart_home: true,
         })) as Record<string, unknown> | null;
-        if (stale()) return;
+        if (stale()) {
+          if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
+          return;
+        }
         const rawList = Array.isArray(listRes?.["list"]) ? (listRes["list"] as Array<Record<string, unknown>>) : [];
         const rawDev = rawList.find((item) => String(item["did"] ?? "") === dev.id);
         const localIp = typeof rawDev?.["localip"] === "string" ? rawDev["localip"] : "";
@@ -4052,7 +4148,10 @@ export class MenuMijiaWindowsApp {
             app_pubkey: clientPublic,
             support_vendors: "TUTK_CS2_MTP",
           })) as Record<string, unknown> | null;
-          if (stale()) return;
+          if (stale()) {
+            if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
+            return;
+          }
           const vendorObj = (vendorRes?.["vendor"] as Record<string, unknown> | undefined) ?? {};
           const vendorId = Number(vendorObj["vendor"] ?? 4);
           const vendorName = vendorId === 1 ? "tutk" : vendorId === 4 ? "cs2" : String(vendorId);
@@ -4062,7 +4161,10 @@ export class MenuMijiaWindowsApp {
           const sign = typeof vendorRes?.["sign"] === "string" ? vendorRes["sign"] : "";
 
           if (devicePublic && sign) {
-            if (stale()) return;
+            if (stale()) {
+              if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
+              return;
+            }
             const bridge = await window.__TAURI_INTERNALS__.invoke<string>("start_xiaomi_camera_bridge", {
               did: dev.id,
               model: dev.model,
@@ -4081,7 +4183,7 @@ export class MenuMijiaWindowsApp {
               // negotiation's own stop_bridge replaces them and must not be killed.
               if (this.activeLiveCameraId !== dev.id) {
                 invokeTauriVoid("stop_xiaomi_camera_bridge", { did: dev.id });
-                void this.releaseCameraP2PSession(dev);
+                releaseIfStarted();
               }
               return;
             }
@@ -4096,18 +4198,26 @@ export class MenuMijiaWindowsApp {
               return;
             }
             if (h264Name) {
+              releaseIfStarted();
               this.liveCameraStreamURL = h264Name;
               this.liveCameraError = t("实时画面连接失败，请点右上角重新连接");
               this.liveCameraLoading = false;
               this.render();
               return;
             }
+            failureReason = t("本地视频桥接未返回可用流，请检查网络后重试");
+          } else {
+            failureReason = t("该摄像机型号暂不支持自动获取局域网 P2P 密钥，可在下方填写本地 go2rtc / HLS 流地址观看");
           }
+        } else {
+          failureReason = t("未获取到摄像机局域网 IP，请确认电脑与摄像机处于同一局域网");
         }
       }
 
-      this.liveCameraError = t("米家云直连摄像头采用私有 P2P 加密流；可在下方填写本地 go2rtc / HLS 流地址观看实时画面");
+      releaseIfStarted();
+      this.liveCameraError = failureReason ?? t("米家云直连摄像头采用私有 P2P 加密流；可在下方填写本地 go2rtc / HLS 流地址观看实时画面");
     } catch (err) {
+      releaseIfStarted();
       if (!stale()) {
         this.liveCameraError = err instanceof Error ? err.message : String(err);
       }
@@ -4169,7 +4279,10 @@ export class MenuMijiaWindowsApp {
       viewportHtml = `
         <div class="cc-camera-stage is-error" style="padding:16px;text-align:center;">
           <p style="margin-bottom:10px;">${this.escapeHtml(this.liveCameraError ?? t("可配置本地 go2rtc / HLS 流地址观看实时画面"))}</p>
-          <button class="cc-btn-secondary" id="btn-toggle-camera-url">${t("填写 go2rtc / HLS 流地址")}</button>
+          <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+            <button class="cc-btn-secondary" id="btn-toggle-camera-url">${t("填写 go2rtc / HLS 流地址")}</button>
+            <button class="cc-btn-secondary" id="btn-copy-camera-diag">${t("复制诊断")}</button>
+          </div>
         </div>
       `;
     }
@@ -5235,6 +5348,28 @@ export class MenuMijiaWindowsApp {
       });
     });
 
+    this.root.querySelector("#btn-copy-camera-diag")?.addEventListener("click", () => {
+      const dev = this.devices.find((d) => d.id === this.activeLiveCameraId);
+      if (!dev || dev.kind.kind !== "camera") return;
+      const redact = (raw: string) =>
+        raw
+          .replace(/https?:\/\/[^\s"'<>]+/gi, "<redacted-url>")
+          .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<redacted-ip>")
+          .replace(/\b[0-9a-fA-F]{24,}\b/g, "<redacted-token>");
+      const report = [
+        "MenuBarMijia Camera Diagnostics (Windows)",
+        `model: ${dev.model}`,
+        `online: ${dev.isOnline}`,
+        `isOn: ${dev.kind.isOn}`,
+        `connectionMode: ${this.settings.connectionMode}`,
+        `hasCustomURL: ${Boolean(this.cameraStreamURLs[dev.id])}`,
+        `error: ${redact(this.liveCameraError ?? "none")}`,
+      ].join("\n");
+      void navigator.clipboard?.writeText(report).catch(() => {});
+      this.replyBanner = { text: t("已复制脱敏诊断信息"), source: t("摄像机诊断") };
+      this.render();
+    });
+
     this.root.querySelector("#btn-save-camera-url")?.addEventListener("click", () => {
       const id = this.activeLiveCameraId;
       if (!id) return;
@@ -5253,10 +5388,14 @@ export class MenuMijiaWindowsApp {
         }
       } else {
         delete this.cameraStreamURLs[id];
-        this.liveCameraStreamURL = null;
         const dev = this.devices.find((d) => d.id === id);
-        if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.settings.connectionMode === "xiaomiCloud") {
-          void this.resolveCloudCameraStream(dev);
+        this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
+        if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
+          if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+            void this.bridgeHlsStreamToMjpeg(id, this.liveCameraStreamURL);
+          } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
+            void this.resolveCloudCameraStream(dev);
+          }
         }
       }
       this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };

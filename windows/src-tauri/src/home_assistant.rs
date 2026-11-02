@@ -144,6 +144,7 @@ fn validate_call(command: &HaServiceCall) -> Result<(), String> {
             ],
         ),
         ("switch", &["turn_on", "turn_off"]),
+        ("button", &["press"]),
         ("camera", &["turn_on", "turn_off"]),
         ("select", &["select_option"]),
         ("vacuum", &["start", "pause", "return_to_base"]),

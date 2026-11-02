@@ -301,7 +301,9 @@ function buildKind(
       snapshotPath:
         typeof camera?.attributes.entity_picture === "string"
           ? camera.attributes.entity_picture
-          : null,
+          : typeof camera?.attributes.access_token === "string" && camera.entityId
+            ? `/api/camera_proxy/${camera.entityId}?token=${camera.attributes.access_token}`
+            : null,
     };
   } else if (
     (state = find(
@@ -338,13 +340,40 @@ function buildKind(
       ) ??
       temperature ??
       humidity;
-    if (!state) return null;
-    kind = {
-      kind: "sensor",
-      temperature: reading("temperature"),
-      humidity: reading("humidity"),
-      battery: reading("battery"),
-    };
+    if (state) {
+      kind = {
+        kind: "sensor",
+        temperature: reading("temperature"),
+        humidity: reading("humidity"),
+        battery: reading("battery"),
+      };
+    } else {
+      const primaryButtons = entities.filter((entry) => {
+        const entityId = text(entry.entity_id);
+        if (!entityId.startsWith("button.") || entry.entity_category != null) return false;
+        const devClass = states.get(entityId)?.attributes.device_class;
+        if (devClass === "restart" || devClass === "update" || devClass === "identify") return false;
+        const objectId = entityId.slice("button.".length);
+        return !/(?:^|_)(?:reboot|restart|reset|identify|calibrate)(?:_|$)/.test(objectId);
+      });
+      const buttonEntity =
+        primaryButtons.find((entry) => text(entry.entity_id).includes("wake_on_lan")) ??
+        primaryButtons[0];
+      const buttonState = buttonEntity ? states.get(text(buttonEntity.entity_id)) : undefined;
+      if (!buttonState) return null;
+      return {
+        kind: {
+          kind: "plug",
+          switchEntityId: buttonState.entityId,
+          isOn: false,
+          powerWatts: null,
+          energyKwh: null,
+          childLockEntityId: null,
+          isChildLocked: false,
+        },
+        online: buttonState.state !== "unavailable",
+      };
+    }
   }
   return {
     kind,
@@ -387,17 +416,16 @@ export class HomeAssistantSynthesizer {
         "全屋",
       ).trim();
       const roomName =
-        rawRoomName === "小卧室"
-          ? "次卧"
-          : !rawRoomName || rawRoomName === "默认房间"
-            ? "全屋"
-            : rawRoomName;
+        !rawRoomName || rawRoomName === "默认房间"
+          ? "全屋"
+          : rawRoomName;
       const roomIds: Record<string, string> = {
         客厅: "ke_ting",
         书房: "shu_fang",
         卧室: "wo_shi",
-        主卧: "wo_shi",
-        次卧: "xiao_wo_shi",
+        主卧: "zhu_wo",
+        次卧: "ci_wo",
+        小卧室: "xiao_wo_shi",
         厨房: "chu_fang",
         阳台: "yang_tai",
       };
@@ -411,7 +439,7 @@ export class HomeAssistantSynthesizer {
       devices.push({
         id,
         name: cleanName || name.trim(),
-        roomId: roomIds[roomName] ?? (areaId || "other"),
+        roomId: areaId || roomIds[roomName] || "other",
         roomName,
         model,
         isOnline: built.online,
@@ -531,6 +559,7 @@ export function haServiceCall(command: DeviceCommand): HaServiceCall {
     case "setLightPower":
     case "setFanPower":
     case "setSwitch":
+      if (domain === "button") return call("press");
       return call(command.isOn ? "turn_on" : "turn_off");
     case "setLightBrightness":
       return call("turn_on", { brightness_pct: command.percent });

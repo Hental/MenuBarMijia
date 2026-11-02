@@ -334,41 +334,176 @@ extension HomeStore {
         }
     }
 
-    public func undoTurnAllOff() {
-        guard let banner = undoBanner else { return }
+    @discardableResult
+    public func undoTurnAllOff() -> Task<Void, Never>? {
+        guard let banner = undoBanner else { return nil }
         lastAssistantUndo = nil
         undoTimerTask?.cancel()
         self.undoBanner = nil
-        let commands = applyUndoCommands(banner.restoreCommands)
-
-        if let receipt = banner.habitReceipt {
-            var memory = userHabitMemory
-            memory.unrecord(receipt)
-            userHabitMemory = memory
-        }
+        let undoRevision = undoStateRevision
+        let preUndoById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        let applicable = applyUndoCommands(banner.restoreCommands)
 
         let context = controlContextID
-        Task {
-            for cmd in commands {
+        return Task {
+            var failedCommands: [DeviceCommand] = []
+            var failedDeviceIds: Set<String> = []
+            var failedNames: [String] = []
+            for item in applicable {
                 guard context == controlContextID else { return }
-                try? await executeDeviceCommand(cmd)
+                if failedDeviceIds.contains(item.deviceId) {
+                    failedCommands.append(item.command)
+                    continue
+                }
+                do {
+                    try await executeDeviceCommand(item.command)
+                } catch {
+                    failedCommands.append(item.command)
+                    failedDeviceIds.insert(item.deviceId)
+                    if !failedNames.contains(item.deviceName) {
+                        failedNames.append(item.deviceName)
+                    }
+                }
             }
             guard context == controlContextID else { return }
-            showToast(L10n.tr("已恢复关闭前的状态", "Restored previous device states"))
+            if failedCommands.isEmpty {
+                if let receipt = banner.habitReceipt {
+                    var memory = userHabitMemory
+                    memory.unrecord(receipt)
+                    userHabitMemory = memory
+                }
+                showToast(L10n.tr("已恢复关闭前的状态", "Restored previous device states"))
+                return
+            }
+
+            rollbackFailedUndoDevices(failedDeviceIds, applicable: applicable, preUndoById: preUndoById)
+
+            var remainingReceipt: UserHabitMemory.RecordingReceipt?
+            if let receipt = banner.habitReceipt {
+                let (succeededPart, remainingPart) = Self.partitionHabitReceipt(receipt, failedDeviceIds: failedDeviceIds)
+                if let succeededPart {
+                    var memory = userHabitMemory
+                    memory.unrecord(succeededPart)
+                    userHabitMemory = memory
+                }
+                remainingReceipt = remainingPart
+            }
+
+            if undoStateRevision == undoRevision {
+                scheduleUndoBanner(
+                    title: banner.title,
+                    restoreCommands: failedCommands,
+                    previousDevices: banner.previousDevices,
+                    deviceCount: failedDeviceIds.count,
+                    habitReceipt: remainingReceipt,
+                    duration: banner.duration
+                )
+            }
+            let sep = L10n.isEnglish ? ", " : "、"
+            let list = failedNames.joined(separator: sep)
+            showToast(
+                L10n.tr(
+                    "撤销未完成：\(list) 未响应，可再次点击撤销重试",
+                    "Undo incomplete: \(list) did not respond; tap Undo to retry"
+                ),
+                isError: true
+            )
         }
     }
 
-    func applyUndoCommands(_ commands: [DeviceCommand]) -> [DeviceCommand] {
-        var applicable: [DeviceCommand] = []
+    struct UndoApplicableCommand: Sendable {
+        let command: DeviceCommand
+        let deviceId: String
+        let deviceName: String
+        let lockRevision: UInt64
+    }
+
+    func applyUndoCommands(_ commands: [DeviceCommand]) -> [UndoApplicableCommand] {
+        var applicable: [UndoApplicableCommand] = []
         for command in commands {
             for idx in devices.indices {
                 guard let restored = Self.undoEffect(of: command, on: devices[idx]) else { continue }
+                let name = devices[idx].name
                 devices[idx] = restored
-                lockOptimistic(restored.id, duration: .seconds(3.0))
-                applicable.append(command)
+                let rev = lockOptimistic(restored.id, duration: .seconds(3.0))
+                applicable.append(
+                    UndoApplicableCommand(
+                        command: command,
+                        deviceId: restored.id,
+                        deviceName: name,
+                        lockRevision: rev
+                    )
+                )
                 break
             }
         }
         return applicable
+    }
+
+    func rollbackFailedUndoDevices(
+        _ failedDeviceIds: Set<String>,
+        applicable: [UndoApplicableCommand],
+        preUndoById: [String: SmartDevice]
+    ) {
+        var expectedRevisions: [String: UInt64] = [:]
+        for item in applicable {
+            expectedRevisions[item.deviceId] = item.lockRevision
+        }
+        for failedId in failedDeviceIds {
+            guard optimisticLockRevision[failedId] == expectedRevisions[failedId] else { continue }
+            if let pre = preUndoById[failedId],
+               let idx = devices.firstIndex(where: { $0.id == failedId }) {
+                devices[idx] = pre
+            }
+            optimisticLockUntil.removeValue(forKey: failedId)
+        }
+    }
+
+    nonisolated static func partitionHabitReceipt(
+        _ receipt: UserHabitMemory.RecordingReceipt,
+        failedDeviceIds: Set<String>
+    ) -> (succeeded: UserHabitMemory.RecordingReceipt?, remaining: UserHabitMemory.RecordingReceipt?) {
+        if failedDeviceIds.isEmpty {
+            return (receipt, nil)
+        }
+        let succeededEntries = receipt.entries.filter { !failedDeviceIds.contains($0.targetId) }
+        let remainingEntries = receipt.entries.filter { failedDeviceIds.contains($0.targetId) }
+        let succeededSequences = receipt.sequences.filter { !failedDeviceIds.contains($0.targetId) }
+        let remainingSequences = receipt.sequences.filter { failedDeviceIds.contains($0.targetId) }
+
+        let lastRemainingEntry = remainingEntries.last
+        let fallbackLastAction: UserHabitMemory.LastAction? = lastRemainingEntry.flatMap { entry in
+            receipt.recordedLastAction.map { recorded in
+                UserHabitMemory.LastAction(
+                    targetId: entry.targetId,
+                    operationKey: entry.operationKey,
+                    recordedAt: recorded.recordedAt
+                )
+            }
+        }
+        let preserveOnSucceeded = lastRemainingEntry != nil && fallbackLastAction == nil
+
+        let succeeded: UserHabitMemory.RecordingReceipt? =
+            (succeededEntries.isEmpty && succeededSequences.isEmpty)
+            ? nil
+            : UserHabitMemory.RecordingReceipt(
+                entries: succeededEntries,
+                phrase: nil,
+                sequences: succeededSequences,
+                previousLastAction: lastRemainingEntry != nil ? fallbackLastAction : receipt.previousLastAction,
+                recordedLastAction: receipt.recordedLastAction,
+                preserveLastAction: preserveOnSucceeded
+            )
+        let remaining: UserHabitMemory.RecordingReceipt? =
+            (remainingEntries.isEmpty && remainingSequences.isEmpty && receipt.phrase == nil)
+            ? nil
+            : UserHabitMemory.RecordingReceipt(
+                entries: remainingEntries,
+                phrase: receipt.phrase,
+                sequences: remainingSequences,
+                previousLastAction: receipt.previousLastAction,
+                recordedLastAction: fallbackLastAction ?? receipt.recordedLastAction
+            )
+        return (succeeded, remaining)
     }
 }

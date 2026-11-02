@@ -184,6 +184,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         public var phrase: PhraseChange?
         public var sequences: [SequenceChange] = []
         public var previousLastAction: LastAction?
+        public var recordedLastAction: LastAction? = nil
+        public var preserveLastAction: Bool = false
     }
 
     private static let storageKey = "assistant_user_habit_memory_v1"
@@ -356,7 +358,9 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
 
         receipt.previousLastAction = lastAction
         if let last = encoded.last {
-            lastAction = LastAction(targetId: last.targetId, operationKey: last.operationKey, recordedAt: now)
+            let newLast = LastAction(targetId: last.targetId, operationKey: last.operationKey, recordedAt: now)
+            lastAction = newLast
+            receipt.recordedLastAction = newLast
         }
 
         if let raw = utterance?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
@@ -444,7 +448,11 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
             }
         }
 
-        lastAction = receipt.previousLastAction
+        if !receipt.preserveLastAction {
+            if receipt.recordedLastAction == nil || lastAction == receipt.recordedLastAction {
+                lastAction = receipt.previousLastAction
+            }
+        }
         entries.sort { $0.count > $1.count }
         phrases.sort { $0.count > $1.count }
     }

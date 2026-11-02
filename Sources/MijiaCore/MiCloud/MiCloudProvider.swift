@@ -430,6 +430,7 @@ public actor MiCloudProvider: HomeProvider {
             throw MiotCommandError.unsupported("camera")
         }
         try Task.checkCancellation()
+        var failureReason: String?
         if let api,
            let record = devices.first(where: { $0.did == device.id }) ?? devices.first(where: { $0.miotDid == device.id }),
            let spec = specsByModel[record.model] {
@@ -524,7 +525,9 @@ public actor MiCloudProvider: HomeProvider {
                             await stopCameraStream(for: device)
                             throw CancellationError()
                         }
-                        logger.error("Xiaomi camera P2P bridge failed for \(did, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        failureReason = detail
+                        logger.error("Xiaomi camera P2P bridge failed for \(did, privacy: .public): \(detail, privacy: .public)")
                         endpoints = nil
                     }
                     if let endpoints {
@@ -534,7 +537,20 @@ public actor MiCloudProvider: HomeProvider {
                         }
                         return .liveMP4(endpoints.mp4, mjpegFallback: endpoints.mjpeg)
                     }
+                } else {
+                    failureReason = L10n.tr(
+                        "该摄像机型号（\(record.model)）未返回受支持的局域网 P2P 加密协商参数，暂无法直连解码；可通过 Home Assistant 接入或点击右上角 🔗 填写流地址",
+                        "Camera model (\(record.model)) did not return supported LAN P2P parameters; connect via Home Assistant or click 🔗 to set a custom stream URL"
+                    )
                 }
+            } else {
+                failureReason = L10n.tr(
+                    "未能获取摄像机（\(record.model)）的局域网 IP 地址，请确认电脑与摄像机连接在同一路由器/局域网下后重试",
+                    "Could not obtain LAN IP for camera (\(record.model)). Ensure your Mac and camera are on the same local network and retry"
+                )
+            }
+            if startedP2PSession {
+                await stopCameraStream(for: device)
             }
             try await abortIfCancelled()
         }
@@ -547,7 +563,7 @@ public actor MiCloudProvider: HomeProvider {
 
         throw HomeProviderError.serviceCallFailed(
             501,
-            L10n.tr(
+            failureReason ?? L10n.tr(
                 "米家云直连摄像头采用私有 P2P 加密流；可在下方填写本地 go2rtc / HLS 流地址，或接入 Home Assistant 观看实时画面",
                 "Xiaomi Cloud cameras use private P2P streaming; enter a local go2rtc / HLS URL below or connect via Home Assistant"
             )

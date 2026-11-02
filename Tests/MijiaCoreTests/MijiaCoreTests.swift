@@ -745,4 +745,33 @@ struct MijiaCoreTests {
             #expect(store.menuBarText == "24.3°C 51%")
         }
     }
+
+    @Test("DeviceSynthesizer preserves 小卧室 name and keeps 主卧 and 卧室 as separate rooms")
+    func synthesizerPreservesRoomNamesAndAreaIds() {
+        let areas = [
+            HAAreaEntry(area_id: "area_master", name: "主卧"),
+            HAAreaEntry(area_id: "area_bedroom", name: "卧室"),
+            HAAreaEntry(area_id: "area_small", name: "小卧室"),
+        ]
+        let devices = [
+            HADeviceEntry(id: "dev_master", area_id: "area_master", name: "主卧灯", model: "yeelink.light.ceiling20"),
+            HADeviceEntry(id: "dev_bed", area_id: "area_bedroom", name: "卧室灯", model: "yeelink.light.ceiling20"),
+            HADeviceEntry(id: "dev_small", area_id: "area_small", name: "小卧室灯", model: "yeelink.light.ceiling20"),
+        ]
+        let entities = [
+            HAEntityEntry(entity_id: "light.master", device_id: "dev_master"),
+            HAEntityEntry(entity_id: "light.bed", device_id: "dev_bed"),
+            HAEntityEntry(entity_id: "light.small", device_id: "dev_small"),
+        ]
+        let states: [String: HAEntityState] = [
+            "light.master": HAEntityState(entityId: "light.master", state: "on"),
+            "light.bed": HAEntityState(entityId: "light.bed", state: "on"),
+            "light.small": HAEntityState(entityId: "light.small", state: "on"),
+        ]
+
+        let home = DeviceSynthesizer.synthesize(areas: areas, devices: devices, entities: entities, states: states)
+        #expect(home.rooms.count == 3)
+        #expect(home.rooms.map(\.id) == ["area_master", "area_bedroom", "area_small"])
+        #expect(home.rooms.map(\.name) == ["主卧", "卧室", "小卧室"])
+    }
 }

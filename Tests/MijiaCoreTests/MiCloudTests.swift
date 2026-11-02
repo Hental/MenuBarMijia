@@ -1015,4 +1015,12 @@ struct MiCloudClientTests {
         #expect(smartPlug.hasDetailDrawer == true)
         #expect(smartPlug.sfSymbolName == "powerplug.fill")
     }
+
+    @Test("XiaomiCameraBridge desiredGo2RTCConfig omits wildcard CORS origin")
+    func go2rtcConfigOmitsWildcardOrigin() {
+        let config = XiaomiCameraBridge.desiredGo2RTCConfig(ffmpegBin: "/usr/local/bin/ffmpeg")
+        #expect(!config.contains("origin:"))
+        #expect(!config.contains("*"))
+        #expect(config.contains("127.0.0.1:1984"))
+    }
 }

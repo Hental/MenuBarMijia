@@ -1124,6 +1124,103 @@
         "targetId": "dev_desk",
         "operationKey": "power:on"
       }
+    },
+    {
+      "name": "partially undoing a multi-device step keeps the failed device as lastAction and preserves its transition",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": false
+            },
+            {
+              "targetId": "dev_floor",
+              "kind": "power",
+              "value": false
+            }
+          ],
+          "partialUnrecordFailedDeviceIds": [
+            "dev_desk"
+          ]
+        }
+      ],
+      "expectedSequences": [
+        {
+          "afterKey": "dev_ceiling|power:on",
+          "targetId": "dev_desk",
+          "operationKey": "power:off",
+          "count": 1
+        }
+      ],
+      "expectedLastAction": {
+        "targetId": "dev_desk",
+        "operationKey": "power:off"
+      }
+    },
+    {
+      "name": "undoing an earlier step after a newer manual action preserves the newer lastAction",
+      "date": "2026-10-16",
+      "hour": 21,
+      "steps": [
+        {
+          "gapMinutes": null,
+          "intents": [
+            {
+              "targetId": "dev_ceiling",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 5,
+          "intents": [
+            {
+              "targetId": "dev_desk",
+              "kind": "power",
+              "value": true
+            }
+          ]
+        },
+        {
+          "gapMinutes": 1,
+          "intents": [
+            {
+              "targetId": "dev_floor",
+              "kind": "power",
+              "value": true
+            }
+          ],
+          "unrecordStepIndex": 1
+        }
+      ],
+      "expectedSequences": [
+        {
+          "afterKey": "dev_desk|power:on",
+          "targetId": "dev_floor",
+          "operationKey": "power:on",
+          "count": 1
+        }
+      ],
+      "expectedLastAction": {
+        "targetId": "dev_floor",
+        "operationKey": "power:on"
+      }
     }
   ]
 }

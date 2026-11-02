@@ -338,7 +338,9 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
                 }
                 failedAttempts += 1
                 if failedAttempts >= 2, !self.hasLiveVideoFrame, let mjpegFallback {
+                    self.videoPlayer?.stop()
                     self.videoPlayer = nil
+                    self.hasLiveVideoFrame = false
                     self.tearDownPictureInPicture()
                     self.streamSource = .mjpeg(mjpegFallback)
                     self.startMJPEGStream(url: mjpegFallback)
@@ -349,8 +351,10 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
                         "实时画面中断：\(outcome.failure ?? "无数据")",
                         "Live video stopped: \(outcome.failure ?? "no data")"
                     )
-                    self.streamSource = nil
+                    self.videoPlayer?.stop()
                     self.videoPlayer = nil
+                    self.hasLiveVideoFrame = false
+                    self.streamSource = nil
                     self.tearDownPictureInPicture()
                     return
                 }
@@ -377,7 +381,65 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
                 }
                 try? await Task.sleep(for: .milliseconds(900))
             }
+            guard !Task.isCancelled else { return }
+            self.mjpegSession?.invalidateAndCancel()
+            self.mjpegSession = nil
+            self.snapshotImage = nil
+            self.streamSource = nil
+            self.errorMessage = L10n.tr(
+                "实时画面连接中断，请检查摄像机与电脑是否在同一局域网或点击重试",
+                "Live stream disconnected. Check that the camera and Mac are on the same LAN, or click Retry"
+            )
         }
+    }
+
+    public func desensitizedDiagnosticsReport() -> String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x86_64"
+        #endif
+        let backend = store?.homeBackend.rawValue ?? "unknown"
+        let region = store?.homeBackend == .xiaomiCloud ? (store?.miCloudRegion.rawValue ?? "cn") : "n/a"
+        let dev = currentDevice
+        let model = (dev?.model ?? "").isEmpty ? "unknown" : (dev?.model ?? "unknown")
+        let hasStreamEntity: Bool
+        let hasSnapshotPath: Bool
+        let isAwake: Bool
+        if let dev, case .camera(let spec) = dev.kind {
+            hasStreamEntity = !(spec.streamEntityId ?? "").isEmpty
+            hasSnapshotPath = !(spec.snapshotPath ?? "").isEmpty
+            isAwake = spec.isOn
+        } else {
+            hasStreamEntity = false
+            hasSnapshotPath = false
+            isAwake = false
+        }
+        let hasCustomURL = !(store?.cameraCustomStreamURL(for: activeDeviceId ?? "") ?? "").isEmpty
+        let rawError = errorMessage ?? "none"
+        let redactedError = rawError
+            .replacingOccurrences(of: #"\b\d{1,3}(?:\.\d{1,3}){3}\b"#, with: "<ip>", options: .regularExpression)
+            .replacingOccurrences(of: #"https?://[^\s\)]+"#, with: "<url>", options: .regularExpression)
+            .replacingOccurrences(of: #"\b[0-9a-fA-F]{16,}\b"#, with: "<redacted>", options: .regularExpression)
+        return [
+            "MenuBarMijia Camera Diagnostics",
+            "version: \(version) (macOS \(arch))",
+            "backend: \(backend) (region: \(region))",
+            "camera_info: \(model)",
+            "online: \(dev?.isOnline ?? false), awake: \(isAwake)",
+            "stream_entity: \(hasStreamEntity), snapshot_path: \(hasSnapshotPath), custom_url: \(hasCustomURL)",
+            "error: \(redactedError)",
+        ].joined(separator: "\n")
+    }
+
+    public func copyDesensitizedDiagnostics() {
+        let report = desensitizedDiagnosticsReport()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        store?.showToast(
+            L10n.tr("已复制脱敏摄像机诊断报告", "Copied desensitized camera diagnostics")
+        )
     }
 
     private func consumeMJPEGConnection(
@@ -904,6 +966,13 @@ struct CameraLivePanelView: View {
                         controller.reloadStream()
                     } label: {
                         Label(L10n.tr("重试", "Retry"), systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(PillActionButtonStyle(tintColor: .secondary))
+
+                    Button {
+                        controller.copyDesensitizedDiagnostics()
+                    } label: {
+                        Label(L10n.tr("复制诊断", "Copy Diagnostics"), systemImage: "doc.on.clipboard")
                     }
                     .buttonStyle(PillActionButtonStyle(tintColor: .secondary))
                 }

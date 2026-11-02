@@ -79,6 +79,28 @@ fi
 cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/MenuBarMijia_MijiaCore.bundle"
 
 GO2RTC_CACHED="$HOME/Library/Application Support/MenuBarMijia/bin/go2rtc"
+GO2RTC_ARCHS="$(lipo -archs "$GO2RTC_CACHED" 2>/dev/null || true)"
+if ! (printf '%s' "$GO2RTC_ARCHS" | grep -qw "arm64" && printf '%s' "$GO2RTC_ARCHS" | grep -qw "x86_64"); then
+    echo "▶ 正在准备通用架构 go2rtc (arm64 + x86_64, v1.9.15)..."
+    GO2RTC_TMP="$(mktemp -d)"
+    GO2RTC_ARM64_SHA256="d0cf858a71803dce2377423bc830639137ee96c335f88e9912e7f7898374266d"
+    GO2RTC_AMD64_SHA256="7ca6075421b824eebe0383d20bd42a6f6a7ec7591a60931d42290f1d375169b9"
+    if curl -fsSL --retry 2 --max-time 45 "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/go2rtc_mac_arm64.zip" -o "$GO2RTC_TMP/arm64.zip" \
+        && curl -fsSL --retry 2 --max-time 45 "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/go2rtc_mac_amd64.zip" -o "$GO2RTC_TMP/amd64.zip" \
+        && [ "$(shasum -a 256 "$GO2RTC_TMP/arm64.zip" | awk '{print $1}')" = "$GO2RTC_ARM64_SHA256" ] \
+        && [ "$(shasum -a 256 "$GO2RTC_TMP/amd64.zip" | awk '{print $1}')" = "$GO2RTC_AMD64_SHA256" ]; then
+        mkdir -p "$GO2RTC_TMP/arm64" "$GO2RTC_TMP/amd64" "$(dirname "$GO2RTC_CACHED")"
+        ditto -x -k "$GO2RTC_TMP/arm64.zip" "$GO2RTC_TMP/arm64"
+        ditto -x -k "$GO2RTC_TMP/amd64.zip" "$GO2RTC_TMP/amd64"
+        lipo -create "$GO2RTC_TMP/arm64/go2rtc" "$GO2RTC_TMP/amd64/go2rtc" -output "$GO2RTC_CACHED"
+        chmod 755 "$GO2RTC_CACHED"
+        GO2RTC_ARCHS="$(lipo -archs "$GO2RTC_CACHED" 2>/dev/null || true)"
+        echo "✅ 已合成为通用架构 go2rtc ($GO2RTC_ARCHS)"
+    else
+        echo "⚠️ 未能下载通用架构 go2rtc（运行时首次打开摄像机将按需自动补齐）"
+    fi
+    rm -rf "$GO2RTC_TMP"
+fi
 if [ -x "$GO2RTC_CACHED" ]; then
     GO2RTC_ARCHS="$(lipo -archs "$GO2RTC_CACHED" 2>/dev/null || true)"
     if printf '%s' "$GO2RTC_ARCHS" | grep -qw "arm64" && printf '%s' "$GO2RTC_ARCHS" | grep -qw "x86_64"; then

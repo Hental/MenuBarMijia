@@ -121,7 +121,7 @@ struct AuditWave2Tests {
         let banner = try #require(store.undoBanner)
         #expect(banner.habitReceipt != nil)
 
-        store.undoTurnAllOff()
+        await store.undoTurnAllOff()?.value
         #expect(store.userHabitMemory.entries.isEmpty)
         #expect(store.userHabitMemory.phrases.isEmpty)
     }
@@ -215,6 +215,71 @@ struct AuditWave2Tests {
         #expect(memory.entries.count == 1)
         #expect(memory.entries.first?.count == 1)
         #expect(memory.phrases.first?.count == 1)
+    }
+
+    @Test("Partial undo preserves sequence context for failed devices and newer manual controls")
+    func partialUndoPreservesLastActionContext() {
+        var memory = UserHabitMemory()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let t1 = t0.addingTimeInterval(300)
+        let t2 = t1.addingTimeInterval(60)
+        let hallLight = Self.light(id: "hall_light", name: "走廊灯", roomId: "hall", roomName: "走廊", isOn: true)
+        let devices = [Self.studyCeiling, Self.studyDesk, hallLight]
+
+        _ = memory.record(
+            utterance: nil,
+            intents: [DeviceIntent(targetId: hallLight.id, operation: .power(true))],
+            devices: devices,
+            scenes: [],
+            now: t0
+        )
+        guard let batchReceipt = memory.record(
+            utterance: nil,
+            intents: [
+                DeviceIntent(targetId: Self.studyCeiling.id, operation: .power(false)),
+                DeviceIntent(targetId: Self.studyDesk.id, operation: .power(false)),
+            ],
+            devices: devices,
+            scenes: [],
+            now: t1
+        ) else {
+            Issue.record("Expected batch receipt")
+            return
+        }
+
+        let (succeeded, remaining) = HomeStore.partitionHabitReceipt(batchReceipt, failedDeviceIds: [Self.studyCeiling.id])
+        if let succeeded {
+            memory.unrecord(succeeded)
+        }
+        #expect(memory.lastAction?.targetId == Self.studyCeiling.id)
+        #expect(memory.sequences.count == 1)
+        #expect(memory.sequences.first?.targetId == Self.studyCeiling.id)
+
+        if let remaining {
+            memory.unrecord(remaining)
+        }
+        #expect(memory.lastAction?.targetId == hallLight.id)
+        #expect(memory.sequences.isEmpty)
+
+        // Newer manual action completed while undo was pending must not be clobbered.
+        let r1 = memory.record(
+            utterance: nil,
+            intents: [DeviceIntent(targetId: Self.studyCeiling.id, operation: .power(false))],
+            devices: devices,
+            scenes: [],
+            now: t1
+        )
+        _ = memory.record(
+            utterance: nil,
+            intents: [DeviceIntent(targetId: Self.studyDesk.id, operation: .power(true))],
+            devices: devices,
+            scenes: [],
+            now: t2
+        )
+        if let r1 {
+            memory.unrecord(r1)
+        }
+        #expect(memory.lastAction?.targetId == Self.studyDesk.id)
     }
 
     // MARK: - #35: long-running plugs and persisted battery cooldowns

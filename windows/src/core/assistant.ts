@@ -112,11 +112,16 @@ export const IntentValidator = {
     const k = device.kind;
     switch (op.kind) {
       case "power": {
+        if (k.kind === "plug") {
+          if (k.switchEntityId.startsWith("button.") && !op.isOn) {
+            return null;
+          }
+          return op;
+        }
         if (
           k.kind === "light" ||
           k.kind === "climate" ||
           k.kind === "fan" ||
-          k.kind === "plug" ||
           k.kind === "vacuum" ||
           k.kind === "camera"
         ) {
@@ -251,7 +256,12 @@ export const IntentValidator = {
         if (k.kind === "climate")
           return [{ kind: "setClimatePower", entityId: k.entityId, isOn: op.isOn, resumeMode: "cool" }];
         if (k.kind === "fan") return [{ kind: "setFanPower", entityId: k.entityId, isOn: op.isOn }];
-        if (k.kind === "plug") return [{ kind: "setSwitch", entityId: k.switchEntityId, isOn: op.isOn }];
+        if (k.kind === "plug") {
+          if (k.switchEntityId.startsWith("button.")) {
+            return op.isOn ? [{ kind: "setSwitch", entityId: k.switchEntityId, isOn: true }] : [];
+          }
+          return [{ kind: "setSwitch", entityId: k.switchEntityId, isOn: op.isOn }];
+        }
         if (k.kind === "camera") return [{ kind: "setSwitch", entityId: k.entityId, isOn: op.isOn }];
         if (k.kind === "vacuum")
           return [{ kind: "vacuumAction", entityId: k.entityId, action: op.isOn ? "start" : "returnToBase" }];
@@ -1506,6 +1516,53 @@ export interface HabitRecordingReceipt {
   readonly entries: readonly HabitEntryChange[];
   readonly sequences?: readonly HabitSequenceChange[];
   readonly previousLastAction?: HabitLastAction | null;
+  readonly recordedLastAction?: HabitLastAction | null;
+}
+
+export function partitionHabitReceipt(
+  receipt: HabitRecordingReceipt,
+  failedDeviceIds: ReadonlySet<string>,
+): { succeeded: HabitRecordingReceipt | null; remaining: HabitRecordingReceipt | null } {
+  if (failedDeviceIds.size === 0) {
+    return { succeeded: receipt, remaining: null };
+  }
+  const succeededEntries = receipt.entries.filter((entry) => !failedDeviceIds.has(entry.targetId));
+  const remainingEntries = receipt.entries.filter((entry) => failedDeviceIds.has(entry.targetId));
+  const succeededSequences = (receipt.sequences ?? []).filter((seq) => !failedDeviceIds.has(seq.targetId));
+  const remainingSequences = (receipt.sequences ?? []).filter((seq) => failedDeviceIds.has(seq.targetId));
+
+  const lastRemainingEntry = remainingEntries[remainingEntries.length - 1];
+  const fallbackLastAction: HabitLastAction | null | undefined = lastRemainingEntry
+    ? receipt.recordedLastAction
+      ? {
+          targetId: lastRemainingEntry.targetId,
+          operationKey: lastRemainingEntry.operationKey,
+          recordedAtMs: receipt.recordedLastAction.recordedAtMs,
+        }
+      : undefined
+    : receipt.previousLastAction;
+
+  const succeeded: HabitRecordingReceipt | null =
+    succeededEntries.length === 0 && succeededSequences.length === 0
+      ? null
+      : {
+          entries: succeededEntries,
+          sequences: succeededSequences,
+          previousLastAction: fallbackLastAction,
+          recordedLastAction: receipt.recordedLastAction,
+        };
+
+  const remaining: HabitRecordingReceipt | null =
+    remainingEntries.length === 0 && remainingSequences.length === 0
+      ? null
+      : {
+          entries: remainingEntries,
+          sequences: remainingSequences,
+          previousLastAction: receipt.previousLastAction,
+          recordedLastAction: fallbackLastAction ?? receipt.recordedLastAction,
+        };
+
+  return { succeeded, remaining };
 }
 
 export interface HabitSequenceChange {
@@ -1757,10 +1814,13 @@ export class UserHabitMemory {
 
     const previousLastAction = this.lastAction ? { ...this.lastAction } : null;
     const last = encoded[encoded.length - 1];
-    if (last) this.lastAction = { targetId: last.targetId, operationKey: last.operationKey, recordedAtMs: nowMs };
+    const recordedLastAction = last
+      ? { targetId: last.targetId, operationKey: last.operationKey, recordedAtMs: nowMs }
+      : null;
+    if (recordedLastAction) this.lastAction = { ...recordedLastAction };
 
     if (changes.length === 0 && sequenceChanges.length === 0) return null;
-    return { entries: changes, sequences: sequenceChanges, previousLastAction };
+    return { entries: changes, sequences: sequenceChanges, previousLastAction, recordedLastAction };
   }
 
   /** Undoes the exact changes from one `record` call, leaving earlier habits untouched (#34). */
@@ -1807,7 +1867,18 @@ export class UserHabitMemory {
     }
     this.sequences.sort((a, b) => b.count - a.count);
 
-    this.lastAction = receipt.previousLastAction ? { ...receipt.previousLastAction } : null;
+    if (receipt.previousLastAction !== undefined) {
+      const canRestoreLastAction =
+        receipt.recordedLastAction === undefined ||
+        (this.lastAction !== null &&
+          receipt.recordedLastAction !== null &&
+          this.lastAction.targetId === receipt.recordedLastAction.targetId &&
+          this.lastAction.operationKey === receipt.recordedLastAction.operationKey &&
+          this.lastAction.recordedAtMs === receipt.recordedLastAction.recordedAtMs);
+      if (canRestoreLastAction) {
+        this.lastAction = receipt.previousLastAction ? { ...receipt.previousLastAction } : null;
+      }
+    }
   }
 
   topSuggestions(options: {

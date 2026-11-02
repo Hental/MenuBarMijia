@@ -437,7 +437,7 @@ struct GrokBallControl: View {
     @State private var animator = GrokBallAnimator()
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { clock in
+        TimelineView(.animation(minimumInterval: 0.5, paused: !isVisible)) { clock in
             let emotionId = store.grokBallEmotionId(
                 speechListening: SpeechInputController.shared.isListening,
                 isPointerTracking: pointer.position != nil,

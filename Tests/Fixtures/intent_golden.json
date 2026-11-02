@@ -118,6 +118,23 @@
         "humidity": 52,
         "filterLifePercent": 86
       }
+    },
+    {
+      "id": "dev_wol_pc",
+      "name": "书房台式机",
+      "roomId": "study",
+      "roomName": "书房",
+      "model": "Wake on LAN",
+      "isOnline": true,
+      "kind": {
+        "kind": "plug",
+        "switchEntityId": "button.wake_on_lan_pc",
+        "isOn": false,
+        "powerWatts": null,
+        "energyKwh": null,
+        "childLockEntityId": null,
+        "isChildLocked": false
+      }
     }
   ],
   "intentCases": [
@@ -299,6 +316,40 @@
       "expected": [
         { "targetId": "dev_purifier", "kind": "power", "value": true }
       ]
+    },
+    {
+      "utterance": "打开书房台式机",
+      "expected": [
+        { "targetId": "dev_wol_pc", "kind": "power", "value": true }
+      ]
+    },
+    {
+      "utterance": "关闭书房台式机",
+      "expected": null
+    },
+    {
+      "utterance": "关闭书房",
+      "expected": [
+        { "targetId": "dev_ceiling", "kind": "power", "value": false },
+        { "targetId": "dev_desk", "kind": "power", "value": false },
+        { "targetId": "dev_purifier", "kind": "power", "value": false }
+      ]
+    }
+  ],
+  "commandValidationCases": [
+    {
+      "name": "momentary button power on dispatches button press",
+      "intent": { "targetId": "dev_wol_pc", "kind": "power", "value": true },
+      "expectedNormalized": { "targetId": "dev_wol_pc", "kind": "power", "value": true },
+      "expectedExecutable": true,
+      "expectedEntityId": "button.wake_on_lan_pc"
+    },
+    {
+      "name": "momentary button power off is rejected by normalize and command mapper",
+      "intent": { "targetId": "dev_wol_pc", "kind": "power", "value": false },
+      "expectedNormalized": null,
+      "expectedExecutable": false,
+      "expectedEntityId": null
     }
   ],
   "delayCases": [

@@ -96,7 +96,7 @@ struct ManualHabitRecordingTests {
 
     @Test("全屋关灯 quick action records habits and undo rolls them back")
     func quickActionRecordsAndUndoRollsBack() async throws {
-        let (store, mock) = try await makeStore()
+        let (store, _) = try await makeStore()
 
         store.executeQuickAction(.lightsOff)
         // Freeze the banner so a loaded CI cannot expire it mid-test.
@@ -110,7 +110,7 @@ struct ManualHabitRecordingTests {
         #expect(memory.entries.map { "\($0.targetId)|\($0.operationKey)" } == ["dev_ceiling|power:off"])
         #expect(store.undoBanner != nil)
 
-        store.undoTurnAllOff()
+        await store.undoTurnAllOff()?.value
         memory = store.userHabitMemory
         #expect(memory.entries.isEmpty)
     }
@@ -149,7 +149,7 @@ struct ManualHabitRecordingTests {
             "dev_ac|power:off",
         ])
 
-        store.undoTurnAllOff()
+        await store.undoTurnAllOff()?.value
         memory = store.userHabitMemory
         #expect(memory.entries.isEmpty)
     }
@@ -203,5 +203,61 @@ struct ManualHabitRecordingTests {
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(store.userHabitMemory.entries.isEmpty)
+    }
+
+    @Test("undoTurnAllOff rolls back device state, keeps habitReceipt, and re-arms banner when restore fails")
+    func undoTurnAllOffReArmsOnCommandFailure() async throws {
+        let (store, mock) = try await makeStore()
+
+        store.turnAllOff()
+        store.pauseUndoBannerCountdown()
+        for _ in 0..<100 where store.userHabitMemory.entries.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.userHabitMemory.entries.count == 2)
+
+        await mock.setShouldFail(true)
+        let undoTask = store.undoTurnAllOff()
+        await undoTask?.value
+
+        // Because the restore commands failed, devices remain off, habits remain recorded, and the banner is re-armed.
+        #expect(store.devices.first(where: { $0.id == "dev_ceiling" })?.isActiveOn == false)
+        #expect(store.userHabitMemory.entries.count == 2)
+        #expect(store.undoBanner != nil)
+
+        await mock.setShouldFail(false)
+        let retryTask = store.undoTurnAllOff()
+        await retryTask?.value
+        #expect(store.devices.first(where: { $0.id == "dev_ceiling" })?.isActiveOn == true)
+        #expect(store.userHabitMemory.entries.isEmpty)
+        #expect(store.undoBanner == nil)
+    }
+
+    @Test("Partial intent plan only records habits for intents that actually succeeded")
+    func partialPlanOnlyRecordsSucceededIntents() async throws {
+        let offlineLamp = SmartDevice(
+            id: "dev_offline_lamp", name: "书房台灯", roomId: "shu_fang", roomName: "书房",
+            model: "yeelink.light.lamp4", isOnline: false,
+            kind: .light(LightSpec(entityId: "light.offline", isOn: true))
+        )
+        let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.ceiling, offlineLamp], scenes: Self.scenes))
+        let store = HomeStore(provider: mock, defaultsSuiteName: "test.partialhabit.\(UUID().uuidString)")
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let plan = IntentPlan(
+            intents: [
+                DeviceIntent(targetId: "dev_ceiling", operation: .power(false)),
+                DeviceIntent(targetId: "dev_offline_lamp", operation: .power(false)),
+            ],
+            reply: "已关闭灯具",
+            source: .local
+        )
+        _ = await store.executeIntentPlan(plan, recordedUtterance: "关灯", origin: .userInitiated)
+
+        let entries = store.userHabitMemory.entries
+        #expect(entries.map { "\($0.targetId)|\($0.operationKey)" } == ["dev_ceiling|power:off"])
+        #expect(store.userHabitMemory.phrases.isEmpty, "Partial plan must not bind utterance to an incomplete intent list")
     }
 }

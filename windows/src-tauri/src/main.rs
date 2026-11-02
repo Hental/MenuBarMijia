@@ -1047,6 +1047,7 @@ fn hide_panel(app: AppHandle) {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    shutdown_camera_daemons();
     app.exit(0);
 }
 
@@ -1195,7 +1196,17 @@ async fn bridge_hls_camera_stream(did: String, hls_url: String) -> Result<String
         ))
         .send()
         .await;
-    put_stream(&http, &mjpeg_name, &format!("ffmpeg:{}#video=mjpeg", parsed.as_str()))
+    let path_lower = parsed.path().to_ascii_lowercase();
+    let stream_src = if path_lower.contains("/api/camera_proxy")
+        || path_lower.ends_with(".mjpeg")
+        || path_lower.ends_with(".mjpg")
+        || path_lower.ends_with("/stream.mjpeg")
+    {
+        parsed.as_str().to_string()
+    } else {
+        format!("ffmpeg:{}#video=mjpeg", parsed.as_str())
+    };
+    put_stream(&http, &mjpeg_name, &stream_src)
         .await
         .map_err(|e| format!("注册 HLS 转码流失败：{e}"))?;
     Ok(mjpeg_name)
@@ -1242,10 +1253,16 @@ async fn stop_bridge(http: &reqwest::Client, clean_did: &str, names: &[&str]) {
         );
         let _ = http.delete(&url).send().await;
     }
-    if let Ok(mut relays) = CAMERA_RELAYS.lock() {
+    let no_active_relays = if let Ok(mut relays) = CAMERA_RELAYS.lock() {
         if let Some(relay) = relays.remove(clean_did) {
             relay.stop.store(true, Ordering::SeqCst);
         }
+        relays.is_empty()
+    } else {
+        false
+    };
+    if no_active_relays {
+        scrub_persisted_streams_from_config();
     }
 }
 
@@ -1257,11 +1274,111 @@ struct CameraRelay {
 static CAMERA_RELAYS: LazyLock<std::sync::Mutex<HashMap<String, CameraRelay>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// Tracks the go2rtc child process spawned by this application instance so we never
+/// terminate user-started `go2rtc.exe` processes by image name (#97).
+static GO2RTC_PROCESS: LazyLock<std::sync::Mutex<Option<std::process::Child>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
 /// Serializes bridge start/stop end to end: two overlapping starts for the same
 /// camera otherwise interleave their stop_bridge/register sequences and the
 /// newer bridge ends up deleted by the stale one (#97).
 static CAMERA_BRIDGE_LOCK: LazyLock<tauri::async_runtime::Mutex<()>> =
     LazyLock::new(|| tauri::async_runtime::Mutex::new(()));
+
+fn scrub_persisted_streams_from_config() {
+    let Ok(local_app_data) = std::env::var("LOCALAPPDATA").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let cfg_path = local_app_data
+        .join("MenuBarMijia")
+        .join("bin")
+        .join("go2rtc.yaml");
+    let Ok(existing) = std::fs::read_to_string(&cfg_path) else {
+        return;
+    };
+    if !existing.contains("streams:") {
+        return;
+    }
+    let cleaned = format!("{}\n", base_go2rtc_config(&existing));
+    let _ = std::fs::write(&cfg_path, cleaned);
+}
+
+fn shutdown_camera_daemons() {
+    if let Ok(mut relays) = CAMERA_RELAYS.lock() {
+        for (_, relay) in relays.drain() {
+            relay.stop.store(true, Ordering::SeqCst);
+        }
+    }
+    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    scrub_persisted_streams_from_config();
+}
+
+/// The app-owned part of go2rtc.yaml, without the `streams:` section go2rtc appends.
+fn base_go2rtc_config(yaml: &str) -> String {
+    let mut kept = Vec::new();
+    let mut in_streams = false;
+    for line in yaml.split('\n') {
+        let trimmed_cr = line.trim_end_matches('\r');
+        let is_top_level = trimmed_cr
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace());
+        if is_top_level {
+            in_streams = trimmed_cr.starts_with("streams:");
+        }
+        if !in_streams {
+            kept.push(trimmed_cr);
+        }
+    }
+    kept.join("\n").trim().to_string()
+}
+
+fn desired_go2rtc_config(ffmpeg_bin: &str) -> String {
+    format!(
+        "api:\n  listen: 127.0.0.1:1984\nrtsp:\n  listen: 127.0.0.1:8554\nwebrtc:\n  listen: \"\"\nlog:\n  level: info\n  ffmpeg: error\nffmpeg:\n  bin: {ffmpeg_bin}\n"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Go2RtcAction {
+    /// Port 1984 is already served by a compatible go2rtc instance (either ours or another app's).
+    ReuseRunning,
+    /// We spawned the running child and our base config changed; restart only our child PID.
+    RestartOwnedChild,
+    /// An orphan go2rtc from an earlier MenuBarMijia session is running with an older config;
+    /// request `/api/exit` gracefully (never `taskkill /IM`).
+    RequestGracefulExit,
+    /// Port 1984 is not running; spawn our own child process.
+    SpawnFresh,
+}
+
+fn decide_go2rtc_action(
+    running: bool,
+    config_changed: bool,
+    owns_child: bool,
+    has_previous_app_config: bool,
+) -> Go2RtcAction {
+    if !running {
+        return Go2RtcAction::SpawnFresh;
+    }
+    if !config_changed {
+        return Go2RtcAction::ReuseRunning;
+    }
+    if owns_child {
+        return Go2RtcAction::RestartOwnedChild;
+    }
+    if has_previous_app_config {
+        return Go2RtcAction::RequestGracefulExit;
+    }
+    // Another application started go2rtc on 127.0.0.1:1984 before MenuBarMijia ever wrote a config:
+    // reuse its API rather than terminating a user-owned process.
+    Go2RtcAction::ReuseRunning
+}
 
 /// Reuses a live relay so reopening the panel does not renegotiate P2P from scratch.
 fn camera_relay_port(clean_did: &str, cam_ip: std::net::Ipv4Addr) -> Result<u16, String> {
@@ -1289,63 +1406,180 @@ fn urlencoding_simple(s: &str) -> String {
     out
 }
 
+fn resolve_ffmpeg_bin(bin_dir: &std::path::Path) -> String {
+    for candidate in ["ffmpeg-silent.exe", "ffmpeg.exe"] {
+        let p = bin_dir.join(candidate);
+        if p.exists() {
+            return p.to_string_lossy().replace('\\', "/");
+        }
+    }
+    "ffmpeg".to_string()
+}
+
+async fn download_go2rtc_win64(
+    bin_dir: &std::path::Path,
+    exe_path: &std::path::Path,
+) -> Result<(), String> {
+    const DOWNLOAD_URL: &str =
+        "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/go2rtc_win64.zip";
+    const EXPECTED_SHA256: &str =
+        "5b448fc90f15c925406d8da0984301985e385050222c1c2bbdf0a76fe4b1e9cb";
+
+    std::fs::create_dir_all(bin_dir).map_err(|e| format!("创建组件目录失败：{e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(DOWNLOAD_URL).send().await.map_err(|e| {
+        format!(
+            "首次打开摄像机需自动下载流媒体组件 go2rtc，但网络连接失败（{e}）。请检查网络后重试，或手动放入 %LOCALAPPDATA%\\MenuBarMijia\\bin\\go2rtc.exe"
+        )
+    })?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "下载流媒体组件 go2rtc 失败 (HTTP {})，请稍后点击重试",
+            resp.status().as_u16()
+        ));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 go2rtc 组件数据失败：{e}"))?;
+    let actual_sha256 = compute_sha256_hex(&bytes);
+    if actual_sha256 != EXPECTED_SHA256 {
+        return Err("go2rtc 组件 SHA-256 校验未通过，已拒绝加载".to_string());
+    }
+
+    let staging_dir = bin_dir.join(format!("staging-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    std::fs::create_dir_all(&staging_dir).map_err(|e| format!("创建解压目录失败：{e}"))?;
+    let zip_path = staging_dir.join("go2rtc_win64.zip");
+    std::fs::write(&zip_path, &bytes).map_err(|e| format!("写入临时压缩包失败：{e}"))?;
+
+    let status = std::process::Command::new("tar.exe")
+        .args([
+            "-xf",
+            &zip_path.to_string_lossy(),
+            "-C",
+            &staging_dir.to_string_lossy(),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("解压 go2rtc.exe 失败：{e}"))?;
+    let extracted = staging_dir.join("go2rtc.exe");
+    if !status.success() || !extracted.exists() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return Err("解压流媒体组件 go2rtc.exe 失败".to_string());
+    }
+    let _ = std::fs::remove_file(exe_path);
+    std::fs::rename(&extracted, exe_path).map_err(|e| format!("安装 go2rtc.exe 失败：{e}"))?;
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    Ok(())
+}
+
+fn owns_running_go2rtc_child() -> bool {
+    let Ok(mut guard) = GO2RTC_PROCESS.lock() else {
+        return false;
+    };
+    let Some(child) = guard.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(None) => true,
+        _ => {
+            *guard = None;
+            false
+        }
+    }
+}
+
+fn terminate_owned_go2rtc_child() {
+    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 async fn ensure_go2rtc_running() -> Result<(), String> {
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .map_err(|_| "无法读取 LOCALAPPDATA 目录".to_string())?;
     let bin_dir = local_app_data.join("MenuBarMijia").join("bin");
-    let exe_path = bin_dir.join("go2rtc.exe");
-    if !exe_path.exists() {
-        return Err("未找到本地流媒体桥接组件 (%LOCALAPPDATA%\\MenuBarMijia\\bin\\go2rtc.exe)".to_string());
-    }
-
-    // go2rtc spawns ffmpeg for probes and transcodes; the windowless shim keeps those
-    // helper processes off screen and swallows its 5 GPU-probe launches.
-    let ffmpeg_bin = bin_dir.join("ffmpeg-silent.exe").to_string_lossy().replace('\\', "/");
-    let desired = format!(
-        "api:\n  listen: 127.0.0.1:1984\n  origin: \"*\"\nrtsp:\n  listen: 127.0.0.1:8554\nlog:\n  level: info\n  ffmpeg: error\nffmpeg:\n  bin: {ffmpeg_bin}\n"
-    );
-    let cfg_path = bin_dir.join("go2rtc.yaml");
-    let config_changed = std::fs::read_to_string(&cfg_path).unwrap_or_default() != desired;
-    if config_changed {
-        std::fs::write(&cfg_path, &desired).map_err(|e| format!("写入 go2rtc 配置失败：{e}"))?;
-    }
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("创建组件目录失败：{e}"))?;
 
     let http = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_millis(800))
         .build()
         .map_err(|e| e.to_string())?;
-    let running = matches!(
-        http.get("http://127.0.0.1:1984/api").send().await,
-        Ok(resp) if resp.status().is_success()
-    );
+    let probe = || async {
+        matches!(
+            http.get("http://127.0.0.1:1984/api").send().await,
+            Ok(resp) if resp.status().is_success()
+        )
+    };
 
-    if running && !config_changed {
-        return Ok(());
-    }
-    if running {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "go2rtc.exe"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-        std::thread::sleep(Duration::from_millis(350));
+    let ffmpeg_bin = resolve_ffmpeg_bin(&bin_dir);
+    let desired = desired_go2rtc_config(&ffmpeg_bin);
+    let cfg_path = bin_dir.join("go2rtc.yaml");
+    let existing_cfg = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let has_previous_app_config = !existing_cfg.trim().is_empty();
+    let config_changed = base_go2rtc_config(&existing_cfg) != base_go2rtc_config(&desired);
+    if config_changed {
+        std::fs::write(&cfg_path, &desired).map_err(|e| format!("写入 go2rtc 配置失败：{e}"))?;
     }
 
-    std::process::Command::new(&exe_path)
+    let running = probe().await;
+    let owns_child = owns_running_go2rtc_child();
+    match decide_go2rtc_action(running, config_changed, owns_child, has_previous_app_config) {
+        Go2RtcAction::ReuseRunning => return Ok(()),
+        Go2RtcAction::RestartOwnedChild => {
+            terminate_owned_go2rtc_child();
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(100));
+                if !probe().await {
+                    break;
+                }
+            }
+        }
+        Go2RtcAction::RequestGracefulExit => {
+            let _ = http.post("http://127.0.0.1:1984/api/exit").send().await;
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(100));
+                if !probe().await {
+                    break;
+                }
+            }
+            if probe().await {
+                // External user-owned go2rtc that disabled `/api/exit`: reuse it without killing.
+                return Ok(());
+            }
+        }
+        Go2RtcAction::SpawnFresh => {}
+    }
+
+    let exe_path = bin_dir.join("go2rtc.exe");
+    if !exe_path.exists() {
+        download_go2rtc_win64(&bin_dir, &exe_path).await?;
+    }
+
+    let child = std::process::Command::new(&exe_path)
         .arg("-c")
         .arg(&cfg_path)
         .current_dir(&bin_dir)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("启动 go2rtc 失败：{e}"))?;
+    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+        *guard = Some(child);
+    }
 
     for _ in 0..25 {
         std::thread::sleep(Duration::from_millis(120));
-        if let Ok(resp) = http.get("http://127.0.0.1:1984/api").send().await {
-            if resp.status().is_success() {
-                return Ok(());
-            }
+        if probe().await {
+            return Ok(());
         }
     }
     Err("本地流媒体服务 (127.0.0.1:1984) 启动超时".to_string())
@@ -1570,7 +1804,10 @@ fn main() {
                             open_url_in_browser(&url);
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        shutdown_camera_daemons();
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -2033,5 +2270,58 @@ mod tests {
         assert!(elevated_launch_powershell_command(false).contains("-ErrorAction Stop"));
         assert!(elevated_launch_powershell_command(true).contains("msiexec.exe"));
         assert!(elevated_launch_powershell_command(true).contains("-Verb RunAs"));
+    }
+
+    #[test]
+    fn go2rtc_config_omits_wildcard_cors_and_ignores_appended_streams() {
+        let written = desired_go2rtc_config("C:/Users/test/AppData/Local/MenuBarMijia/bin/ffmpeg-silent.exe");
+        assert!(
+            !written.contains("origin:"),
+            "go2rtc config must not expose wildcard CORS to arbitrary web pages: {written}"
+        );
+        assert!(written.contains("listen: 127.0.0.1:1984"));
+        assert!(written.contains("webrtc:\n  listen: \"\""));
+
+        let rewritten_by_go2rtc = format!(
+            "{written}\nstreams:\n  cam_raw_1105610385:\n    - xiaomi://127.0.0.1:5000?client_private=secret\n"
+        );
+        assert_eq!(
+            base_go2rtc_config(&rewritten_by_go2rtc),
+            base_go2rtc_config(&written)
+        );
+        assert_ne!(
+            base_go2rtc_config(&written.replace("1984", "1985")),
+            base_go2rtc_config(&written)
+        );
+    }
+
+    #[test]
+    fn go2rtc_lifecycle_reuses_external_instance_without_killing_it() {
+        // Not running -> spawn our own child
+        assert_eq!(
+            decide_go2rtc_action(false, true, false, false),
+            Go2RtcAction::SpawnFresh
+        );
+        // Running and base config unchanged -> reuse without restarting (even when opening a 2nd camera)
+        assert_eq!(
+            decide_go2rtc_action(true, false, true, true),
+            Go2RtcAction::ReuseRunning
+        );
+        // Another application started go2rtc on 127.0.0.1:1984 before MenuBarMijia ever wrote a config:
+        // must reuse it rather than killing user processes.
+        assert_eq!(
+            decide_go2rtc_action(true, true, false, false),
+            Go2RtcAction::ReuseRunning
+        );
+        // Our own child process is running and base config changed -> restart only our owned child PID
+        assert_eq!(
+            decide_go2rtc_action(true, true, true, true),
+            Go2RtcAction::RestartOwnedChild
+        );
+        // Orphaned MenuBarMijia go2rtc from an earlier session -> request graceful `/api/exit`
+        assert_eq!(
+            decide_go2rtc_action(true, true, false, true),
+            Go2RtcAction::RequestGracefulExit
+        );
     }
 }

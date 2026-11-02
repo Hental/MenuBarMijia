@@ -6,6 +6,7 @@ struct GoldenCorpusTests {
     private struct Corpus: Decodable {
         let devices: [CorpusDevice]
         let intentCases: [IntentCase]
+        let commandValidationCases: [CommandValidationCase]
         let delayCases: [DelayCase]
         let cancelCases: [CancelCase]
         let undoCases: [UndoCase]
@@ -268,6 +269,14 @@ struct GoldenCorpusTests {
     private struct IntentCase: Decodable {
         let utterance: String
         let expected: [ExpectedIntent]?
+    }
+
+    private struct CommandValidationCase: Decodable {
+        let name: String
+        let intent: ExpectedIntent
+        let expectedNormalized: ExpectedIntent?
+        let expectedExecutable: Bool
+        let expectedEntityId: String?
     }
 
     private struct DelayCase: Decodable {
@@ -567,6 +576,17 @@ struct GoldenCorpusTests {
             } else {
                 #expect(LocalIntentParser.parse(item.utterance, devices: devices, scenes: []) == nil, "\(item.utterance)")
             }
+        }
+
+        for item in corpus.commandValidationCases {
+            let decodedIntent = try #require(Self.intent(from: item.intent), "\(item.name)")
+            let device = try #require(devices.first(where: { $0.id == decodedIntent.targetId }), "\(item.name)")
+            let normalized = IntentValidator.normalize(decodedIntent.operation, for: device)
+                .map { Self.encodeIntent(DeviceIntent(targetId: device.id, operation: $0)) }
+            #expect(normalized == item.expectedNormalized, "\(item.name)")
+            let effect = HomeStore.assistantEffect(of: decodedIntent.operation, on: device)
+            #expect((effect != nil) == item.expectedExecutable, "\(item.name)")
+            #expect(effect?.command.targetEntityId == item.expectedEntityId, "\(item.name)")
         }
 
         for item in corpus.delayCases {
@@ -874,6 +894,8 @@ struct GoldenCorpusTests {
         let gapMinutes: Int?
         let intents: [ExpectedIntent]
         let unrecord: Bool?
+        let partialUnrecordFailedDeviceIds: [String]?
+        let unrecordStepIndex: Int?
     }
 
     private struct HabitSequenceDTO: Decodable, Equatable {
@@ -1006,6 +1028,7 @@ struct GoldenCorpusTests {
             let start = try Self.habitCaseDate(date: item.date, hour: item.hour)
             var memory = UserHabitMemory()
             var lastAt = start
+            var stepReceipts: [UserHabitMemory.RecordingReceipt?] = []
             for step in item.steps {
                 let at: Date
                 if let gap = step.gapMinutes {
@@ -1016,8 +1039,18 @@ struct GoldenCorpusTests {
                 lastAt = at
                 let intents = step.intents.compactMap(Self.intent(from:))
                 let receipt = memory.record(utterance: nil, intents: intents, devices: allDevices, scenes: scenes, now: at)
+                stepReceipts.append(receipt)
                 if step.unrecord == true, let receipt {
                     memory.unrecord(receipt)
+                }
+                if let failedIds = step.partialUnrecordFailedDeviceIds, let receipt {
+                    let (succeeded, _) = HomeStore.partitionHabitReceipt(receipt, failedDeviceIds: Set(failedIds))
+                    if let succeeded {
+                        memory.unrecord(succeeded)
+                    }
+                }
+                if let idx = step.unrecordStepIndex, stepReceipts.indices.contains(idx), let earlier = stepReceipts[idx] {
+                    memory.unrecord(earlier)
                 }
             }
             #expect(

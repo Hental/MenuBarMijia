@@ -938,16 +938,20 @@ public enum DeviceSynthesizer {
     public static func normalizeRoomName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "默认房间" { return "全屋" }
-        if trimmed == "小卧室" { return "次卧" }
         return trimmed
     }
 
     static func normalizedRoomId(for roomName: String, fallback: String) -> String {
+        if !fallback.isEmpty && fallback != "other" && !fallback.hasPrefix("mi_room_") {
+            return fallback
+        }
         switch roomName {
         case "客厅": return "ke_ting"
         case "书房": return "shu_fang"
-        case "卧室", "主卧": return "wo_shi"
-        case "次卧", "小卧室": return "xiao_wo_shi"
+        case "卧室": return "wo_shi"
+        case "主卧": return "zhu_wo"
+        case "次卧": return "ci_wo"
+        case "小卧室": return "xiao_wo_shi"
         case "厨房": return "chu_fang"
         case "阳台": return "yang_tai"
         default: return fallback

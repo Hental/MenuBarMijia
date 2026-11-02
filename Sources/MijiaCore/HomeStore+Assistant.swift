@@ -405,18 +405,61 @@ extension HomeStore {
         lastAssistantUndo = nil
         undoTimerTask?.cancel()
         undoBanner = nil
-        let commands = applyUndoCommands(last.restore)
+        let undoRevision = undoStateRevision
+        let preUndoById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        let applicable = applyUndoCommands(last.restore)
+        let context = controlContextID
+        var failedCommands: [DeviceCommand] = []
+        var failedDeviceIds: Set<String> = []
+        var failedNames: [String] = []
+        for item in applicable {
+            guard context == controlContextID else { return }
+            if failedDeviceIds.contains(item.deviceId) {
+                failedCommands.append(item.command)
+                continue
+            }
+            do {
+                try await executeDeviceCommand(item.command)
+            } catch {
+                failedCommands.append(item.command)
+                failedDeviceIds.insert(item.deviceId)
+                if !failedNames.contains(item.deviceName) {
+                    failedNames.append(item.deviceName)
+                }
+            }
+        }
+        guard context == controlContextID else { return }
+        if !failedCommands.isEmpty {
+            rollbackFailedUndoDevices(failedDeviceIds, applicable: applicable, preUndoById: preUndoById)
+            var remainingReceipt: UserHabitMemory.RecordingReceipt?
+            if let receipt = last.habitReceipt {
+                let (succeededPart, remainingPart) = Self.partitionHabitReceipt(receipt, failedDeviceIds: failedDeviceIds)
+                if let succeededPart {
+                    var memory = userHabitMemory
+                    memory.unrecord(succeededPart)
+                    userHabitMemory = memory
+                }
+                remainingReceipt = remainingPart
+            }
+            if undoStateRevision == undoRevision {
+                lastAssistantUndo = (
+                    reply: last.reply,
+                    restore: failedCommands,
+                    previous: last.previous.filter { failedDeviceIds.contains($0.id) },
+                    at: Date(),
+                    habitReceipt: remainingReceipt
+                )
+            }
+            let sep = L10n.isEnglish ? ", " : "、"
+            let list = failedNames.joined(separator: sep)
+            setAssistantState(.failed(L10n.tr("撤销未完成：\(list) 未响应，可再次撤销重试", "Undo incomplete: \(list) did not respond; retry undo")))
+            return
+        }
         if let receipt = last.habitReceipt {
             var memory = userHabitMemory
             memory.unrecord(receipt)
             userHabitMemory = memory
         }
-        let context = controlContextID
-        for cmd in commands {
-            guard context == controlContextID else { return }
-            try? await executeDeviceCommand(cmd)
-        }
-        guard context == controlContextID else { return }
         let what = last.reply.hasPrefix("已") ? String(last.reply.dropFirst()) : last.reply
         setAssistantState(.done(L10n.tr("已撤销：\(what)", "Undone: \(what)")))
     }
@@ -623,12 +666,15 @@ extension HomeStore {
         var offlineNames: [String] = []
         var appliedDeviceIds: Set<String> = []
         var appliedSceneIds: Set<String> = []
+        var succeededIntents: [DeviceIntent] = []
         for outcome in outcomes {
             switch outcome {
-            case .applied(let deviceId, let restore):
+            case .applied(let intent, let deviceId, let restore):
+                succeededIntents.append(intent)
                 restoreCommands.append(contentsOf: restore)
                 if let deviceId { appliedDeviceIds.insert(deviceId) }
-            case .appliedScene(let sceneId):
+            case .appliedScene(let intent, let sceneId):
+                succeededIntents.append(intent)
                 appliedSceneIds.insert(sceneId)
             case .failed(let name):
                 if !failedNames.contains(name) { failedNames.append(name) }
@@ -639,12 +685,17 @@ extension HomeStore {
             }
         }
 
-        // Only explicit user actions become habits; AI-inferred and timer executions do not (#34).
+        // Only explicit user actions become habits, and only for intents that actually succeeded (#34/#113).
         var habitReceipt: UserHabitMemory.RecordingReceipt?
-        if origin.recordsHabits, isHabitLearningEnabled, failedNames.isEmpty,
-           !appliedDeviceIds.isEmpty || !appliedSceneIds.isEmpty {
+        if origin.recordsHabits, isHabitLearningEnabled, !succeededIntents.isEmpty {
             var memory = userHabitMemory
-            habitReceipt = memory.record(utterance: recordedUtterance, intents: plan.intents, devices: devices, scenes: scenes)
+            let utteranceForHabit = (failedNames.isEmpty && offlineNames.isEmpty) ? recordedUtterance : nil
+            habitReceipt = memory.record(
+                utterance: utteranceForHabit,
+                intents: succeededIntents,
+                devices: devices,
+                scenes: scenes
+            )
             userHabitMemory = memory
         }
 
@@ -715,15 +766,15 @@ extension HomeStore {
     }
 
     private enum AssistantApplyOutcome: Sendable {
-        case applied(deviceId: String?, restore: [DeviceCommand])
+        case applied(intent: DeviceIntent, deviceId: String?, restore: [DeviceCommand])
         /// A scene ran: it counts toward habit learning but offers no device undo (#113).
-        case appliedScene(sceneId: String)
+        case appliedScene(intent: DeviceIntent, sceneId: String)
         case failed(String)
         case offline(String)
         case skipped
     }
 
-    private struct AssistantEffect {
+    nonisolated struct AssistantEffect {
         let updated: SmartDevice
         let command: DeviceCommand
         let restore: [DeviceCommand]
@@ -737,7 +788,7 @@ extension HomeStore {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
                 guard context == controlContextID else { return .skipped }
-                return .appliedScene(sceneId: intent.targetId)
+                return .appliedScene(intent: intent, sceneId: intent.targetId)
             } catch {
                 return .failed(scene.name)
             }
@@ -755,7 +806,7 @@ extension HomeStore {
         do {
             try await executeDeviceCommand(effect.command)
             guard context == controlContextID else { return .skipped }
-            return .applied(deviceId: previous.isMomentaryButton ? nil : previous.id, restore: effect.restore)
+            return .applied(intent: intent, deviceId: previous.isMomentaryButton ? nil : previous.id, restore: effect.restore)
         } catch {
             guard context == controlContextID else { return .skipped }
             if !previous.isMomentaryButton {
@@ -813,7 +864,7 @@ extension HomeStore {
         return snapshots.values.allSatisfy { $0.before.kind == $0.after.kind }
     }
 
-    private static func assistantEffect(of operation: IntentOperation, on device: SmartDevice) -> AssistantEffect? {
+    nonisolated static func assistantEffect(of operation: IntentOperation, on device: SmartDevice) -> AssistantEffect? {
         guard let op = IntentValidator.normalize(operation, for: device) else { return nil }
         var updated = device
 

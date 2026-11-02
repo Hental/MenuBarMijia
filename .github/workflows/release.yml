@@ -206,6 +206,11 @@ jobs:
               exit 1
             fi
           done
+          go2rtc_archs="$(lipo -archs "MenuBarMijia.app/Contents/Resources/bin/go2rtc" 2>/dev/null || true)"
+          if ! printf '%s' "$go2rtc_archs" | grep -qw "arm64" || ! printf '%s' "$go2rtc_archs" | grep -qw "x86_64"; then
+            echo "❌ MenuBarMijia.app 缺少通用架构 go2rtc 组件（当前：${go2rtc_archs:-<缺失>}，期望：arm64 + x86_64）" >&2
+            exit 1
+          fi
           if [ -e "dist/MenuBarMijia-${version}.dmg.ed25519.sig" ]; then
             echo "❌ CI 不应产出 Ed25519 签名：私钥必须留在可信机器上（issue #17）。" >&2
             exit 1

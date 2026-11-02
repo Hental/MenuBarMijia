@@ -21,6 +21,7 @@ import {
   endpointAllowsSendingSecrets,
   inferAssistantPreset,
   IntentValidator,
+  partitionHabitReceipt,
   resolveGrokBallEmotion,
 } from "../src/core/assistant.js";
 import {
@@ -1096,6 +1097,13 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
         utterance: string;
         expected: Array<{ targetId: string; kind: string; value: boolean | number | string }> | null;
       }>;
+      commandValidationCases: Array<{
+        name: string;
+        intent: { targetId: string; kind: string; value: boolean | number | string };
+        expectedNormalized: { targetId: string; kind: string; value: boolean | number | string } | null;
+        expectedExecutable: boolean;
+        expectedEntityId: string | null;
+      }>;
       delayCases: Array<{ utterance: string; seconds: number | null; remainder: string | null }>;
       cancelCases: Array<{ utterance: string; isCancel: boolean }>;
       undoCases: Array<{ utterance: string; isUndo: boolean }>;
@@ -1125,6 +1133,35 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
         assert.ok(plan, `Expected plan for: ${item.utterance}`);
         assert.deepEqual(plan.intents.map(encodeOp as never), item.expected, item.utterance);
       }
+    }
+
+    const decodeOp = (item: { targetId: string; kind: string; value: boolean | number | string }): DeviceIntent => {
+      switch (item.kind) {
+        case "power": return { targetId: item.targetId, operation: { kind: "power", isOn: Boolean(item.value) } };
+        case "brightness": return { targetId: item.targetId, operation: { kind: "brightness", percent: Number(item.value) } };
+        case "colorTemperature": return { targetId: item.targetId, operation: { kind: "colorTemperature", kelvin: Number(item.value) } };
+        case "lightEffect": return { targetId: item.targetId, operation: { kind: "lightEffect", effect: String(item.value) } };
+        case "hvacMode": return { targetId: item.targetId, operation: { kind: "hvacMode", mode: String(item.value) } };
+        case "targetTemperature": return { targetId: item.targetId, operation: { kind: "targetTemperature", celsius: Number(item.value) } };
+        case "fanSpeed": return { targetId: item.targetId, operation: { kind: "fanSpeed", speed: String(item.value) } };
+        case "oscillation": return { targetId: item.targetId, operation: { kind: "oscillation", enabled: Boolean(item.value) } };
+        default: throw new Error(`Unknown kind: ${item.kind}`);
+      }
+    };
+
+    for (const item of corpus.commandValidationCases) {
+      const intent = decodeOp(item.intent);
+      const dev = corpus.devices.find((d) => d.id === intent.targetId);
+      assert.ok(dev, item.name);
+      const normalized = IntentValidator.normalize(intent.operation, dev);
+      assert.deepEqual(
+        normalized ? encodeOp({ targetId: dev.id, operation: normalized as unknown as Record<string, unknown> }) : null,
+        item.expectedNormalized,
+        item.name,
+      );
+      const cmds = IntentValidator.commandsForIntent(intent, dev);
+      assert.equal(cmds.length > 0, item.expectedExecutable, item.name);
+      assert.equal(cmds[0]?.entityId ?? null, item.expectedEntityId, item.name);
     }
 
     for (const item of corpus.delayCases) {
@@ -1821,6 +1858,8 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
         gapMinutes: number | null;
         intents: Array<{ targetId: string; kind: string; value: unknown }>;
         unrecord?: boolean;
+        partialUnrecordFailedDeviceIds?: string[];
+        unrecordStepIndex?: number;
       }>;
       expectedSequences: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>;
       expectedLastAction: { targetId: string; operationKey: string };
@@ -1949,11 +1988,21 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
       const start = caseDate(item.date, item.hour);
       const memory = new UserHabitMemory();
       let lastAt = start;
+      const stepReceipts: Array<ReturnType<UserHabitMemory["record"]>> = [];
       for (const step of item.steps) {
         const at = step.gapMinutes !== null ? new Date(lastAt.getTime() + step.gapMinutes * 60_000) : start;
         lastAt = at;
         const receipt = memory.record(step.intents.map(toIntent), corpus.devices, corpus.scenes, at);
+        stepReceipts.push(receipt);
         if (step.unrecord && receipt) memory.unrecord(receipt);
+        if (step.partialUnrecordFailedDeviceIds && receipt) {
+          const { succeeded } = partitionHabitReceipt(receipt, new Set(step.partialUnrecordFailedDeviceIds));
+          if (succeeded) memory.unrecord(succeeded);
+        }
+        if (step.unrecordStepIndex !== undefined) {
+          const earlier = stepReceipts[step.unrecordStepIndex];
+          if (earlier) memory.unrecord(earlier);
+        }
       }
       assert.deepEqual(
         memory.sequences.map((s) => ({ afterKey: s.afterKey, targetId: s.targetId, operationKey: s.operationKey, count: s.count })),
@@ -2364,6 +2413,54 @@ describe("Home Assistant snapshot boundary", () => {
     assert.ok(parsedCam?.kind.kind === "camera");
     assert.equal(parsedCam.kind.snapshotPath, null);
   });
+  it("preserves 小卧室 room name, keeps 主卧 and 卧室 distinct by area_id, and synthesizes standalone button.* as Wake-on-LAN action", () => {
+    const snapshot = {
+      areas: [
+        { area_id: "area_master", name: "主卧" },
+        { area_id: "area_bedroom", name: "卧室" },
+        { area_id: "area_small", name: "小卧室" },
+      ],
+      devices: [
+        { id: "dev_master", name: "主卧灯", area_id: "area_master", model: "test.light" },
+        { id: "dev_bed", name: "卧室灯", area_id: "area_bedroom", model: "test.light" },
+        { id: "dev_small", name: "小卧室灯", area_id: "area_small", model: "test.light" },
+        { id: "dev_wol", name: "书房电脑", area_id: "area_small", model: "wake_on_lan" },
+      ],
+      entities: [
+        { entity_id: "light.master", device_id: "dev_master" },
+        { entity_id: "light.bed", device_id: "dev_bed" },
+        { entity_id: "light.small", device_id: "dev_small" },
+        { entity_id: "button.pc_wake_on_lan", device_id: "dev_wol" },
+      ],
+      states: [
+        { entity_id: "light.master", state: "on", attributes: {} },
+        { entity_id: "light.bed", state: "on", attributes: {} },
+        { entity_id: "light.small", state: "on", attributes: {} },
+        { entity_id: "button.pc_wake_on_lan", state: "unknown", attributes: {} },
+      ],
+    };
+    const home = HomeAssistantSynthesizer.synthesize(snapshot);
+    assert.deepEqual(
+      home.rooms.map((room) => [room.id, room.name]),
+      [
+        ["area_master", "主卧"],
+        ["area_bedroom", "卧室"],
+        ["area_small", "小卧室"],
+      ],
+    );
+    const wol = home.devices.find((device) => device.id === "dev_wol");
+    assert.ok(wol);
+    assert.equal(wol.isOnline, true);
+    assert.equal(wol.kind.kind, "plug");
+    if (wol.kind.kind === "plug") {
+      assert.equal(wol.kind.switchEntityId, "button.pc_wake_on_lan");
+      assert.equal(wol.kind.isOn, false);
+      assert.deepEqual(
+        haServiceCall({ kind: "setSwitch", entityId: wol.kind.switchEntityId, isOn: true }),
+        { domain: "button", service: "press", entity_id: "button.pc_wake_on_lan", data: {} },
+      );
+    }
+  });
 });
 
 describe("Cross-platform GrokBall emotion & radial stage corpus (#114)", () => {
@@ -2401,5 +2498,83 @@ describe("Cross-platform GrokBall emotion & radial stage corpus (#114)", () => {
       });
       assert.equal(actual, item.expectedEmotionId, item.name);
     }
+  });
+});
+
+describe("Partial undo sequence context preservation", () => {
+  it("preserves lastAction for failed devices or newer manual controls during partial undo", () => {
+    const devA: SmartDevice = {
+      id: "dev_a",
+      name: "吸顶灯",
+      roomId: "study",
+      roomName: "书房",
+      model: "yeelink.light.ceiling1",
+      isOnline: true,
+      kind: { kind: "light", entityId: "light.a", isOn: true, brightnessPercent: 80, colorTempKelvin: null, minKelvin: 2700, maxKelvin: 6500, availableEffects: [], currentEffect: null },
+    };
+    const devB: SmartDevice = {
+      id: "dev_b",
+      name: "台灯",
+      roomId: "study",
+      roomName: "书房",
+      model: "yeelink.light.lamp1",
+      isOnline: true,
+      kind: { kind: "light", entityId: "light.b", isOn: true, brightnessPercent: 60, colorTempKelvin: null, minKelvin: 2700, maxKelvin: 6500, availableEffects: [], currentEffect: null },
+    };
+    const devC: SmartDevice = {
+      id: "dev_c",
+      name: "走廊灯",
+      roomId: "hall",
+      roomName: "走廊",
+      model: "yeelink.light.strip1",
+      isOnline: true,
+      kind: { kind: "light", entityId: "light.c", isOn: false, brightnessPercent: null, colorTempKelvin: null, minKelvin: 2700, maxKelvin: 6500, availableEffects: [], currentEffect: null },
+    };
+
+    const t0 = new Date("2026-10-16T21:00:00Z");
+    const t1 = new Date("2026-10-16T21:05:00Z");
+    const t2 = new Date("2026-10-16T21:06:00Z");
+
+    const memory = new UserHabitMemory();
+    memory.record([{ targetId: "dev_c", operation: { kind: "power", isOn: true } }], [devA, devB, devC], [], t0);
+    const batchReceipt = memory.record(
+      [
+        { targetId: "dev_a", operation: { kind: "power", isOn: false } },
+        { targetId: "dev_b", operation: { kind: "power", isOn: false } },
+      ],
+      [devA, devB, devC],
+      [],
+      t1,
+    );
+    assert.ok(batchReceipt);
+
+    // Partial undo: dev_b restores, dev_a fails. lastAction should fall back to dev_a (the failed device), not null.
+    const { succeeded, remaining } = partitionHabitReceipt(batchReceipt, new Set(["dev_a"]));
+    assert.ok(succeeded);
+    assert.ok(remaining);
+    memory.unrecord(succeeded);
+    assert.equal(memory.lastAction?.targetId, "dev_a");
+    assert.equal(memory.lastAction?.operationKey, "power:off");
+    assert.equal(memory.sequences.length, 1);
+    assert.equal(memory.sequences[0]?.targetId, "dev_a");
+
+    // Retrying the remaining receipt restores the original previousLastAction (dev_c).
+    memory.unrecord(remaining);
+    assert.equal(memory.lastAction?.targetId, "dev_c");
+    assert.equal(memory.lastAction?.operationKey, "power:on");
+    assert.equal(memory.sequences.length, 0);
+
+    // If a newer manual control happened while undo was pending, unrecord does not overwrite it.
+    const secondReceipt = memory.record(
+      [{ targetId: "dev_a", operation: { kind: "power", isOn: false } }],
+      [devA, devB, devC],
+      [],
+      t1,
+    );
+    assert.ok(secondReceipt);
+    memory.record([{ targetId: "dev_b", operation: { kind: "power", isOn: true } }], [devA, devB, devC], [], t2);
+    memory.unrecord(secondReceipt);
+    assert.equal(memory.lastAction?.targetId, "dev_b");
+    assert.equal(memory.lastAction?.operationKey, "power:on");
   });
 });

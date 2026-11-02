@@ -193,7 +193,14 @@ public final class HomeStore {
     }
 
     public private(set) var toastNotice: ToastNotice?
-    public internal(set) var undoBanner: UndoBanner?
+    public internal(set) var undoBanner: UndoBanner? {
+        didSet {
+            if undoBanner != nil {
+                undoStateRevision &+= 1
+            }
+        }
+    }
+    var undoStateRevision: UInt64 = 0
     public var onSafetyAlert: ((SafetyAlert) -> Void)?
     public var onGlobalHotkeyPreferenceChanged: ((Bool) -> Void)?
 
@@ -244,6 +251,7 @@ public final class HomeStore {
     var undoTimerTask: Task<Void, Never>?
     private var toastTimerTask: Task<Void, Never>?
     var optimisticLockUntil: [String: ContinuousClock.Instant] = [:]
+    var optimisticLockRevision: [String: UInt64] = [:]
     public static let deviceAliasesKey = "device_aliases"
     var rawDeviceNames: [String: String] = [:]
 
@@ -410,8 +418,12 @@ public final class HomeStore {
         }
     }
 
-    func lockOptimistic(_ deviceId: String, duration: Duration) {
+    @discardableResult
+    func lockOptimistic(_ deviceId: String, duration: Duration) -> UInt64 {
+        let rev = (optimisticLockRevision[deviceId] ?? 0) &+ 1
+        optimisticLockRevision[deviceId] = rev
         optimisticLockUntil[deviceId] = ContinuousClock.now.advanced(by: duration)
+        return rev
     }
 
     // MARK: - Assistant Commands & Personalized Jev Context
@@ -462,7 +474,13 @@ public final class HomeStore {
         previous: [SmartDevice],
         at: Date,
         habitReceipt: UserHabitMemory.RecordingReceipt?
-    )?
+    )? {
+        didSet {
+            if lastAssistantUndo != nil {
+                undoStateRevision &+= 1
+            }
+        }
+    }
     public var lastAssistantActionAt: Date? { lastAssistantUndo?.at }
     /// How long a spoken "撤销" can still reach back.
     static let voiceUndoWindow: TimeInterval = 10 * 60

@@ -139,6 +139,37 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         if let existing = relays.removeValue(forKey: cleanDid) {
             existing.stopBox.stop()
         }
+        if relays.isEmpty {
+            Self.scrubPersistedStreamsFromConfig()
+        }
+    }
+
+    private static func scrubPersistedStreamsFromConfig() {
+        let cfgURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MenuBarMijia/bin/go2rtc.yaml")
+        guard let existing = try? String(contentsOf: cfgURL, encoding: .utf8),
+              existing.contains("streams:") else { return }
+        let cleaned = baseConfig(existing) + "\n"
+        try? cleaned.write(to: cfgURL, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cfgURL.path)
+    }
+
+    static func desiredGo2RTCConfig(ffmpegBin: String) -> String {
+        // `webrtc: listen: ""` keeps go2rtc from opening port 8555 on every LAN interface;
+        // omitting `origin: "*"` blocks cross-origin browser pages from reading `/api/streams`.
+        """
+        api:
+          listen: 127.0.0.1:1984
+        rtsp:
+          listen: 127.0.0.1:8554
+        webrtc:
+          listen: ""
+        log:
+          level: info
+          ffmpeg: error
+        ffmpeg:
+          bin: \(ffmpegBin)
+        """
     }
 
     private func putStream(session: URLSession, name: String, src: String) async throws {
@@ -166,37 +197,19 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
     }
 
     private func ensureGo2RTCRunning() async throws {
-        guard let exePath = Self.locateGo2RTCBinary() else {
-            throw HomeProviderError.serviceCallFailed(
-                501,
-                L10n.tr(
-                    "未找到本地流媒体组件 go2rtc（可放入 ~/Library/Application Support/MenuBarMijia/bin/go2rtc）",
-                    "Local streaming helper go2rtc not found"
-                )
-            )
-        }
-
         let appSupportBin = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MenuBarMijia/bin", isDirectory: true)
         try FileManager.default.createDirectory(at: appSupportBin, withIntermediateDirectories: true)
 
+        let exePath: String
+        if let found = Self.locateGo2RTCBinary() {
+            exePath = found
+        } else {
+            exePath = try await Self.downloadGo2RTCBinary(into: appSupportBin)
+        }
+
         let ffmpegBin = Self.locateFFmpegBinary()
-        // `webrtc: listen: ""` keeps go2rtc from opening port 8555 on every LAN interface;
-        // the app only talks to it over loopback.
-        let desiredConfig = """
-        api:
-          listen: 127.0.0.1:1984
-          origin: "*"
-        rtsp:
-          listen: 127.0.0.1:8554
-        webrtc:
-          listen: ""
-        log:
-          level: info
-          ffmpeg: error
-        ffmpeg:
-          bin: \(ffmpegBin)
-        """
+        let desiredConfig = Self.desiredGo2RTCConfig(ffmpegBin: ffmpegBin)
         let cfgURL = appSupportBin.appendingPathComponent("go2rtc.yaml")
         let existingConfig = (try? String(contentsOf: cfgURL, encoding: .utf8)) ?? ""
         // go2rtc appends every API-registered stream to its config file, so only the part
@@ -206,6 +219,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         if configChanged {
             try desiredConfig.write(to: cfgURL, atomically: true, encoding: .utf8)
         }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cfgURL.path)
 
         let probeSession = Self.makeLocalHTTPClient(timeout: 0.8)
         defer { probeSession.invalidateAndCancel() }
@@ -223,21 +237,29 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         if isRunning {
             if let proc = go2rtcProcess, proc.isRunning {
                 proc.terminate()
-            } else if let exitURL = URL(string: "http://127.0.0.1:1984/api/exit") {
+            } else if !existingConfig.isEmpty, let exitURL = URL(string: "http://127.0.0.1:1984/api/exit") {
                 // A daemon left by an earlier app launch: ask it to quit instead of starting a
                 // second copy that cannot bind the API port.
                 var req = URLRequest(url: exitURL)
                 req.httpMethod = "POST"
                 _ = try? await probeSession.data(for: req)
+            } else {
+                // Another application already owns a go2rtc instance on 127.0.0.1:1984; reuse it
+                // rather than killing user processes.
+                return
             }
             for _ in 0..<20 {
                 try? await Task.sleep(for: .milliseconds(100))
                 if await !probe() { break }
             }
+            if await probe() {
+                return
+            }
         }
 
         let logURL = appSupportBin.appendingPathComponent("go2rtc.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: logURL.path)
         let logHandle = try? FileHandle(forWritingTo: logURL)
 
         let proc = Process()
@@ -256,6 +278,87 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
             }
         }
         throw HomeProviderError.serviceCallFailed(504, L10n.tr("本地流媒体服务 (127.0.0.1:1984) 启动超时", "Local streaming service (127.0.0.1:1984) timed out starting"))
+    }
+
+    private static func downloadGo2RTCBinary(into appSupportBin: URL) async throws -> String {
+        #if arch(arm64)
+        let assetName = "go2rtc_mac_arm64.zip"
+        let expectedSHA256 = "d0cf858a71803dce2377423bc830639137ee96c335f88e9912e7f7898374266d"
+        #else
+        let assetName = "go2rtc_mac_amd64.zip"
+        let expectedSHA256 = "7ca6075421b824eebe0383d20bd42a6f6a7ec7591a60931d42290f1d375169b9"
+        #endif
+        guard let downloadURL = URL(string: "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/\(assetName)") else {
+            throw HomeProviderError.serviceCallFailed(500, "Invalid go2rtc download URL")
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 60
+        let session = URLSession(configuration: cfg)
+        defer { session.invalidateAndCancel() }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(from: downloadURL)
+        } catch {
+            throw HomeProviderError.serviceCallFailed(
+                503,
+                L10n.tr(
+                    "首次使用摄像机需自动下载本地流媒体桥接组件 go2rtc，但网络连接失败（\(error.localizedDescription)）。请检查网络后点击重试，或放入 ~/Library/Application Support/MenuBarMijia/bin/go2rtc",
+                    "Failed to download local streaming helper go2rtc (\(error.localizedDescription)). Check your network and retry."
+                )
+            )
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 502
+            throw HomeProviderError.serviceCallFailed(
+                code,
+                L10n.tr(
+                    "下载本地流媒体组件 go2rtc 失败 (HTTP \(code))，请稍后点击重试",
+                    "Failed to download local streaming helper go2rtc (HTTP \(code))"
+                )
+            )
+        }
+        let actualSHA256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard actualSHA256 == expectedSHA256 else {
+            throw HomeProviderError.serviceCallFailed(
+                502,
+                L10n.tr(
+                    "本地流媒体组件 go2rtc 校验和不一致，已拒绝加载",
+                    "go2rtc archive SHA-256 verification failed"
+                )
+            )
+        }
+
+        let stagingDir = appSupportBin.appendingPathComponent("staging-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stagingDir) }
+
+        let zipURL = stagingDir.appendingPathComponent(assetName)
+        try data.write(to: zipURL, options: .atomic)
+
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", zipURL.path, stagingDir.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+
+        let extractedURL = stagingDir.appendingPathComponent("go2rtc")
+        guard unzip.terminationStatus == 0, FileManager.default.fileExists(atPath: extractedURL.path) else {
+            throw HomeProviderError.serviceCallFailed(
+                500,
+                L10n.tr("解压流媒体组件 go2rtc 失败", "Failed to extract go2rtc binary")
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: extractedURL.path)
+
+        let targetURL = appSupportBin.appendingPathComponent("go2rtc")
+        if FileManager.default.fileExists(atPath: targetURL.path) {
+            try? FileManager.default.removeItem(at: targetURL)
+        }
+        try FileManager.default.moveItem(at: extractedURL, to: targetURL)
+        return targetURL.path
     }
 
     /// The app-owned part of go2rtc.yaml, without the `streams:` section go2rtc appends.
