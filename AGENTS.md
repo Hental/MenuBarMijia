@@ -42,3 +42,19 @@ CI 的快照比对以 CI 录制的结果为准。本机渲染漂移时，用 `ba
 - `git worktree list` 里登记给其他会话的分支（如 Codex 的 `wt/dev` 工作树）归该代理所有：审计只读，不改它的文件。
 - 接管前先确认对方已安静：无新提交且 `git status` 干净。对方仍在迭代时，在自己的分支副本上完成改动再推回。
 - 对方提交在你审计途中落地，就按最新提交重读后再下结论，不基于旧快照。
+
+## Cursor Cloud specific instructions
+
+Cloud agents are Linux. `scripts/build_app.sh`, `scripts/install_local_app.sh`, and a repo-root `swift test` need the macOS SDK (CI uses macos-26). The Windows Tauri installer (`cargo test`, `npx tauri build`) stays on Windows CI.
+
+On Linux, `bash scripts/check.sh --skip-snapshots` (the pre-commit hook) runs `scripts/linux-check/run.sh` instead of `swift test`. That is the same MijiaCore suite as CI's `linux-core` job (Swift 6.1). It still runs the Windows frontend tests when `windows/node_modules` is present.
+
+Other Linux checks:
+
+- `bash scripts/check.sh --lint-only` — secret scan and mechanical lints only.
+- `bash scripts/test_nas_setup.sh` — NAS packaging safety. It stubs network commands; no NAS host is required.
+- `npm ci --prefix windows`, then `npm test --prefix windows` and `npm run build --prefix windows` — Windows frontend (Node 22). `npm run build` is not part of the pre-commit hook.
+
+`npm run dev --prefix windows` serves the tray UI at port 1420 (`strictPort`). The dev server is started on boot. First launch shows onboarding; “Preview the demo” / “先看演示预览” opens the offline demo home, and clicking a device card toggles it. Mi Cloud QR login and Home Assistant need a real account and are not part of this setup.
+
+Swift's clang selects the newest GCC. This image has GCC 14, so `libstdc++-14-dev` must be installed or `swift-crypto` fails with `cstdio` file not found. The environment install script installs Swift 6.1.3 and that package. No secrets are required for the checks above.
