@@ -18,7 +18,7 @@ Read `CODING_STANDARDS.md` when reviewing diffs (`/code-review`) or modifying sy
 
 ### Build & verification
 
-Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`. Run `bash scripts/build_app.sh` to package, sign, and restart `MenuBarMijia.app`. Run `swift scripts/generate_app_icon.swift` when modifying `Resources/AppIcon/AppIcon-*.svg` to regenerate macOS `.icns`, `Assets.car`, README logos, and Windows Tauri icons.
+Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`. On this Mac the renderer never matches the CI-recorded snapshot baselines, so use `bash scripts/check.sh --skip-snapshots` for a green local gate; CI still records and compares them. The pre-commit hook runs the same snapshot-skipping gate. Run `bash scripts/install_local_app.sh` to build, verify, and install into the bundle the user launches (it keeps the previous version for rollback); `bash scripts/build_app.sh` only packages the bundle inside the worktree. Run `swift scripts/generate_app_icon.swift` when modifying `Resources/AppIcon/AppIcon-*.svg` to regenerate macOS `.icns`, `Assets.car`, README logos, and Windows Tauri icons.
 
 本机存在已知的 `SnapshotTests` 渲染漂移：干净 HEAD 上也同样失配，`bash scripts/check.sh` 会因此变红。本地提交可用 `--no-verify`，以 CI 的 macos job 为准；用 `bash scripts/snapshot-drift-check.sh` 甄别本次改动是否**新增**了失配（输出为空即只有既有漂移）。
 

@@ -4,9 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [ -d "$ROOT/.git/hooks" ] && [ ! -e "$ROOT/.git/hooks/pre-commit" ]; then
-    ln -s ../../scripts/check.sh "$ROOT/.git/hooks/pre-commit" 2>/dev/null || true
-fi
+# scripts/check.sh installs the shared pre-commit hook; keeping one owner avoids a stale link.
 
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo 1.0.0)"
 BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"

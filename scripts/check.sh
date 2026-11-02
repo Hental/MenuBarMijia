@@ -5,8 +5,32 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT_DIR"
 
-if [ -d "$ROOT_DIR/.git/hooks" ] && [ ! -e "$ROOT_DIR/.git/hooks/pre-commit" ]; then
-    ln -s ../../scripts/check.sh "$ROOT_DIR/.git/hooks/pre-commit" 2>/dev/null || true
+LINT_ONLY=0
+SKIP_SNAPSHOTS=0
+for argument in "$@"; do
+    case "$argument" in
+        --lint-only) LINT_ONLY=1 ;;
+        --skip-snapshots) SKIP_SNAPSHOTS=1 ;;
+        *)
+            echo "❌ 未知参数：${argument}（可用：--lint-only --skip-snapshots）" >&2
+            exit 2
+            ;;
+    esac
+done
+
+# The hook lives in the shared git directory, so every worktree gets the same gate.
+GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+case "$GIT_COMMON_DIR" in
+    "") ;;
+    /*) ;;
+    *) GIT_COMMON_DIR="$ROOT_DIR/$GIT_COMMON_DIR" ;;
+esac
+if [ -n "$GIT_COMMON_DIR" ] && [ -d "$GIT_COMMON_DIR/hooks" ]; then
+    HOOK_PATH="$GIT_COMMON_DIR/hooks/pre-commit"
+    HOOK_SOURCE="$ROOT_DIR/scripts/hooks/pre-commit"
+    if [ -f "$HOOK_SOURCE" ] && [ "$(readlink "$HOOK_PATH" 2>/dev/null || true)" != "$HOOK_SOURCE" ]; then
+        ln -sfn "$HOOK_SOURCE" "$HOOK_PATH" 2>/dev/null || true
+    fi
 fi
 
 search_matches() {
@@ -126,13 +150,20 @@ if len(set(keys.values())) != 1:
 PY
 fi
 
-if [ "${1:-}" = "--lint-only" ]; then
+if [ "$LINT_ONLY" = "1" ]; then
     echo "✅ 密钥与机械性编码规范检查通过！"
     exit 0
 fi
 
-echo "🧪 [3/4] 运行 Swift 单元测试 (swift test) 与双端黄金语料校验..."
-swift test
+if [ "$SKIP_SNAPSHOTS" = "1" ]; then
+    # The local macOS renderer drifts from the CI-recorded baselines on every run, so a local gate
+    # that includes SnapshotTests can never pass. CI still records and compares the baselines.
+    echo "🧪 [3/4] 运行 Swift 单元测试（跳过快照）与双端黄金语料校验..."
+    swift test --skip SnapshotTests
+else
+    echo "🧪 [3/4] 运行 Swift 单元测试 (swift test) 与双端黄金语料校验..."
+    swift test
+fi
 if [ -x "windows/node_modules/.bin/tsx" ]; then
     (cd windows && npm test && npm run typecheck)
 fi

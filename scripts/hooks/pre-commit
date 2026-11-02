@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Local commit gate. This machine's macOS renderer never matches the CI-recorded snapshot
+# baselines, so the hook skips only SnapshotTests; CI still records and compares them.
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+exec bash "$ROOT_DIR/scripts/check.sh" --skip-snapshots

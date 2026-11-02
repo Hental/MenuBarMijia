@@ -1,6 +1,7 @@
 # Swift Package Manager & Xcode
 .build/
 .swiftpm/
+/Package.resolved
 Packages/
 DerivedData/
 Package.resolved
