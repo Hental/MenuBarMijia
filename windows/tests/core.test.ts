@@ -796,6 +796,19 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       { id: "101", name: "客厅", dids: ["1109223163"], homeId: "9001", homeName: "我的家" },
       { id: "home_9001", name: "", dids: ["unassigned_did"], homeId: "9001", homeName: "我的家" },
     ]);
+
+    // Homes shared with this account arrive under share_home_list (#134); duplicates are dropped.
+    const withShared = MiCloudClient.parseRooms({
+      homelist: [{ id: 1, name: "我的家", roomlist: [{ id: 11, name: "客厅", dids: ["a"] }] }],
+      share_home_list: [
+        { id: 2, name: "爸妈家", roomlist: [{ id: 21, name: "卧室", dids: ["b"] }] },
+        { id: 1, name: "我的家", roomlist: [{ id: 12, name: "重复", dids: [] }] },
+      ],
+    });
+    assert.deepEqual(withShared.map((r) => [r.id, r.homeId, r.homeName]), [
+      ["11", "1", "我的家"],
+      ["21", "2", "爸妈家"],
+    ]);
   });
 
   it("maps explicit MIoT kWh, 0.01kWh, and Wh cumulative counters while ignoring untagged integers (#62)", () => {

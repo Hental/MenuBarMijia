@@ -1489,11 +1489,39 @@ public struct ControlCenterPanel: View {
                     .buttonStyle(PillActionButtonStyle())
                 }
                 .padding(.top, 2)
+            } else if store.hasReceivedInitialSnapshot && store.devices.isEmpty {
+                // Synced but nothing came back: say so instead of spinning on "syncing" forever (#134).
+                Text(L10n.tr("同步完成，但没有拉取到可显示的设备", "Synced, but no devices to show"))
+                    .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(L10n.tr(
+                    "请确认手机米家 App 里这个账号能看到设备（被共享的家庭也算）。仍然为空，请在偏好设置里「复制诊断信息」反馈。",
+                    "Check that this account can see devices in the Mi Home app (shared homes included). If it is still empty, use Copy Diagnostics in Preferences and report it."
+                ))
+                    .font(.system(size: DesignTokens.TypeSize.caption))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 8) {
+                    Button(L10n.tr("重新同步", "Sync Again")) {
+                        store.refreshNow()
+                    }
+                    .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+
+                    Button {
+                        presentSettingsWindow()
+                    } label: {
+                        Text(L10n.tr("偏好设置", "Preferences"))
+                    }
+                    .buttonStyle(PillActionButtonStyle())
+                }
+                .padding(.top, 2)
             } else {
                 Text(
                     store.hideOfflineDevices
                         ? L10n.tr("该房间暂无通电在线的设备", "No online devices in this room")
-                        : L10n.tr("正在同步设备列表…", "Syncing devices…")
+                        : store.hasReceivedInitialSnapshot
+                            ? L10n.tr("这个房间暂无设备", "No devices in this room")
+                            : L10n.tr("正在同步设备列表…", "Syncing devices…")
                 )
                     .font(.system(size: DesignTokens.TypeSize.body, weight: .medium))
                     .foregroundStyle(.secondary)

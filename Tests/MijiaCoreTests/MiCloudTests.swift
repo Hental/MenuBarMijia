@@ -550,6 +550,17 @@ actor StubMiCloudAPI: MiCloudAPI {
 
     func homeRooms() async throws -> [MiRoom] { rooms }
 
+    /// Devices only reachable by did, like those in a home shared with this account (#134).
+    var didOnlyDevices: [MiDeviceRecord] = []
+    private(set) var devicesByDidCalls: [[String]] = []
+
+    func setDidOnlyDevices(_ records: [MiDeviceRecord]) { didOnlyDevices = records }
+
+    func devices(dids: [String]) async throws -> [MiDeviceRecord] {
+        devicesByDidCalls.append(dids)
+        return (devices + didOnlyDevices).filter { dids.contains($0.did) }
+    }
+
     func getProps(_ keys: [MiotPropKey]) async throws -> [MiotPropKey: JSONValue] {
         getPropsCalls.append(keys)
         return values.filter { keys.contains($0.key) }
@@ -696,6 +707,35 @@ struct MiCloudProviderTests {
         } else {
             Issue.record("expected light after follow-up poll")
         }
+        await provider.shutdown()
+    }
+
+    @Test("Devices of a shared home are fetched by did and shown with that home (#134)")
+    func sharedHomeDevicesFetchedByDid() async throws {
+        let api = StubMiCloudAPI(
+            devices: [],
+            rooms: [
+                MiRoom(id: "r1", name: "书房", dids: ["123"], homeId: "owner-home", homeName: "爸妈家"),
+                MiRoom(id: "r2", name: "客厅", dids: ["ir-remote"], homeId: "owner-home", homeName: "爸妈家"),
+            ],
+            values: MiotFixtures.lightValues
+        )
+        await api.setDidOnlyDevices([MiotFixtures.lightRecord])
+        let provider = MiCloudProvider(
+            sessionLoader: { fakeSession },
+            apiFactory: { _ in api },
+            specSource: StubSpecSource(),
+            pollInterval: .seconds(60),
+            followUpDelay: .milliseconds(10),
+            selectedHomeLoader: { nil }
+        )
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        #expect(await log.wait { await !$0.snapshots.isEmpty })
+        #expect(await log.snapshots.first?.devices == [MiotFixtures.expectedLight])
+        #expect(await log.snapshots.first?.homes == [HomeOption(id: "owner-home", name: "爸妈家", deviceCount: 2)])
+        #expect(await api.devicesByDidCalls == [["123", "ir-remote"]])
         await provider.shutdown()
     }
 
@@ -963,6 +1003,17 @@ struct MiCloudClientTests {
         #expect(MiCloudClient.parseRooms(json) == [
             MiRoom(id: "r1", name: "客厅", dids: ["1", "2"], homeId: "h1"),
             MiRoom(id: "2", name: "卧室", dids: [], homeId: "h1"),
+        ])
+    }
+
+    @Test("Homes shared with this account (share_home_list) are parsed alongside owned ones (#134)")
+    func sharedHomes() throws {
+        let json = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"homelist":[{"id":"h1","name":"我的家","roomlist":[{"id":"r1","name":"客厅","dids":["1"]}]}],"share_home_list":[{"id":"h2","name":"爸妈家","roomlist":[{"id":"r2","name":"卧室","dids":["7"]}]},{"id":"h1","name":"我的家","roomlist":[]}]}"#.utf8))
+        let rooms = MiCloudClient.parseRooms(json)
+        #expect(rooms.map(\.id) == ["r1", "r2"])
+        #expect(MiCloudProvider.homeOptions(from: rooms) == [
+            HomeOption(id: "h1", name: "我的家", deviceCount: 1),
+            HomeOption(id: "h2", name: "爸妈家", deviceCount: 1),
         ])
     }
 

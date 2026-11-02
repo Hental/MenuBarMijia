@@ -125,6 +125,8 @@ public enum MiCloudError: LocalizedError, Equatable, Sendable {
 public protocol MiCloudAPI: Sendable {
     func deviceList() async throws -> [MiDeviceRecord]
     func homeRooms() async throws -> [MiRoom]
+    /// Looks up specific devices by did, including those in homes shared with this account.
+    func devices(dids: [String]) async throws -> [MiDeviceRecord]
     func getProps(_ keys: [MiotPropKey]) async throws -> [MiotPropKey: JSONValue]
     func setProps(_ writes: [MiotPropWrite]) async throws
     func action(_ call: MiotActionCall) async throws
@@ -141,6 +143,7 @@ public protocol MiCloudAPI: Sendable {
 }
 
 extension MiCloudAPI {
+    public func devices(dids: [String]) async throws -> [MiDeviceRecord] { [] }
     public func callAction(_ call: MiotActionCall) async throws -> JSONValue {
         try await action(call)
         return .null
@@ -279,7 +282,23 @@ public actor MiCloudClient: MiCloudAPI {
         }
     }
 
-    private func deviceListPaged() async throws -> [MiDeviceRecord] {
+    /// Devices of homes shared with this account are missing from the unfiltered list; the cloud
+    /// returns them only when asked for by did, as Xiaomi's own `xiaomi_home` integration does (#134).
+    public func devices(dids: [String]) async throws -> [MiDeviceRecord] {
+        var records: [MiDeviceRecord] = []
+        var start = 0
+        while start < dids.count {
+            let chunk = Array(dids[start..<min(start + Self.didChunkSize, dids.count)])
+            start += Self.didChunkSize
+            records += try await deviceListPaged(dids: chunk)
+        }
+        var seen: Set<String> = []
+        return records.filter { seen.insert($0.did).inserted }
+    }
+
+    static let didChunkSize = 150
+
+    private func deviceListPaged(dids: [String]? = nil) async throws -> [MiDeviceRecord] {
         var records: [MiDeviceRecord] = []
         var startDid = ""
         for _ in 0..<20 {
@@ -288,6 +307,7 @@ public actor MiCloudClient: MiCloudAPI {
                 "support_smart_home": .bool(true),
                 "limit": .number(200),
             ]
+            if let dids { data["dids"] = .array(dids.map(JSONValue.string)) }
             if !startDid.isEmpty { data["start_did"] = .string(startDid) }
             let result = try await request("v2/home/device_list_page", data: .object(data))
             records += Self.parseDeviceList(result)
@@ -374,10 +394,14 @@ public actor MiCloudClient: MiCloudAPI {
         return Self.parseRooms(merged)
     }
 
+    /// Homes another account shared with this one arrive under `share_home_list`, not `homelist` (#134).
     static func parseRooms(_ result: JSONValue) -> [MiRoom] {
         var rooms: [MiRoom] = []
-        for home in result["homelist"]?.arrayValue ?? [] {
+        var seenHomes: Set<String> = []
+        let homes = (result["homelist"]?.arrayValue ?? []) + (result["share_home_list"]?.arrayValue ?? [])
+        for home in homes {
             let homeId = home["id"]?.idString ?? ""
+            if !homeId.isEmpty, !seenHomes.insert(homeId).inserted { continue }
             let homeName = home["name"]?.stringValue ?? ""
             for room in home["roomlist"]?.arrayValue ?? [] {
                 guard let id = room["id"]?.idString else { continue }

@@ -211,7 +211,7 @@ public actor MiCloudProvider: HomeProvider {
     // MARK: Discovery & Polling
 
     private func discover(_ api: any MiCloudAPI) async throws {
-        try await refreshDeviceList(api)
+        // Rooms first: they name the shared-home devices the unfiltered device list leaves out (#134).
         do {
             rooms = try await api.homeRooms()
         } catch MiCloudError.sessionExpired {
@@ -219,11 +219,34 @@ public actor MiCloudProvider: HomeProvider {
         } catch {
             logger.notice("Room list unavailable, devices go to 全屋: \(error.localizedDescription, privacy: .public)")
         }
-        logger.info("Mi cloud rooms: \(self.rooms.count, privacy: .public)")
+        logger.info("Mi cloud rooms: \(self.rooms.count, privacy: .public), homes: \(Self.homeOptions(from: self.rooms).count, privacy: .public)")
+        try await refreshDeviceList(api, retryUnresolved: true)
     }
 
-    private func refreshDeviceList(_ api: any MiCloudAPI) async throws {
-        devices = try await api.deviceList()
+    /// Room dids the by-did lookup returned nothing for (IR remotes, removed devices); the periodic
+    /// refresh skips them so it does not spend a request on them every time.
+    private var unresolvedRoomDids: Set<String> = []
+
+    private func refreshDeviceList(_ api: any MiCloudAPI, retryUnresolved: Bool = false) async throws {
+        var list = try await api.deviceList()
+        let listed = Set(list.map(\.did))
+        var missingSet = Set(rooms.flatMap(\.dids)).subtracting(listed)
+        if retryUnresolved { unresolvedRoomDids = [] }
+        missingSet.subtract(unresolvedRoomDids)
+        let missing = missingSet.sorted()
+        if !missing.isEmpty {
+            do {
+                let extra = try await api.devices(dids: missing).filter { !listed.contains($0.did) }
+                list += extra
+                unresolvedRoomDids.formUnion(missingSet.subtracting(extra.map(\.did)))
+                logger.info("Mi cloud shared-home devices: \(extra.count, privacy: .public) of \(missing.count, privacy: .public) room dids not in the device list")
+            } catch MiCloudError.sessionExpired {
+                throw MiCloudError.sessionExpired
+            } catch {
+                logger.error("Shared-home device lookup failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        devices = list
         await loadMissingSpecs()
 
         var unsupported: Set<String> = []

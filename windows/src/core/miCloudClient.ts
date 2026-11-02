@@ -439,15 +439,22 @@ export class MiCloudClient {
     return out;
   }
 
+  /** Homes another account shared with this one arrive under `share_home_list`, not `homelist` (#134). */
   static parseRooms(result: unknown): MiRoom[] {
     if (!result || typeof result !== "object") return [];
-    const homelist = (result as Record<string, unknown>)["homelist"];
-    if (!Array.isArray(homelist)) return [];
+    const obj = result as Record<string, unknown>;
+    const owned = Array.isArray(obj["homelist"]) ? obj["homelist"] : [];
+    const shared = Array.isArray(obj["share_home_list"]) ? obj["share_home_list"] : [];
     const rooms: MiRoom[] = [];
-    for (const home of homelist) {
+    const seenHomes = new Set<string>();
+    for (const home of [...owned, ...shared]) {
       if (!home || typeof home !== "object") continue;
       const h = home as Record<string, unknown>;
       const homeId = asIdString(h["id"]) ?? "";
+      if (homeId) {
+        if (seenHomes.has(homeId)) continue;
+        seenHomes.add(homeId);
+      }
       const homeName = typeof h["name"] === "string" ? h["name"] : "";
       const roomlist = h["roomlist"];
       if (Array.isArray(roomlist)) {
@@ -490,11 +497,25 @@ export class MiCloudClient {
     }
   }
 
-  private async deviceListPaged(): Promise<MiDeviceRecord[]> {
+  /**
+   * Devices of homes shared with this account are missing from the unfiltered list; the cloud
+   * returns them only when asked for by did, as Xiaomi's own `xiaomi_home` integration does (#134).
+   */
+  async devicesByDids(dids: string[]): Promise<MiDeviceRecord[]> {
+    const records: MiDeviceRecord[] = [];
+    for (let start = 0; start < dids.length; start += 150) {
+      records.push(...(await this.deviceListPaged(dids.slice(start, start + 150))));
+    }
+    const seen = new Set<string>();
+    return records.filter((r) => !seen.has(r.did) && (seen.add(r.did), true));
+  }
+
+  private async deviceListPaged(dids?: string[]): Promise<MiDeviceRecord[]> {
     const records: MiDeviceRecord[] = [];
     let startDid = "";
     for (let page = 0; page < 20; page++) {
       const data: Record<string, unknown> = { get_split_device: true, support_smart_home: true, limit: 200 };
+      if (dids) data["dids"] = dids;
       if (startDid) data["start_did"] = startDid;
       const res = await this.request("v2/home/device_list_page", data);
       records.push(...MiCloudClient.parseDeviceList(res));

@@ -34,6 +34,9 @@ import {
   MI_CLOUD_REGIONS,
   MiAccountLogin,
   MiCloudClient,
+  MiCloudError,
+  type MiDeviceRecord,
+  type MiRoom,
   MiotCommandMapper,
   type MiotDeviceSpec,
   type MiotPropKey,
@@ -1316,6 +1319,36 @@ export class MenuMijiaWindowsApp {
     return out.map((item) => item.reading);
   }
 
+  /**
+   * Rooms of homes shared with this account name devices the unfiltered list leaves out; look them
+   * up by did (#134). Dids the lookup cannot resolve (IR remotes, removed devices) are skipped on
+   * silent refreshes so polling does not spend a request on them every time.
+   */
+  private unresolvedRoomDids = new Set<string>();
+
+  private async withSharedHomeDevices(
+    client: MiCloudClient,
+    listed: MiDeviceRecord[],
+    rooms: MiRoom[],
+    retryUnresolved: boolean,
+  ): Promise<MiDeviceRecord[]> {
+    if (retryUnresolved) this.unresolvedRoomDids.clear();
+    const listedDids = new Set(listed.map((d) => d.did));
+    const missing = [...new Set(rooms.flatMap((r) => r.dids))]
+      .filter((did) => !listedDids.has(did) && !this.unresolvedRoomDids.has(did))
+      .sort();
+    if (missing.length === 0) return listed;
+    try {
+      const extra = (await client.devicesByDids(missing)).filter((d) => !listedDids.has(d.did));
+      const found = new Set(extra.map((d) => d.did));
+      for (const did of missing) if (!found.has(did)) this.unresolvedRoomDids.add(did);
+      return [...listed, ...extra];
+    } catch (err) {
+      if (err instanceof MiCloudError && err.kind === "sessionExpired") throw err;
+      return listed;
+    }
+  }
+
   private async refreshDevices(silent = false): Promise<void> {
     if (this.settings.connectionMode === "homeAssistant") return this.refreshHADevices(silent);
     if (!this.settings.miSession || this.settings.connectionMode !== "xiaomiCloud" || this.isSyncingCloud) return;
@@ -1333,10 +1366,11 @@ export class MenuMijiaWindowsApp {
 
     try {
       const client = new MiCloudClient(session, this.transport);
-      const [allDevices, allRooms] = await Promise.all([
+      const [listedDevices, allRooms] = await Promise.all([
         client.deviceList(),
         client.homeRooms().catch(() => []),
       ]);
+      const allDevices = await this.withSharedHomeDevices(client, listedDevices, allRooms, !silent);
       const nextHomes = homeOptions(allRooms);
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
       this.homes = applyOrder(this.homes.map((home) => home.id), nextHomes);
