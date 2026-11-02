@@ -55,3 +55,12 @@ When modifying `ScheduledCommand` or `HomeStore+Assistant.swift`:
 ## 8. macOS 14+ Adaptive Glass Boundary
 
 - Isolate macOS 26 `.glassEffect(` and `GlassEffectContainer` calls inside `Sources/MenuBarMijiaApp/ThemeAndMotion.swift` (`View.adaptiveGlass` and `AdaptiveGlassContainer`), guarded by `#available(macOS 26.0, *)` with Material fallback for macOS 14 and 15. Enforced mechanically by `scripts/check.sh`.
+
+## 9. Tests Must Not Race Product Timers
+
+When a test asserts on state that a production timer can change (undo banner expiry, scheduled commands, cooldowns, polling):
+
+- Freeze the timer through an existing seam (`HomeStore.pauseUndoBannerCountdown()`, `assistantNow`, `controlDebounceInterval`), or
+- Poll a deterministic signal that the path under test actually produces. When the failure path records nothing, the reliable signal is "the timer is frozen and the assertion runs immediately", not a spin on a success-only collection.
+
+A wall-clock sleep before the assertion is the failure mode: on a loaded CI runner the sleep stretches past the timer's expiry, so the assertion fails nondeterministically while passing locally. This shipped once: `failedQuickActionRecordsNothing` spun on `executedCommands` (empty on failures) for 18 s in CI, past the 10 s banner expiry.

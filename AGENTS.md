@@ -20,6 +20,8 @@ Read `CODING_STANDARDS.md` when reviewing diffs (`/code-review`) or modifying sy
 
 Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`. Run `bash scripts/build_app.sh` to package, sign, and restart `MenuBarMijia.app`. Run `swift scripts/generate_app_icon.swift` when modifying `Resources/AppIcon/AppIcon-*.svg` to regenerate macOS `.icns`, `Assets.car`, README logos, and Windows Tauri icons.
 
+本机存在已知的 `SnapshotTests` 渲染漂移：干净 HEAD 上也同样失配，`bash scripts/check.sh` 会因此变红。本地提交可用 `--no-verify`，以 CI 的 macos job 为准；用 `bash scripts/snapshot-drift-check.sh` 甄别本次改动是否**新增**了失配（输出为空即只有既有漂移）。
+
 ### Commit & PR policy
 
 本约定仅适用于此项目。在用户已授权提交的范围内，按改动风险选择直接 push 或 PR，不要求每次代码修改都开 PR。
@@ -29,3 +31,9 @@ Run `bash scripts/check.sh` for secret scan, mechanical lints, and `swift test`.
 - 检查失败原因尚未确认时，走 PR 排查，解决后再合并。已复现并确认与本轮无关的既有失败，需记录证据及例外原因；跳过检查不是默认流程。
 - 一个完整问题对应一次提交或一个 PR；同一问题的后续调整继续使用原 PR。
 - 直接 push 后确认云端检查的最终结果；交付时区分“已推送”与“检查已通过”。直接 push 不等于发布新版本。
+
+### Worktrees
+
+- `git worktree list` 里登记给其他会话的分支（如 Codex 的 `wt/dev` 工作树）归该代理所有：审计只读，不改它的文件。
+- 接管前先确认对方已安静：无新提交且 `git status` 干净。对方仍在迭代时，在自己的分支副本上完成改动再推回。
+- 对方提交在你审计途中落地，就按最新提交重读后再下结论，不基于旧快照。
