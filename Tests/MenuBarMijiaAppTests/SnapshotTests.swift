@@ -230,6 +230,14 @@ struct SnapshotTests {
         #expect(darkLit.ink == .white)
         #expect(darkLit.secondaryInk == .white.opacity(0.62))
         #expect(darkLit.ink != lit.ink)
+
+        // The bright platter is the only surface that owns the fixed dark ink, and it exists in
+        // light mode only. If a future fill change reintroduces a white tile in dark mode, this
+        // pairing breaks before the ink can go white-on-white.
+        #expect(lit.isBrightPlatter)
+        #expect(!quiet.isBrightPlatter)
+        #expect(!darkLit.isBrightPlatter)
+        #expect(!darkTinted.isBrightPlatter)
     }
 
     @Test("Scene icons map to one visual category per family")

@@ -4,4 +4,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
-exec bash "$ROOT_DIR/scripts/check.sh" --skip-snapshots
+# A worktree checked out before `--skip-snapshots` existed still gets a runnable hook.
+if grep -q -- '--skip-snapshots' "$ROOT_DIR/scripts/check.sh" 2>/dev/null; then
+    exec bash "$ROOT_DIR/scripts/check.sh" --skip-snapshots
+fi
+exec bash "$ROOT_DIR/scripts/check.sh"

@@ -104,16 +104,21 @@ public struct TileSurface: Equatable, Sendable {
         self.scheme = scheme
     }
 
+    /// The one surface that needs the fixed dark ink: the light-mode platter. Dark mode never
+    /// paints a bright tile, so white ink stays valid everywhere else — this flag is the single
+    /// place that decides, which is what keeps the ink rules from drifting apart again.
+    public var isBrightPlatter: Bool { isActive && scheme == .light }
+
     /// Ink on the lit surface. Every lit surface in dark mode is dark glass, so it keeps white ink;
-    /// only the light-mode platter needs the fixed dark ink.
+    /// only the bright platter needs the fixed dark ink.
     public var ink: Color {
-        if isActive, scheme == .dark { return .white }
+        if isActive, !isBrightPlatter { return .white }
         return isActive ? PanelLook.platterInk : .primary
     }
 
     public var secondaryInk: Color {
-        if isActive, scheme == .dark { return Color.white.opacity(0.62) }
-        return isActive ? PanelLook.platterInk.opacity(0.55) : Color.secondary
+        if isActive, !isBrightPlatter { return Color.white.opacity(0.62) }
+        return isActive ? PanelLook.platterInk.opacity(0.55) : .secondary
     }
 
     /// The tile fill: bright platter when lit in light mode, one step above the well when lit in dark

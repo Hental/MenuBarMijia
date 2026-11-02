@@ -10,6 +10,10 @@ on:
         description: "Intentionally mismatch one snapshot to verify failure artifacts"
         type: boolean
         default: false
+      record_only:
+        description: "Only record snapshot baselines (skips the test jobs; used by scripts/record_snapshots.sh)"
+        type: boolean
+        default: false
 
 # 最小权限：所有 job 只读。需要写权限的发布流程放在单独的 release 工作流里。
 permissions:
@@ -22,6 +26,7 @@ concurrency:
 
 jobs:
   nas-safety:
+    if: inputs.record_only != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,6 +34,7 @@ jobs:
         run: bash scripts/test_nas_setup.sh
 
   linux-core:
+    if: inputs.record_only != true
     # 验证密钥扫描、编码规范与 MijiaCore 全量单测（Ubuntu + Swift 6.1）
     runs-on: ubuntu-latest
     container: swift:6.1
@@ -40,6 +46,7 @@ jobs:
         run: bash scripts/linux-check/run.sh
 
   windows-core:
+    if: inputs.record_only != true
     # 验证 Windows 版 TypeScript 核心测试与前端打包
     runs-on: ubuntu-latest
     defaults:
@@ -56,6 +63,7 @@ jobs:
         run: npm ci && npm test && npm run build
 
   windows-installer:
+    if: inputs.record_only != true
     # 编译 Windows 安装包并保留为 CI 产物，发布时再上传到对应版本。
     runs-on: windows-latest
     needs: [windows-core, linux-core]
@@ -95,6 +103,7 @@ jobs:
           path: dist-windows/*
 
   macos:
+    if: inputs.record_only != true
     # 编译 App 层（Release -O 配置，#2 这类崩溃只在 -O 下出现）并运行全部单测。
     # Package.swift 需要 macOS 26 SDK；GitHub 托管的 macos-26 Runner 已于 2026-02-26 正式可用。
     runs-on: macos-26
