@@ -667,6 +667,7 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       }>;
       rooms: Array<{ id: string; name: string; dids: string[] }>;
       values: Array<{ did: string; siid: number; piid: number; value: unknown }>;
+      selectionCases: Array<{ utterance: string; isOn: boolean; ids: string[] }>;
       expectedKinds: Record<string, unknown>;
       expectedEnvironmentReadings: Array<unknown>;
       expectedRequiredProps: Record<string, Array<{ did: string; siid: number; piid: number }>>;
@@ -709,6 +710,12 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       assert.deepEqual(dev.kind, expectedKind, `DeviceKind mismatch on ${did}`);
     }
     assert.deepEqual(home.environmentReadings, corpus.expectedEnvironmentReadings);
+    for (const item of corpus.selectionCases) {
+      const plan = LocalIntentParser.parse(item.utterance, home.devices, []);
+      assert.ok(plan, item.utterance);
+      assert.deepEqual(plan.intents.map((intent) => intent.targetId).sort(), [...item.ids].sort(), item.utterance);
+      for (const intent of plan.intents) assert.deepEqual(intent.operation, { kind: "power", isOn: item.isOn });
+    }
 
     // Offline climate/fan/sensor devices must not enter environmentReadings (#103).
     const offlineHome = MiotSynthesizer.synthesize(

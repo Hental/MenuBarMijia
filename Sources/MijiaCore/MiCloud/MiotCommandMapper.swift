@@ -29,6 +29,28 @@ public enum MiotCommandError: LocalizedError, Equatable, Sendable {
 public enum MiotCommandMapper {
     public static func map(_ command: DeviceCommand, spec: MiotDeviceSpec) throws -> MiotWrite {
         let entityId = command.targetEntityId
+        if let address = MiotAddress.parseAction(entityId) {
+            guard let service = spec.service(iid: address.siid),
+                  let action = service.actions.first(where: { $0.iid == address.aiid }) else {
+                throw MiotCommandError.unsupported("action")
+            }
+            let inputs: [JSONValue]
+            switch command {
+            case .pressButton where ["play-music", "stop-alarm"].contains(action.shortName) && action.inputProperties.isEmpty:
+                inputs = []
+            case .sendNotifyMessage(_, let text):
+                let expected = action.shortName == "play-text" ? ["text-content"]
+                    : action.shortName == "execute-text-directive" ? ["text-content", "silent-execution"] : []
+                guard !expected.isEmpty, action.inputProperties.count == expected.count,
+                      zip(action.inputProperties, expected).allSatisfy({ id, name in
+                          service.properties.contains { $0.iid == id && $0.shortName == name }
+                      }) else { throw MiotCommandError.unsupported("speaker action inputs") }
+                inputs = expected.count == 1 ? [.string(text)] : [.string(text), .number(0)]
+            default:
+                throw MiotCommandError.unsupported("speaker action")
+            }
+            return .action(MiotActionCall(did: address.did, siid: address.siid, aiid: address.aiid, inputs: inputs))
+        }
         guard let (did, siid) = MiotAddress.parse(entityId) else { throw MiotCommandError.invalidAddress(entityId) }
         guard let service = spec.service(iid: siid) else { throw MiotCommandError.unsupported("siid \(siid)") }
         let ctx = Context(did: did, spec: spec, service: service)
@@ -91,6 +113,10 @@ public enum MiotCommandMapper {
             let name: String
             if ctx.property("on") != nil {
                 name = "on"
+            } else if service.shortName == "speaker", ctx.property("mute") != nil {
+                name = "mute"
+            } else if service.shortName == "intelligent-speaker", ctx.property("sleep-mode") != nil {
+                name = "sleep-mode"
             } else if ctx.property("motion-detection") != nil {
                 name = "motion-detection"
             } else {
@@ -112,7 +138,14 @@ public enum MiotCommandMapper {
             }
             return .action(try ctx.action(candidates))
 
-        case .setClimateSwingMode, .setNumberValue, .mediaSetVolume, .mediaSelectSource,
+        case .mediaSetVolume(_, let level):
+            guard service.shortName == "speaker", level.isFinite else { throw MiotCommandError.unsupported("volume") }
+            let volume = try ctx.require("volume")
+            let max = volume.property.rangeMax ?? 100
+            let min = volume.property.rangeMin ?? 0
+            return .setProps([ctx.write(volume, .number(min + Swift.max(0, Swift.min(1, level)) * (max - min)))])
+
+        case .setClimateSwingMode, .setNumberValue, .mediaSelectSource,
              .pressButton, .sendNotifyMessage, .activateScene:
             throw MiotCommandError.unsupported(String(describing: command).components(separatedBy: "(").first ?? "")
         }

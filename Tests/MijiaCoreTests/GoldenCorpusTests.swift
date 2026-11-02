@@ -318,11 +318,18 @@ struct GoldenCorpusTests {
         let devices: [MiotDeviceEntry]
         let rooms: [MiotRoomEntry]
         let values: [MiotValueEntry]
+        let selectionCases: [MiotSelectionCase]
         let expectedKinds: [String: CorpusKind]
         let expectedEnvironmentReadings: [MiotReadingEntry]
         let expectedRequiredProps: [String: [MiotKeyEntry]]
         let commandCases: [MiotCommandCase]
         let fallbackSpecs: [MiotFallbackEntry]
+    }
+
+    private struct MiotSelectionCase: Decodable {
+        let utterance: String
+        let isOn: Bool
+        let ids: [String]
     }
 
     private struct MiotFallbackEntry: Decodable {
@@ -618,6 +625,12 @@ struct GoldenCorpusTests {
             #expect(dev.kind == expectedKind.toDeviceKind(), "Mismatch on \(did)")
         }
         #expect(home.environmentReadings == corpus.expectedEnvironmentReadings.map { $0.toEnvironmentReading() })
+
+        for item in corpus.selectionCases {
+            let plan = try #require(LocalIntentParser.parse(item.utterance, devices: home.devices, scenes: []), "\(item.utterance)")
+            #expect(Set(plan.intents.map(\.targetId)) == Set(item.ids), "\(item.utterance)")
+            #expect(plan.intents.allSatisfy { $0.operation == .power(item.isOn) })
+        }
 
         // Offline fallback specs are shared synthesis rules: the corpus pins the exact
         // spec (Windows additionally asserts inferFallbackSpec matches it) and both

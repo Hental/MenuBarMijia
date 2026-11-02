@@ -528,17 +528,20 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
             }
             return s.isOn ? "lightbulb.fill" : "lightbulb"
         case .climate(let s):
+            if model.contains("blanket") { return "bed.double.fill" }
             if model.contains("heater") {
                 return s.isOn ? "heater.vertical.fill" : "heater.vertical"
             }
             return s.isOn ? "snowflake" : "air.conditioner.horizontal"
         case .fan(let s):
+            if model.contains(".derh.") { return "humidity.fill" }
             if model.contains("airp") || model.contains("purifier") || name.contains("净化")
                 || s.pm25Density != nil || s.airQuality != nil || s.filterLifePercent != nil {
                 return "aqi.medium"
             }
             return "fan.floor.fill"
         case .plug(let s):
+            if model.contains(".diffuser.") { return "air.humidifier.fill" }
             if s.switchEntityId.hasPrefix("button.") {
                 if s.switchEntityId.contains("wake_on_lan") || name.contains("电脑")
                     || name.localizedCaseInsensitiveContains("pc") || name.localizedCaseInsensitiveContains("mac") {
@@ -758,6 +761,8 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         switch mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "auto", "automatic": return L10n.tr("自动", "Auto")
         case "sleep": return L10n.tr("睡眠", "Sleep")
+        case "smart": return L10n.tr("智能", "Smart")
+        case "clothes drying": return L10n.tr("干衣", "Clothes Drying")
         case "favorite", "favourite": return L10n.tr("最爱", "Favorite")
         case "manual", "none": return L10n.tr("手动", "Manual")
         case "silent": return L10n.tr("静音", "Silent")

@@ -89,14 +89,25 @@ public struct MiotProperty: Codable, Equatable, Sendable {
 }
 
 public struct MiotAction: Codable, Equatable, Sendable {
+    public var inputProperties: [Int]
+    enum CodingKeys: String, CodingKey { case iid, type, description; case inputProperties = "in" }
     public var iid: Int
     public var type: String
     public var description: String?
 
-    public init(iid: Int, type: String, description: String? = nil) {
+    public init(iid: Int, type: String, description: String? = nil, inputProperties: [Int] = []) {
+        self.inputProperties = inputProperties
         self.iid = iid
         self.type = type
         self.description = description
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        iid = try c.decode(Int.self, forKey: .iid)
+        type = try c.decode(String.self, forKey: .type)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        inputProperties = try c.decodeIfPresent([Int].self, forKey: .inputProperties) ?? []
     }
 
     public var shortName: String { miotShortName(type) }

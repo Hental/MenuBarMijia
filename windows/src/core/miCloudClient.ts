@@ -1218,6 +1218,23 @@ function hasScaleToken(comment: string, token: string): boolean {
   return false;
 }
 
+/** Explicit power metadata wins over magnitude, range-step, and misleading watt labels (#129). */
+function powerScale(prop: MiotProperty): number | null {
+  const unit = (prop.unit ?? "").toLowerCase().replaceAll(" ", "");
+  const comment = (prop.comment ?? "").toLowerCase().replaceAll(",", ".").replaceAll(" ", "");
+  const scales: readonly (readonly [string, number])[] = [["0.001", 0.001], ["0.01", 0.01], ["0.1", 0.1]];
+  for (const [token, scale] of scales) {
+    const pattern = new RegExp("(?<![0-9.])" + token.replaceAll(".", "\\.") + "(?:watt|w)(?![a-z])");
+    if (pattern.test(comment) || unit === token + "w" || unit === token + "watt") return scale;
+  }
+  switch (unit) {
+    case "": case "none": case "w": case "watt": return 1;
+    case "kw": case "kilowatt": return 1000;
+    case "mw": case "milliwatt": return 0.001;
+    default: return null;
+  }
+}
+
 /**
  * Scale factor that converts a MIoT `power-consumption` reading into kWh (#62).
  * Returns `null` when an integer property has neither a recognized `unit` nor an explicit
@@ -1383,6 +1400,9 @@ export const MiotSynthesizer = {
       "air-conditioner",
       "heater",
       "thermostat",
+      "electric-blanket",
+      "dehumidifier",
+      "diffuser",
       "light",
       "fan",
       "air-purifier",
@@ -1501,11 +1521,11 @@ export const MiotSynthesizer = {
       };
     }
 
-    if (sName === "air-conditioner" || sName === "heater" || sName === "thermostat") {
+    if (sName === "air-conditioner" || sName === "heater" || sName === "thermostat" || sName === "electric-blanket") {
       const on = readProp(primaryService, "on");
-      const mode = readProp(primaryService, "mode");
+      const mode = sName === "electric-blanket" ? null : readProp(primaryService, "mode");
       const target = readProp(primaryService, "target-temperature");
-      const current = readFirst(
+      const current = sName === "electric-blanket" ? null : readFirst(
         [
           primaryService,
           ...spec.services.filter((s) => miotShortName(s.type) === "environment"),
@@ -1776,8 +1796,28 @@ export const MiotSynthesizer = {
       };
     }
 
+    if (sName === "dehumidifier") {
+      const on = readProp(primaryService, "on");
+      const mode = readProp(primaryService, "mode");
+      const env = spec.services.filter((s) => miotShortName(s.type) === "environment");
+      const temperature = readFirst(env, "temperature");
+      const humidity = readFirst(env, "relative-humidity");
+      return {
+        kind: "fan",
+        entityId: makeMiotAddress(did, primaryService.iid),
+        isOn: miotBool(on?.val) ?? false,
+        percentage: null,
+        presetMode: mode?.prop.valueList?.find((item) => item.value === mode.val)?.description ?? null,
+        availablePresetModes: mode?.prop.access.includes("write") ? mode.prop.valueList?.map((item) => item.description) ?? [] : [],
+        isOscillating: null,
+        temperature: typeof temperature?.val === "number" ? temperature.val : null,
+        humidity: typeof humidity?.val === "number" ? humidity.val : null,
+      };
+    }
+
     if (
       sName === "outlet" ||
+      sName === "diffuser" ||
       sName === "switch" ||
       primaryService.properties.some((p) => miotShortName(p.type) === "on")
     ) {
@@ -1787,6 +1827,8 @@ export const MiotSynthesizer = {
         ...spec.services,
       ];
       const power = readFirst(consumptionServices, "electric-power");
+      const powerScaleVal = power ? powerScale(power.prop) : null;
+      const watts = typeof power?.val === "number" && power.val >= 0 && powerScaleVal !== null ? power.val * powerScaleVal : NaN;
       const energy = readFirst(consumptionServices, "power-consumption", (p) => energyScale(p) !== null);
       const energyScaleVal = energy ? energyScale(energy.prop) : null;
       const energyKwh =
@@ -1800,7 +1842,7 @@ export const MiotSynthesizer = {
         kind: "plug",
         switchEntityId: makeMiotAddress(did, primaryService.iid),
         isOn: miotBool(on?.val) ?? false,
-        powerWatts: typeof power?.val === "number" ? power.val : null,
+        powerWatts: Number.isFinite(watts) ? watts : null,
         ...(energyKwh !== null ? { energyKwh } : {}),
         childLockEntityId: lock ? makeMiotAddress(did, lock.service.iid) : null,
         isChildLocked: miotBool(lock?.val) ?? false,

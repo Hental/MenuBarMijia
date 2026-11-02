@@ -4,7 +4,20 @@ import Foundation
 public enum MiotAddress {
     public static func make(did: String, siid: Int) -> String { "miot:\(did):\(siid)" }
 
+    public static func makeAction(did: String, siid: Int, aiid: Int) -> String {
+        "miot-action:\(did):\(siid):\(aiid)"
+    }
+
+    public static func parseAction(_ entityId: String) -> (did: String, siid: Int, aiid: Int)? {
+        guard entityId.hasPrefix("miot-action:") else { return nil }
+        let parts = entityId.dropFirst("miot-action:".count).split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3, let aiid = Int(parts[parts.count - 1]), let siid = Int(parts[parts.count - 2]) else { return nil }
+        let did = parts.dropLast(2).joined(separator: ":")
+        return did.isEmpty ? nil : (did, siid, aiid)
+    }
+
     public static func parse(_ entityId: String) -> (did: String, siid: Int)? {
+        if let action = parseAction(entityId) { return (action.did, action.siid) }
         guard entityId.hasPrefix("miot:") else { return nil }
         let rest = entityId.dropFirst("miot:".count)
         guard let sep = rest.lastIndex(of: ":"), let siid = Int(rest[rest.index(after: sep)...]) else { return nil }
@@ -24,6 +37,10 @@ public enum MiotSynthesizer {
         ("air-conditioner", buildClimate),
         ("heater", buildClimate),
         ("thermostat", buildClimate),
+        ("electric-blanket", buildClimate),
+        ("dehumidifier", buildDehumidifier),
+        ("diffuser", buildPlug),
+        ("speaker", buildSpeaker),
         ("light", buildLight),
         ("fan", buildFan),
         ("air-purifier", buildAirPurifier),
@@ -186,9 +203,9 @@ public enum MiotSynthesizer {
 
     static func buildClimate(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
         let on = r.ref("on", in: s)
-        let mode = r.ref("mode", in: s)
+        let mode = s.shortName == "electric-blanket" ? nil : r.ref("mode", in: s)
         let target = r.ref("target-temperature", in: s)
-        let current = r.first("temperature", in: [s] + r.spec.services(named: "environment") + r.spec.services(named: "temperature-humidity-sensor"))
+        let current = s.shortName == "electric-blanket" ? nil : r.first("temperature", in: [s] + r.spec.services(named: "environment") + r.spec.services(named: "temperature-humidity-sensor"))
         let fanLevel = r.first("fan-level", in: r.spec.services(named: "fan-control") + [s])
 
         let isOn = on?.value?.miotBool ?? false
@@ -276,6 +293,56 @@ public enum MiotSynthesizer {
         ))
     }
 
+    static func buildDehumidifier(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
+        let on = r.ref("on", in: s)
+        let mode = r.ref("mode", in: s)
+        let environment = r.spec.services(named: "environment")
+        let temperature = r.first("temperature", in: environment)
+        let humidity = r.first("relative-humidity", in: environment)
+        return .fan(FanSpec(
+            entityId: MiotAddress.make(did: r.did, siid: s.iid),
+            isOn: on?.value?.miotBool ?? false,
+            presetMode: mode?.valueDescription,
+            availablePresetModes: mode?.property.isWritable == true ? mode?.property.valueList?.map(\.description) ?? [] : [],
+            temperature: temperature?.value?.doubleValue,
+            humidity: humidity?.value?.doubleValue
+        ))
+    }
+
+    static func buildSpeaker(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
+        let volume = r.ref("volume", in: s)
+        let mute = r.ref("mute", in: s)
+        let playing = r.first("playing-state", in: r.spec.services(named: "play-control"))
+        let intelligent = r.spec.services(named: "intelligent-speaker").first
+        let sleep = intelligent.flatMap { r.ref("sleep-mode", in: $0) }
+        func actionAddress(_ service: MiotService?, _ name: String, inputs: [String]) -> String? {
+            guard let service, let action = service.action(named: name),
+                  action.inputProperties.count == inputs.count,
+                  zip(action.inputProperties, inputs).allSatisfy({ id, name in
+                      service.properties.contains { $0.iid == id && $0.shortName == name }
+                  }) else { return nil }
+            return MiotAddress.makeAction(did: r.did, siid: service.iid, aiid: action.iid)
+        }
+        let state: String = switch playing?.valueDescription?.lowercased() {
+        case "playing", "play": "playing"
+        case "paused", "pause": "paused"
+        default: "idle"
+        }
+        return .speaker(SpeakerSpec(
+            mediaEntityId: MiotAddress.make(did: r.did, siid: s.iid),
+            state: state,
+            volumePercent: volume.flatMap { ref in ref.value?.doubleValue.map { percent(fromRaw: $0, property: ref.property) } } ?? 0,
+            isMuted: mute?.value?.miotBool ?? false,
+            muteSwitchEntityId: mute?.property.isWritable == true ? MiotAddress.make(did: r.did, siid: s.iid) : nil,
+            sleepModeEntityId: sleep?.property.isWritable == true ? intelligent.map { MiotAddress.make(did: r.did, siid: $0.iid) } : nil,
+            isSleepMode: sleep?.value?.miotBool ?? false,
+            ttsNotifyEntityId: actionAddress(intelligent, "play-text", inputs: ["text-content"]),
+            directiveNotifyEntityId: actionAddress(intelligent, "execute-text-directive", inputs: ["text-content", "silent-execution"]),
+            playMusicButtonId: actionAddress(intelligent, "play-music", inputs: []),
+            stopAlarmButtonId: actionAddress(r.spec.services(named: "clock").first, "stop-alarm", inputs: [])
+        ))
+    }
+
     static func buildPlug(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
         let on = r.ref("on", in: s)
         let consumptionServices = r.spec.services(named: "power-consumption") + r.spec.services
@@ -292,7 +359,12 @@ public enum MiotSynthesizer {
         return .plug(PlugSpec(
             switchEntityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: on?.value?.miotBool ?? false,
-            powerWatts: power?.value?.doubleValue,
+            powerWatts: power.flatMap { ref in
+                guard let raw = ref.value?.doubleValue, raw.isFinite, raw >= 0,
+                      let scale = powerScale(for: ref.property) else { return nil }
+                let watts = raw * scale
+                return watts.isFinite ? watts : nil
+            },
             energyKwh: energyKwh,
             childLockEntityId: lock.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
             isChildLocked: lock?.value?.miotBool ?? false
@@ -386,6 +458,26 @@ public enum MiotSynthesizer {
             searchRange = range.upperBound..<comment.endIndex
         }
         return false
+    }
+
+    /// Some released specs declare watt but document centiwatts in the comment (#129).
+    /// Only explicit metadata changes the scale; magnitude and range-step never do.
+    static func powerScale(for property: MiotProperty) -> Double? {
+        let unit = (property.unit ?? "").lowercased().replacingOccurrences(of: " ", with: "")
+        let comment = (property.comment ?? "").lowercased()
+            .replacingOccurrences(of: ",", with: ".").replacingOccurrences(of: " ", with: "")
+        for (token, scale) in [("0.001", 0.001), ("0.01", 0.01), ("0.1", 0.1)] {
+            let pattern = "(?<![0-9.])" + NSRegularExpression.escapedPattern(for: token) + "(?:watt|w)(?![a-z])"
+            if comment.range(of: pattern, options: .regularExpression) != nil || unit == token + "w" || unit == token + "watt" {
+                return scale
+            }
+        }
+        switch unit {
+        case "", "none", "w", "watt": return 1
+        case "kw", "kilowatt": return 1000
+        case "mw", "milliwatt": return 0.001
+        default: return nil
+        }
     }
 
     /// Scale factor that converts a MIoT `power-consumption` reading into kWh (#62).

@@ -547,6 +547,800 @@
           ]
         }
       ]
+    },
+    "xiaomi.derh.13l": {
+      "type": "urn:miot-spec-v2:device:dehumidifier:0000A02D:xiaomi-13l:1",
+      "description": "Dehumidifier",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:dehumidifier:00007841:xiaomi-13l:1",
+          "description": "Dehumidifier",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-13l:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "开关"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:fault:00000009:xiaomi-13l:1",
+              "description": "Device Fault",
+              "format": "uint8",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "No Faults",
+                  "comment": "无故障"
+                },
+                {
+                  "value": 1,
+                  "description": "Water Full",
+                  "comment": "水满保护"
+                },
+                {
+                  "value": 2,
+                  "description": "Sensor Fault1",
+                  "comment": "温湿度传感器故障"
+                },
+                {
+                  "value": 3,
+                  "description": "Sensor Fault2",
+                  "comment": "铜管温度故障"
+                },
+                {
+                  "value": 4,
+                  "description": "Communication Fault1",
+                  "comment": "板间通讯故障"
+                },
+                {
+                  "value": 5,
+                  "description": "Filter Clean",
+                  "comment": "过滤网清洁提醒"
+                },
+                {
+                  "value": 6,
+                  "description": "Defrost",
+                  "comment": "除霜状态"
+                },
+                {
+                  "value": 7,
+                  "description": "Fan Motor",
+                  "comment": "风机故障"
+                },
+                {
+                  "value": 8,
+                  "description": "Overload",
+                  "comment": "压缩机过载保护"
+                },
+                {
+                  "value": 9,
+                  "description": "Lack Of Refrigerant",
+                  "comment": "缺氟保护"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "故障"
+            },
+            {
+              "iid": 3,
+              "type": "urn:miot-spec-v2:property:mode:00000008:xiaomi-13l:1",
+              "description": "Mode",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "Smart",
+                  "comment": "智能模式"
+                },
+                {
+                  "value": 1,
+                  "description": "Sleep",
+                  "comment": "睡眠模式"
+                },
+                {
+                  "value": 2,
+                  "description": "Clothes Drying",
+                  "comment": "干衣模式"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "模式"
+            },
+            {
+              "iid": 5,
+              "type": "urn:miot-spec-v2:property:target-humidity:00000022:xiaomi-13l:1",
+              "description": "Target Humidity",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "percentage",
+              "value-range": [
+                30,
+                70,
+                1
+              ],
+              "gatt-access": [],
+              "comment": "设定湿度"
+            }
+          ],
+          "comment": "除湿机"
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:environment:0000780A:xiaomi-13l:1",
+          "description": "Environment",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:xiaomi-13l:1",
+              "description": "Relative Humidity",
+              "format": "uint8",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "unit": "percentage",
+              "value-range": [
+                0,
+                100,
+                1
+              ],
+              "comment": "相对湿度"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:temperature:00000020:xiaomi-13l:1",
+              "description": "Temperature",
+              "format": "float",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "unit": "celsius",
+              "value-range": [
+                -30,
+                100,
+                1
+              ],
+              "comment": "温度"
+            }
+          ],
+          "comment": "环境参数"
+        },
+        {
+          "iid": 5,
+          "type": "urn:miot-spec-v2:service:indicator-light:00007803:xiaomi-13l:1",
+          "description": "Indicator Light",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-13l:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "开关"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:mode:00000008:xiaomi-13l:1",
+              "description": "Mode",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "Close",
+                  "comment": "关闭"
+                },
+                {
+                  "value": 1,
+                  "description": "Half",
+                  "comment": "微光"
+                },
+                {
+                  "value": 2,
+                  "description": "Full",
+                  "comment": "亮光"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "模式"
+            }
+          ],
+          "comment": "指示灯"
+        }
+      ]
+    },
+    "xiaomi.blanket.mj2": {
+      "type": "urn:miot-spec-v2:device:electric-blanket:0000A069:xiaomi-mj2:1",
+      "description": "Electric Blanket",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:electric-blanket:00007844:xiaomi-mj2:1",
+          "description": "Electric Blanket",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-mj2:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "开关"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:fault:00000009:xiaomi-mj2:1",
+              "description": "Device Fault",
+              "format": "uint8",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "No Faults",
+                  "comment": "正常"
+                },
+                {
+                  "value": 1,
+                  "description": "Pump Fault",
+                  "comment": "水泵故障"
+                },
+                {
+                  "value": 2,
+                  "description": "Temperature Fault",
+                  "comment": "温度传感器故障"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "故障"
+            },
+            {
+              "iid": 3,
+              "type": "urn:miot-spec-v2:property:mode:00000008:xiaomi-mj2:1",
+              "description": "Mode",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "Common",
+                  "comment": "普通"
+                },
+                {
+                  "value": 1,
+                  "description": "Mite Removal",
+                  "comment": "除螨"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "模式"
+            },
+            {
+              "iid": 4,
+              "type": "urn:miot-spec-v2:property:target-temperature:00000021:xiaomi-mj2:1",
+              "description": "Target Temperature",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "celsius",
+              "value-range": [
+                25,
+                55,
+                1
+              ],
+              "gatt-access": [],
+              "comment": "设定温度"
+            },
+            {
+              "iid": 5,
+              "type": "urn:miot-spec-v2:property:temperature:00000020:xiaomi-mj2:1",
+              "description": "Temperature",
+              "format": "int8",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "unit": "celsius",
+              "value-range": [
+                -10,
+                99,
+                1
+              ],
+              "gatt-access": [],
+              "comment": "温度"
+            },
+            {
+              "iid": 6,
+              "type": "urn:miot-spec-v2:property:water-level:0000003D:xiaomi-mj2:1",
+              "description": "Water Level",
+              "format": "uint8",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "value-list": [
+                {
+                  "value": 0,
+                  "description": "Hydropenia",
+                  "comment": "缺水"
+                },
+                {
+                  "value": 1,
+                  "description": "Low",
+                  "comment": "低"
+                },
+                {
+                  "value": 2,
+                  "description": "Middle",
+                  "comment": "中"
+                },
+                {
+                  "value": 3,
+                  "description": "High",
+                  "comment": "高"
+                }
+              ],
+              "gatt-access": [],
+              "comment": "水量档位"
+            }
+          ],
+          "comment": "电热毯"
+        },
+        {
+          "iid": 5,
+          "type": "urn:miot-spec-v2:service:indicator-light:00007803:xiaomi-mj2:1",
+          "description": "Indicator Light",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-mj2:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "gatt-access": [],
+              "comment": "指示灯开关"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-mj2:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "gatt-access": [],
+              "comment": "工作状态灯开关"
+            }
+          ],
+          "comment": "指示灯"
+        }
+      ]
+    },
+    "xiaomi.diffuser.xw002": {
+      "type": "urn:miot-spec-v2:device:diffuser:0000A01E:xiaomi-xw002:2:0000C82B",
+      "description": "diffuser",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:diffuser:00007833:xiaomi-xw002:1:0000C82B",
+          "description": "Diffuser",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:fault:00000009:xiaomi-xw002:1:0000C82B",
+              "description": "Device Fault",
+              "format": "bool",
+              "access": [
+                "read",
+                "notify"
+              ],
+              "source": 1,
+              "gatt-access": [],
+              "comment": "设备故障"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-xw002:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "source": 4,
+              "gatt-access": [
+                "read",
+                "notify",
+                "write"
+              ],
+              "comment": "开关"
+            },
+            {
+              "iid": 3,
+              "type": "urn:miot-spec-v2:property:fragrance-out-time:0000017F:xiaomi-xw002:1",
+              "description": "Fragrance Out Time",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "seconds",
+              "value-range": [
+                2,
+                6,
+                1
+              ],
+              "source": 4,
+              "gatt-access": [
+                "write",
+                "read",
+                "notify"
+              ],
+              "comment": "出香时长"
+            },
+            {
+              "iid": 4,
+              "type": "urn:miot-spec-v2:property:fragrance-out-time:0000017F:xiaomi-xw002:1",
+              "description": "Fragrance Out Time",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "minutes",
+              "value-range": [
+                10,
+                20,
+                5
+              ],
+              "source": 4,
+              "gatt-access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "出香间隔"
+            }
+          ]
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:ambient-light:0000789D:xiaomi-xw002:1",
+          "description": "Ambient Light",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:xiaomi-xw002:1",
+              "description": "Switch Status",
+              "format": "bool",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "source": 4,
+              "gatt-access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "开关"
+            },
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:brightness:0000000D:xiaomi-xw002:1",
+              "description": "Brightness",
+              "format": "uint8",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "percentage",
+              "value-range": [
+                1,
+                100,
+                1
+              ],
+              "source": 4,
+              "gatt-access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "亮度"
+            },
+            {
+              "iid": 3,
+              "type": "urn:miot-spec-v2:property:color:0000000E:xiaomi-xw002:1",
+              "description": "Color",
+              "format": "uint32",
+              "access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "unit": "rgb",
+              "value-range": [
+                0,
+                16777215,
+                1
+              ],
+              "source": 4,
+              "gatt-access": [
+                "read",
+                "write",
+                "notify"
+              ],
+              "comment": "颜色"
+            }
+          ],
+          "comment": "氛围灯"
+        }
+      ]
+    },
+    "fixture.plug.centiwatt": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "watt",
+              "comment": "电功率(单位0.01w)"
+            }
+          ]
+        }
+      ]
+    },
+    "fixture.plug.watt": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "watt",
+              "comment": "电功率"
+            }
+          ]
+        }
+      ]
+    },
+    "fixture.plug.kw": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "kilowatt"
+            }
+          ]
+        }
+      ]
+    },
+    "fixture.plug.milliwatt": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "mW"
+            }
+          ]
+        }
+      ]
+    },
+    "fixture.plug.negative": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "watt"
+            }
+          ]
+        }
+      ]
+    },
+    "fixture.plug.unknown": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:cuco-v3:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:cuco-v3:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:cuco-v3:1",
+              "format": "bool",
+              "access": [
+                "read",
+                "write"
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 11,
+          "type": "urn:miot-spec-v2:service:power-consumption:0000780E:test:1",
+          "properties": [
+            {
+              "iid": 2,
+              "type": "urn:miot-spec-v2:property:electric-power:00000066:test:1",
+              "format": "float",
+              "access": [
+                "read"
+              ],
+              "unit": "volt"
+            }
+          ]
+        }
+      ]
     }
   },
   "fallbackSpecs": [
@@ -744,6 +1538,60 @@
       "name": "米家空气净化器 4 Lite",
       "model": "zhimi.airp.rma3",
       "isOnline": true
+    },
+    {
+      "did": "did_derh",
+      "name": "米家智能除湿机 13L",
+      "model": "xiaomi.derh.13l",
+      "isOnline": true
+    },
+    {
+      "did": "did_blanket",
+      "name": "米家智能水暖毯",
+      "model": "xiaomi.blanket.mj2",
+      "isOnline": true
+    },
+    {
+      "did": "did_diffuser",
+      "name": "米家智能香氛机",
+      "model": "xiaomi.diffuser.xw002",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_centiwatt",
+      "model": "fixture.plug.centiwatt",
+      "name": "centiwatt",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_watt",
+      "model": "fixture.plug.watt",
+      "name": "watt",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_kw",
+      "model": "fixture.plug.kw",
+      "name": "kw",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_milliwatt",
+      "model": "fixture.plug.milliwatt",
+      "name": "milliwatt",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_negative",
+      "model": "fixture.plug.negative",
+      "name": "negative",
+      "isOnline": true
+    },
+    {
+      "did": "did_power_unknown",
+      "model": "fixture.plug.unknown",
+      "name": "unknown",
+      "isOnline": true
     }
   ],
   "rooms": [
@@ -794,7 +1642,133 @@
     { "did": "did_purifier", "siid": 3, "piid": 8, "value": 0 },
     { "did": "did_purifier", "siid": 3, "piid": 7, "value": 24.5 },
     { "did": "did_purifier", "siid": 3, "piid": 1, "value": 52 },
-    { "did": "did_purifier", "siid": 4, "piid": 1, "value": 86 }
+    { "did": "did_purifier", "siid": 4, "piid": 1, "value": 86 },
+    {
+      "did": "did_derh",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_derh",
+      "siid": 2,
+      "piid": 3,
+      "value": 0
+    },
+    {
+      "did": "did_derh",
+      "siid": 3,
+      "piid": 1,
+      "value": 60
+    },
+    {
+      "did": "did_derh",
+      "siid": 3,
+      "piid": 2,
+      "value": 24
+    },
+    {
+      "did": "did_blanket",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_blanket",
+      "siid": 2,
+      "piid": 3,
+      "value": 0
+    },
+    {
+      "did": "did_blanket",
+      "siid": 2,
+      "piid": 4,
+      "value": 35
+    },
+    {
+      "did": "did_blanket",
+      "siid": 2,
+      "piid": 5,
+      "value": 33
+    },
+    {
+      "did": "did_diffuser",
+      "siid": 2,
+      "piid": 2,
+      "value": true
+    },
+    {
+      "did": "did_power_centiwatt",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_centiwatt",
+      "siid": 11,
+      "piid": 2,
+      "value": 11904
+    },
+    {
+      "did": "did_power_watt",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_watt",
+      "siid": 11,
+      "piid": 2,
+      "value": 119.04
+    },
+    {
+      "did": "did_power_kw",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_kw",
+      "siid": 11,
+      "piid": 2,
+      "value": 0.11904
+    },
+    {
+      "did": "did_power_milliwatt",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_milliwatt",
+      "siid": 11,
+      "piid": 2,
+      "value": 119040
+    },
+    {
+      "did": "did_power_negative",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_negative",
+      "siid": 11,
+      "piid": 2,
+      "value": -1
+    },
+    {
+      "did": "did_power_unknown",
+      "siid": 2,
+      "piid": 1,
+      "value": true
+    },
+    {
+      "did": "did_power_unknown",
+      "siid": 11,
+      "piid": 2,
+      "value": 11904
+    }
   ],
   "expectedKinds": {
     "did_light": {
@@ -914,6 +1888,94 @@
       "temperature": 24.5,
       "humidity": 52,
       "filterLifePercent": 86
+    },
+    "did_derh": {
+      "kind": "fan",
+      "entityId": "miot:did_derh:2",
+      "isOn": true,
+      "percentage": null,
+      "presetMode": "Smart",
+      "availablePresetModes": [
+        "Smart",
+        "Sleep",
+        "Clothes Drying"
+      ],
+      "isOscillating": null,
+      "temperature": 24,
+      "humidity": 60
+    },
+    "did_blanket": {
+      "kind": "climate",
+      "entityId": "miot:did_blanket:2",
+      "isOn": true,
+      "hvacMode": "heat",
+      "availableModes": [
+        "heat",
+        "off"
+      ],
+      "targetTemperature": 35,
+      "currentTemperature": null,
+      "minTemp": 25,
+      "maxTemp": 55,
+      "step": 1,
+      "fanMode": null,
+      "availableFanModes": []
+    },
+    "did_diffuser": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_diffuser:2",
+      "isOn": true,
+      "powerWatts": null,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_centiwatt": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_centiwatt:2",
+      "isOn": true,
+      "powerWatts": 119.04,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_watt": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_watt:2",
+      "isOn": true,
+      "powerWatts": 119.04,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_kw": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_kw:2",
+      "isOn": true,
+      "powerWatts": 119.04,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_milliwatt": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_milliwatt:2",
+      "isOn": true,
+      "powerWatts": 119.04,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_negative": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_negative:2",
+      "isOn": true,
+      "powerWatts": null,
+      "childLockEntityId": null,
+      "isChildLocked": false
+    },
+    "did_power_unknown": {
+      "kind": "plug",
+      "switchEntityId": "miot:did_power_unknown:2",
+      "isOn": true,
+      "powerWatts": null,
+      "childLockEntityId": null,
+      "isChildLocked": false
     }
   },
   "expectedEnvironmentReadings": [
@@ -931,6 +1993,14 @@
       "roomName": "书房",
       "temperature": 24.5,
       "humidity": 52,
+      "battery": null
+    },
+    {
+      "id": "did_derh",
+      "label": "米家智能除湿机 13L",
+      "roomName": "全屋",
+      "temperature": 24,
+      "humidity": 60,
       "battery": null
     },
     {
@@ -1013,6 +2083,119 @@
       { "did": "did_purifier", "siid": 3, "piid": 7 },
       { "did": "did_purifier", "siid": 3, "piid": 1 },
       { "did": "did_purifier", "siid": 4, "piid": 1 }
+    ],
+    "did_derh": [
+      {
+        "did": "did_derh",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_derh",
+        "siid": 2,
+        "piid": 3
+      },
+      {
+        "did": "did_derh",
+        "siid": 3,
+        "piid": 2
+      },
+      {
+        "did": "did_derh",
+        "siid": 3,
+        "piid": 1
+      }
+    ],
+    "did_blanket": [
+      {
+        "did": "did_blanket",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_blanket",
+        "siid": 2,
+        "piid": 4
+      }
+    ],
+    "did_diffuser": [
+      {
+        "did": "did_diffuser",
+        "siid": 2,
+        "piid": 2
+      }
+    ],
+    "did_power_centiwatt": [
+      {
+        "did": "did_power_centiwatt",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_centiwatt",
+        "siid": 11,
+        "piid": 2
+      }
+    ],
+    "did_power_watt": [
+      {
+        "did": "did_power_watt",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_watt",
+        "siid": 11,
+        "piid": 2
+      }
+    ],
+    "did_power_kw": [
+      {
+        "did": "did_power_kw",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_kw",
+        "siid": 11,
+        "piid": 2
+      }
+    ],
+    "did_power_milliwatt": [
+      {
+        "did": "did_power_milliwatt",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_milliwatt",
+        "siid": 11,
+        "piid": 2
+      }
+    ],
+    "did_power_negative": [
+      {
+        "did": "did_power_negative",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_negative",
+        "siid": 11,
+        "piid": 2
+      }
+    ],
+    "did_power_unknown": [
+      {
+        "did": "did_power_unknown",
+        "siid": 2,
+        "piid": 1
+      },
+      {
+        "did": "did_power_unknown",
+        "siid": 11,
+        "piid": 2
+      }
     ]
   },
   "commandCases": [
@@ -1223,6 +2406,146 @@
           { "did": "did_purifier", "siid": 11, "piid": 1, "value": 7 }
         ]
       }
+    },
+    {
+      "model": "xiaomi.derh.13l",
+      "command": {
+        "kind": "setFanPresetMode",
+        "entityId": "miot:did_derh:2",
+        "presetMode": "Sleep"
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_derh",
+            "siid": 2,
+            "piid": 3,
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "model": "xiaomi.blanket.mj2",
+      "command": {
+        "kind": "setClimateTemperature",
+        "entityId": "miot:did_blanket:2",
+        "temperature": 100
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_blanket",
+            "siid": 2,
+            "piid": 4,
+            "value": 55
+          }
+        ]
+      }
+    },
+    {
+      "model": "xiaomi.diffuser.xw002",
+      "command": {
+        "kind": "setSwitch",
+        "entityId": "miot:did_diffuser:2",
+        "isOn": false
+      },
+      "expected": {
+        "kind": "setProps",
+        "writes": [
+          {
+            "did": "did_diffuser",
+            "siid": 2,
+            "piid": 2,
+            "value": false
+          }
+        ]
+      }
+    }
+  ],
+  "selectionCases": [
+    {
+      "utterance": "关闭所有风扇",
+      "isOn": false,
+      "ids": [
+        "did_fan"
+      ]
+    },
+    {
+      "utterance": "关闭除湿机",
+      "isOn": false,
+      "ids": [
+        "did_derh"
+      ]
+    },
+    {
+      "utterance": "关闭香氛机",
+      "isOn": false,
+      "ids": [
+        "did_diffuser"
+      ]
+    },
+    {
+      "utterance": "关闭所有空调",
+      "isOn": false,
+      "ids": [
+        "did_ac"
+      ]
+    },
+    {
+      "utterance": "turn off all fans",
+      "isOn": false,
+      "ids": [
+        "did_fan"
+      ]
+    },
+    {
+      "utterance": "turn off the dehumidifier",
+      "isOn": false,
+      "ids": [
+        "did_derh"
+      ]
+    },
+    {
+      "utterance": "turn off the diffuser",
+      "isOn": false,
+      "ids": [
+        "did_diffuser"
+      ]
+    },
+    {
+      "utterance": "关闭所有插座",
+      "isOn": false,
+      "ids": [
+        "did_plug",
+        "did_plug_unit",
+        "did_panel.s2",
+        "did_panel.s3",
+        "did_power_centiwatt",
+        "did_power_watt",
+        "did_power_kw",
+        "did_power_milliwatt",
+        "did_power_negative",
+        "did_power_unknown"
+      ]
+    },
+    {
+      "utterance": "turn off all plugs",
+      "isOn": false,
+      "ids": [
+        "did_plug",
+        "did_plug_unit",
+        "did_panel.s2",
+        "did_panel.s3",
+        "did_power_centiwatt",
+        "did_power_watt",
+        "did_power_kw",
+        "did_power_milliwatt",
+        "did_power_negative",
+        "did_power_unknown"
+      ]
     }
   ]
 }

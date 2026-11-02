@@ -381,7 +381,7 @@ export const IntentReply = {
 
 // MARK: - 0ms Local Intent Parser
 
-type IntentCategory = "light" | "climate" | "heater" | "fan" | "airPurifier" | "plug" | "vacuum" | "tv" | "camera" | "other";
+type IntentCategory = "light" | "climate" | "heater" | "fan" | "airPurifier" | "dehumidifier" | "diffuser" | "plug" | "vacuum" | "tv" | "camera" | "other";
 
 const CONSUMED_MARKER = "\u001f";
 
@@ -402,8 +402,10 @@ function isAirPurifierDevice(dev: SmartDevice): boolean {
 function deviceCategory(dev: SmartDevice): IntentCategory {
   if (dev.kind.kind === "light") return "light";
   if (dev.kind.kind === "climate") {
-    return dev.model.includes("heater") || dev.name.includes("暖") ? "heater" : "climate";
+    return dev.model.includes("heater") || dev.model.includes("blanket") || dev.name.includes("暖") ? "heater" : "climate";
   }
+  if (dev.kind.kind === "fan" && dev.model.includes(".derh.")) return "dehumidifier";
+  if (dev.kind.kind === "plug" && dev.model.includes(".diffuser.")) return "diffuser";
   if (dev.kind.kind === "fan") return isAirPurifierDevice(dev) ? "airPurifier" : "fan";
   if (dev.kind.kind === "plug") return "plug";
   if (dev.kind.kind === "vacuum") return "vacuum";
@@ -536,7 +538,7 @@ const EN_CATEGORY_WORDS: ReadonlyArray<readonly [string, IntentCategory]> = [
   ["purifiers", "airPurifier"], ["purifier", "airPurifier"],
   ["lights", "light"], ["light", "light"], ["lamps", "light"], ["lamp", "light"],
   ["climate", "climate"], ["ac", "climate"],
-  ["heater", "heater"],
+  ["heater", "heater"], ["dehumidifier", "dehumidifier"], ["diffuser", "diffuser"],
   ["fans", "fan"], ["fan", "fan"],
   ["plugs", "plug"], ["plug", "plug"], ["socket", "plug"], ["outlet", "plug"],
   ["vacuum", "vacuum"],
@@ -694,7 +696,7 @@ export const LocalIntentParser = {
 
     if (clean.includes("制冷")) ops.push({ kind: "hvacMode", mode: "cool" });
     else if (clean.includes("制热")) ops.push({ kind: "hvacMode", mode: "heat" });
-    else if (clean.includes("除湿")) ops.push({ kind: "hvacMode", mode: "dry" });
+    else if (clean.includes("除湿") && !clean.includes("除湿机")) ops.push({ kind: "hvacMode", mode: "dry" });
     else if (clean.includes("送风")) ops.push({ kind: "hvacMode", mode: "fan_only" });
 
     if (clean.includes("停止摇头") || clean.includes("关闭摇头") || clean.includes("不摇头")) {
@@ -745,6 +747,9 @@ export const LocalIntentParser = {
       const wanted = new Set<IntentCategory>();
       if (clean.includes("灯")) wanted.add("light");
       if (clean.includes("空调")) wanted.add("climate");
+      if (clean.includes("除湿机")) wanted.add("dehumidifier");
+      if (clean.includes("香氛机")) wanted.add("diffuser");
+      if (clean.includes("插座")) wanted.add("plug");
       if (clean.includes("净化器") || clean.includes("空净")) wanted.add("airPurifier");
       else if (clean.includes("风扇")) wanted.add("fan");
       if (clean.includes("摄像") || clean.includes("监控")) wanted.add("camera");
@@ -1995,8 +2000,11 @@ export function buildAssistantContext(options: {
   };
 }
 
-/** `light`/`climate`/`fan`/`airPurifier`/`plug`/`vacuum`; `null` for sensors (not assistant-controllable). */
+/** Category used in the model catalog; sensors are not assistant-controllable. */
 export function assistantDeviceCategory(device: SmartDevice): string | null {
+  if (device.model.includes("blanket") && device.kind.kind === "climate") return "heater";
+  if (device.model.includes(".derh.") && device.kind.kind === "fan") return "dehumidifier";
+  if (device.model.includes(".diffuser.") && device.kind.kind === "plug") return "diffuser";
   switch (device.kind.kind) {
     case "light":
     case "climate":

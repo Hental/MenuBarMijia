@@ -118,7 +118,7 @@ public struct PendingCloudConsent: Equatable, Sendable {
 // MARK: - Device Category Used by Both Resolvers
 
 public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
-    case light, climate, heater, fan, airPurifier, plug, vacuum, speaker, tv, fridge, camera, sensor
+    case light, climate, heater, fan, airPurifier, dehumidifier, diffuser, plug, vacuum, speaker, tv, fridge, camera, sensor
     private static let heaterNameHints = ["电暖", "暖气", "取暖", "暖风"]
     private static let airPurifierNameHints = ["净化", "空净"]
 
@@ -126,10 +126,11 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
         switch device.kind {
         case .light: self = .light
         case .climate:
-            let isHeater = device.model.contains("heater")
+            let isHeater = device.model.contains("heater") || device.model.contains("blanket")
                 || Self.heaterNameHints.contains(where: device.name.contains)
             self = isHeater ? .heater : .climate
         case .fan(let s):
+            if device.model.contains(".derh.") { self = .dehumidifier; return }
             let lowerModel = device.model.lowercased()
             let isPurifier = lowerModel.contains("airp")
                 || lowerModel.contains("purifier")
@@ -138,7 +139,7 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
                 || s.airQuality != nil
                 || s.filterLifePercent != nil
             self = isPurifier ? .airPurifier : .fan
-        case .plug: self = .plug
+        case .plug: self = device.model.contains(".diffuser.") ? .diffuser : .plug
         case .vacuum: self = .vacuum
         case .speaker: self = .speaker
         case .tv: self = .tv
@@ -151,7 +152,7 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
     /// Categories whose state the assistant can change; the rest are omitted from prompts and plans.
     public var isAssistantControllable: Bool {
         switch self {
-        case .light, .climate, .heater, .fan, .airPurifier, .plug, .vacuum, .tv, .camera: return true
+        case .light, .climate, .heater, .fan, .airPurifier, .dehumidifier, .diffuser, .plug, .vacuum, .tv, .camera: return true
         case .speaker, .fridge, .sensor: return false
         }
     }

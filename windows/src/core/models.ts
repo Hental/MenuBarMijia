@@ -360,6 +360,10 @@ export function localizeFanPreset(mode: string): string {
       return t("自动");
     case "sleep":
       return t("睡眠");
+    case "smart":
+      return t("智能");
+    case "clothes drying":
+      return t("干衣");
     case "favorite":
     case "favourite":
       return t("最爱");

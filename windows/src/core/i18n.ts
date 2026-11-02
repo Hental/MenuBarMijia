@@ -429,6 +429,8 @@ const CATALOG: Readonly<Record<string, readonly [string, string]>> = {
   "夜视关": ["夜视关", "Night Off"],
   "夜视开": ["夜视开", "Night On"],
   "自动夜视": ["自动夜视", "Auto Night"],
+  "智能": ["智能", "Smart"],
+  "干衣": ["干衣", "Clothes Drying"],
   "智能全彩": ["智能全彩", "Smart Color"],
   "全彩夜视": ["全彩夜视", "Full Color"],
   "休眠中 · 点击唤醒": ["休眠中 · 点击唤醒", "Sleeping · Click to Wake"],
