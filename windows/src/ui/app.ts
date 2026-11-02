@@ -521,6 +521,20 @@ function upgradeCachedDevices(devices: SmartDevice[]): SmartDevice[] {
         },
       };
     }
+    if (dev.kind.kind === "fridge") {
+      // A 1.1.5 cache can carry ids from the guessed fallback; cloud re-synthesis
+      // restores only verified writable targets afterwards (#148).
+      return {
+        ...dev,
+        kind: {
+          ...dev.kind,
+          modeEntityId: null,
+          availableModes: [],
+          fridgeTargetEntityId: null,
+          freezerTargetEntityId: null,
+        },
+      };
+    }
     return dev;
   });
 }
@@ -3839,17 +3853,23 @@ export class MenuMijiaWindowsApp {
     }
     if (k.kind === "fridge") {
       const id = this.escapeHtml(dev.id);
+      const fridgeStep = k.fridgeTargetEntityId
+        ? `<button class="cc-seg-pill" data-fridgestep="${id}:fridge:-1" aria-label="${t("降低冷藏室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:1" aria-label="${t("升高冷藏室温度")}">＋</button>`
+        : "";
+      const freezerStep = k.freezerTargetEntityId
+        ? `<button class="cc-seg-pill" data-fridgestep="${id}:freezer:-1" aria-label="${t("降低冷冻室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:1" aria-label="${t("升高冷冻室温度")}">＋</button>`
+        : "";
       return `
         <div class="cc-tile-drawer">
           <div class="cc-segmented-pills">
             <span class="cc-pill-label">${t("冷藏室")} (${formatTemperature(k.fridgeTargetTemp)})</span>
-            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:-1" aria-label="${t("降低冷藏室温度")}">−</button>
-            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:1" aria-label="${t("升高冷藏室温度")}">＋</button>
+            ${fridgeStep}
           </div>
           <div class="cc-segmented-pills">
             <span class="cc-pill-label">${t("冷冻室")} (${formatTemperature(k.freezerTargetTemp)})</span>
-            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:-1" aria-label="${t("降低冷冻室温度")}">−</button>
-            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:1" aria-label="${t("升高冷冻室温度")}">＋</button>
+            ${freezerStep}
           </div>
           ${
             k.availableModes.length > 0

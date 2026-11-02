@@ -1147,6 +1147,8 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
     };
   }
 
+  // A guessed (siid, piid) can hit the wrong attribute, so this fallback is read-only
+  // until a verified model-specific spec replaces it (#148).
   if (m.includes(".fridge.") || n.includes("冰箱")) {
     return {
       type: "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
@@ -1154,19 +1156,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
         {
           iid: 2,
           type: "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
-          properties: [
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
-              format: "uint8",
-              access: ["read", "write"],
-              valueList: [
-                { value: 0, description: "None" },
-                { value: 1, description: "Holiday" },
-                { value: 2, description: "Smart" },
-              ],
-            },
-          ],
+          properties: [],
           actions: [],
         },
         {
@@ -1174,7 +1164,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-30, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [2, 8, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [2, 8, 1] },
           ],
           actions: [],
         },
@@ -1183,7 +1173,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-50, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [-24, -15, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [-24, -15, 1] },
           ],
           actions: [],
         },

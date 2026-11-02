@@ -460,6 +460,38 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     );
   });
 
+  it("hides cached fridge writable controls until the cloud spec re-synthesizes (#148)", () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [{
+        id: "did_fridge",
+        name: "冰箱",
+        roomId: "",
+        roomName: "",
+        model: "midjd6.fridge.v1",
+        isOnline: true,
+        kind: {
+          kind: "fridge",
+          modeEntityId: "miot:did_fridge:2",
+          currentMode: "Holiday",
+          availableModes: ["None", "Smart", "Holiday"],
+          fridgeCurrentTemp: null,
+          fridgeTargetTemp: 6,
+          fridgeTargetEntityId: "miot:did_fridge:3",
+          freezerCurrentTemp: null,
+          freezerTargetTemp: -20,
+          freezerTargetEntityId: "miot:did_fridge:4",
+        },
+      }],
+    }));
+
+    new MenuMijiaWindowsApp(element("#app"));
+    element('[data-expand-device="did_fridge"]').click();
+    assert.equal(document.querySelectorAll("[data-fridgemode]").length, 0);
+    assert.equal(document.querySelectorAll("[data-fridgestep]").length, 0);
+  });
+
   it("keeps the current DOM when polling returns the same snapshot", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp();
     const input = element("#command-input") as HTMLInputElement;

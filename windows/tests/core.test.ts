@@ -429,6 +429,50 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     assert.equal(cameraKind?.kind, "camera");
   });
 
+  it("keeps the new fridge/kettle/motion/lock fallbacks read-only until a real spec confirms them (#148)", () => {
+    // #142 added these categories by guess. A guessed property id can target the
+    // wrong attribute, so only verified model-specific specs may expose writes.
+    const cases = [
+      { model: "fixture.fridge.unknown", name: "未知冰箱", type: "fridge" },
+      { model: "midjd6.kettle.v1", name: "电水壶", type: "kettle" },
+      { model: "miaomiaoce.sensor_motion.t1", name: "人体传感器", type: "motion-sensor" },
+      { model: "lumi.lock.aq1", name: "门锁", type: "lock" },
+    ];
+    for (const item of cases) {
+      const spec = inferFallbackSpec(item);
+      assert.ok(
+        spec.type.includes(`:device:${item.type}:`),
+        `${item.model} should use the ${item.type} fallback`,
+      );
+      for (const service of spec.services) {
+        for (const prop of service.properties) {
+          assert.ok(
+            !prop.access.includes("write"),
+            `${item.model} fallback must not write guessed ${prop.type}`,
+          );
+        }
+      }
+    }
+
+    // Cached 1.1.5 fridge cards may still carry the old writable entity ids; commands
+    // re-resolve the read-only fallback and must reject the write instead of sending it.
+    const fridgeFallback = inferFallbackSpec({ model: "fixture.fridge.unknown", name: "未知冰箱" });
+    assert.throws(
+      () => MiotCommandMapper.map(
+        { kind: "setSelectOption", entityId: "miot:fb_fridge:2", option: "Holiday" },
+        fridgeFallback,
+      ),
+      /Unsupported select option: Holiday/,
+    );
+    assert.throws(
+      () => MiotCommandMapper.map(
+        { kind: "setNumberValue", entityId: "miot:fb_fridge:3", value: 5 },
+        fridgeFallback,
+      ),
+      /Unsupported property: target-temperature/,
+    );
+  });
+
   const lightSpec: MiotDeviceSpec = {
     type: "urn:miot-spec-v2:device:light:0000A001:yeelink-ceiling22:1",
     services: [

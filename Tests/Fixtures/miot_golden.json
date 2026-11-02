@@ -1527,6 +1527,56 @@
         "isMotionDetectionOn": null,
         "streamEntityId": null
       }
+    },
+    {
+      "did": "fb_fridge",
+      "model": "fixture.fridge.unknown",
+      "name": "未知冰箱",
+      "spec": {
+        "type": "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
+            "properties": [],
+            "actions": []
+          },
+          {
+            "iid": 3,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              { "iid": 1, "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1", "format": "int8", "access": ["read"], "value-range": [-30, 100, 1] },
+              { "iid": 2, "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", "format": "int8", "access": ["read"], "value-range": [2, 8, 1] }
+            ],
+            "actions": []
+          },
+          {
+            "iid": 4,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              { "iid": 1, "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1", "format": "int8", "access": ["read"], "value-range": [-50, 100, 1] },
+              { "iid": 2, "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", "format": "int8", "access": ["read"], "value-range": [-24, -15, 1] }
+            ],
+            "actions": []
+          }
+        ]
+      },
+      "values": [
+        { "siid": 3, "piid": 2, "value": 6 },
+        { "siid": 4, "piid": 2, "value": -20 }
+      ],
+      "expectedKind": {
+        "kind": "fridge",
+        "modeEntityId": null,
+        "currentMode": "None",
+        "availableModes": [],
+        "fridgeCurrentTemp": null,
+        "fridgeTargetTemp": 6,
+        "fridgeTargetEntityId": null,
+        "freezerCurrentTemp": null,
+        "freezerTargetTemp": -20,
+        "freezerTargetEntityId": null
+      }
     }
   ],
   "devices": [
