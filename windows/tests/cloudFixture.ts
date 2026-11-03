@@ -36,15 +36,17 @@ const sensorSpec: MiotDeviceSpec = {
 export function cloudFixture(intents: readonly DeviceIntent[]) {
   const deviceRecords = [{ did: "fixture-light", name: "测试灯", model, isOnline: true, spec_type: spec.type }];
   const roomRecords: Array<{ id: string; name: string; dids: string[] }> = [];
+  const groupMembers = new Map<string, Record<string, string>>();
   const sensorValues = new Map<number, unknown>([[1, 23], [2, 65]]);
   const values = new Map<number, unknown>([[1, true], [2, 50], [3, 4100]]);
-  const writes: Array<{ piid: number; value: unknown; accepted: boolean }> = [];
+  const writes: Array<{ did: string; piid: number; value: unknown; accepted: boolean }> = [];
   const rejectedValues = new Map<number, unknown>([[2, 80]]);
   let echoPowerReads = false;
   let numericPowerReads = false;
   const echoedPower = new Map(values);
   let completedReads = 0;
   let failGets = 0;
+  let failGroupStatus = 0;
   let writeGate: {
     readonly promise: Promise<void>;
     readonly started: Promise<void>;
@@ -70,6 +72,26 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     let result: unknown = {};
     if (url.includes("device_list")) {
       result = { list: deviceRecords };
+    } else if (url.includes("groupv2/query_status")) {
+      if (failGroupStatus > 0) {
+        failGroupStatus -= 1;
+        return { status: 500, headers: {}, body: "" };
+      }
+      assert.equal(typeof args.body, "string");
+      const fields = new URLSearchParams(String(args.body));
+      const nonce = fields.get("_nonce");
+      const encrypted = fields.get("data");
+      assert.ok(nonce && encrypted);
+      const payload = JSON.parse(MiCloudCrypto.decryptResponse(encrypted, MiCloudCrypto.signedNonce(security, nonce))) as {
+        group_did?: unknown;
+      };
+      const requested = Array.isArray(payload.group_did)
+        ? payload.group_did.filter((did): did is string => typeof did === "string")
+        : [];
+      result = requested.flatMap((groupDid) => {
+        const members = groupMembers.get(groupDid);
+        return members ? [{ group_did: groupDid, status: "1", member_ship: members }] : [];
+      });
     } else if (url.includes("homeroom/")) {
       result = { homelist: [{ id: "fixture-home", name: "测试家庭", roomlist: roomRecords }] };
     } else if (url.includes("miotspec/prop/")) {
@@ -105,11 +127,12 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
         assert.ok(entry !== null && typeof entry === "object" && "piid" in entry && typeof entry.piid === "number");
         const piid = entry.piid;
         if (url.includes("/set")) {
+          assert.ok("did" in entry && typeof entry.did === "string");
           assert.ok("value" in entry);
           const accepted = !rejectedValues.has(piid) || rejectedValues.get(piid) !== entry.value;
-          writes.push({ piid, value: entry.value, accepted });
+          writes.push({ did: entry.did, piid, value: entry.value, accepted });
           if (accepted) values.set(piid, entry.value);
-          return { did: "fixture-light", siid: 2, piid, code: accepted ? 0 : -704042011 };
+          return { did: entry.did, siid: 2, piid, code: accepted ? 0 : -704042011 };
         }
         assert.ok("did" in entry && typeof entry.did === "string");
         const props = deviceRecords.find((record) => record.did === entry.did)?.model === sensorModel ? sensorValues : sourceValues;
@@ -136,6 +159,7 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     values,
     deviceRecords,
     roomRecords,
+    groupMembers,
     sensorValues,
     sensorRecord: (did: string, name: string) => ({ did, name, model: sensorModel, isOnline: true, spec_type: sensorSpec.type }),
     writes,
@@ -143,6 +167,9 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     /** Captures the next property read's values, then waits until the test releases the response. */
     failNextGets: (count = 1) => {
       failGets = count;
+    },
+    failNextGroupStatus: (count = 1) => {
+      failGroupStatus = count;
     },
     setEchoPowerReads: (enabled: boolean) => {
       echoPowerReads = enabled;

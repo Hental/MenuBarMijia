@@ -315,6 +315,107 @@ describe("MiAccountLogin", () => {
   });
 });
 
+describe("Xiaomi light-group membership (#214)", () => {
+  const session = {
+    userId: "100",
+    cUserId: "c100",
+    ssecurity: "AQIDBAUGBwgJCgsMDQ4PEA==",
+    serviceToken: "token",
+    passToken: "",
+    region: "cn",
+  };
+
+  function fakeCloud(resultFor: (payload: unknown) => unknown) {
+    const urls: string[] = [];
+    const bodies: unknown[] = [];
+    const client = new MiCloudClient(session, async (req) => {
+      urls.push(req.url);
+      const fields = new URLSearchParams(req.body ?? "");
+      const nonce = fields.get("_nonce") ?? "";
+      const encrypted = fields.get("data") ?? "";
+      assert.ok(nonce && encrypted);
+      const payload: unknown = JSON.parse(
+        MiCloudCrypto.decryptResponse(encrypted, MiCloudCrypto.signedNonce(session.ssecurity, nonce)),
+      );
+      bodies.push(payload);
+      return { status: 200, headers: {}, body: JSON.stringify({ code: 0, result: resultFor(payload) }) };
+    });
+    return { client, urls, bodies };
+  }
+
+  it("parses member_ship keys as member dids under their group did", () => {
+    const members = MiCloudClient.parseLightGroupMembers([
+      { group_did: "group.living", status: "1", member_ship: { 470498069: "1", 470498070: "1" } },
+    ]);
+    assert.deepEqual([...members], [["group.living", ["470498069", "470498070"]]]);
+  });
+
+  it("accepts the alternate membership field name", () => {
+    const members = MiCloudClient.parseLightGroupMembers([
+      { group_did: "group.bedroom", membership: { "470498071": "1" } },
+    ]);
+    assert.deepEqual([...members], [["group.bedroom", ["470498071"]]]);
+  });
+
+  it("merges repeated groups, dedupes members, and ignores malformed records", () => {
+    const members = MiCloudClient.parseLightGroupMembers([
+      { group_did: "group.a", member_ship: { "1": "1", "2": "1" } },
+      { group_did: "group.b", member_ship: { "2": "1", "3": "1" } },
+      { group_did: "group.a", member_ship: { "2": "1", "4": "1" } },
+      null,
+      "group.c",
+      { group_did: "", member_ship: { "5": "1" } },
+      { group_did: "group.c" },
+      { group_did: "group.d", member_ship: [] },
+      { group_did: "group.e", member_ship: { "": "1", "6": "1" } },
+    ]);
+    assert.deepEqual([...members], [
+      ["group.a", ["1", "2", "4"]],
+      ["group.b", ["2", "3"]],
+      ["group.e", ["6"]],
+    ]);
+    assert.deepEqual(MiCloudClient.parseLightGroupMembers({ code: 0 }), new Map());
+    assert.deepEqual(MiCloudClient.parseLightGroupMembers(null), new Map());
+  });
+
+  it("sends one signed request with the filtered group_did array", async () => {
+    const { client, urls, bodies } = fakeCloud(() => [
+      { group_did: "group.a", status: "1", member_ship: { "11": "1" } },
+      { group_did: "group.b", status: "1", membership: { "12": "1" } },
+    ]);
+    const members = await client.lightGroupMembers(["group.a", "group.b", "group.a", "", "device.1"]);
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0]?.endsWith("/app/v2/groupv2/query_status"));
+    assert.deepEqual(bodies, [{ group_did: ["group.a", "group.b"] }]);
+    assert.deepEqual([...members], [
+      ["group.a", ["11"]],
+      ["group.b", ["12"]],
+    ]);
+  });
+
+  it("skips the request entirely for an empty group list", async () => {
+    let calls = 0;
+    const client = new MiCloudClient(session, async () => {
+      calls += 1;
+      return { status: 200, headers: {}, body: JSON.stringify({ code: 0, result: [] }) };
+    });
+    const members = await client.lightGroupMembers([]);
+    assert.equal(calls, 0);
+    assert.equal(members.size, 0);
+  });
+
+  it("batches group dids in chunks of 100", async () => {
+    const { client, bodies } = fakeCloud(() => []);
+    const dids = Array.from({ length: 101 }, (_, index) => `group.${index}`);
+    const members = await client.lightGroupMembers(dids);
+    assert.deepEqual(
+      bodies.map((body) => (body as { group_did?: readonly string[] }).group_did?.length),
+      [100, 1],
+    );
+    assert.equal(members.size, 0);
+  });
+});
+
 describe("MiotSynthesizer & MiotCommandMapper", () => {
   it("does not let a secondary light service claim hood/gateway cards; video-doorbell maps to camera (#98 survey)", () => {
     const hoodSpec: MiotDeviceSpec = {
