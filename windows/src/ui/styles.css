@@ -706,6 +706,13 @@ body {
   max-width: 100%;
 }
 
+.cc-room-tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
 .cc-room-track {
   flex: 1;
   min-width: 0;

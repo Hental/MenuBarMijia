@@ -1,0 +1,773 @@
+{
+  "rows": [
+    {
+      "id": "heater-power-on",
+      "role": "pin",
+      "device": {
+        "id": "heater-power-on",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "heater-power-off",
+      "role": "pin",
+      "device": {
+        "id": "heater-power-off",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": false
+    },
+    {
+      "id": "heater-mode-heat",
+      "role": "pin",
+      "device": {
+        "id": "heater-mode-heat",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "heat"
+      },
+      "confirm": true
+    },
+    {
+      "id": "heater-mode-off",
+      "role": "pin",
+      "device": {
+        "id": "heater-mode-off",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "off"
+      },
+      "confirm": false
+    },
+    {
+      "id": "heater-setpoint-up",
+      "role": "pin",
+      "device": {
+        "id": "heater-setpoint-up",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 26
+      },
+      "confirm": true
+    },
+    {
+      "id": "heater-setpoint-down",
+      "role": "pin",
+      "device": {
+        "id": "heater-setpoint-down",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 16
+      },
+      "confirm": true
+    },
+    {
+      "id": "heater-fan",
+      "role": "pin",
+      "device": {
+        "id": "heater-fan",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "fanSpeed",
+        "speed": "high"
+      },
+      "confirm": true
+    },
+    {
+      "id": "blanket-power-on",
+      "role": "pin",
+      "device": {
+        "id": "blanket-power-on",
+        "name": "电热毯",
+        "model": "xiaomi.blanket.mj1",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "plug-power-on",
+      "role": "pin",
+      "device": {
+        "id": "plug-power-on",
+        "name": "书房插座",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "plug-power-off",
+      "role": "pin",
+      "device": {
+        "id": "plug-power-off",
+        "name": "书房插座",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": true
+    },
+    {
+      "id": "plug-brightness",
+      "role": "pin",
+      "device": {
+        "id": "plug-brightness",
+        "name": "书房插座",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "brightness",
+        "percent": 40
+      },
+      "confirm": false
+    },
+    {
+      "id": "camera-power-on",
+      "role": "pin",
+      "device": {
+        "id": "camera-power-on",
+        "name": "客厅摄像机",
+        "model": "chuangmi.camera.v6",
+        "kind": "camera"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "camera-power-off",
+      "role": "pin",
+      "device": {
+        "id": "camera-power-off",
+        "name": "客厅摄像机",
+        "model": "chuangmi.camera.v6",
+        "kind": "camera"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": true
+    },
+    {
+      "id": "vacuum-start",
+      "role": "pin",
+      "device": {
+        "id": "vacuum-start",
+        "name": "扫地机",
+        "model": "roborock.vacuum.s5",
+        "kind": "vacuum"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "vacuum-dock",
+      "role": "pin",
+      "device": {
+        "id": "vacuum-dock",
+        "name": "扫地机",
+        "model": "roborock.vacuum.s5",
+        "kind": "vacuum"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": false
+    },
+    {
+      "id": "diffuser-power-on",
+      "role": "pin",
+      "device": {
+        "id": "diffuser-power-on",
+        "name": "香氛机",
+        "model": "zhimi.diffuser.v1",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "diffuser-power-off",
+      "role": "pin",
+      "device": {
+        "id": "diffuser-power-off",
+        "name": "香氛机",
+        "model": "zhimi.diffuser.v1",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": false
+    },
+    {
+      "id": "light-power-on",
+      "role": "pin",
+      "device": {
+        "id": "light-power-on",
+        "name": "书房台灯",
+        "model": "yeelink.light.lamp4",
+        "kind": "light"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "ac-power-on",
+      "role": "pin",
+      "device": {
+        "id": "ac-power-on",
+        "name": "书房空调",
+        "model": "lumi.acpartner.mcn02",
+        "kind": "climate",
+        "targetTemperature": 26
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "ac-mode-heat",
+      "role": "pin",
+      "device": {
+        "id": "ac-mode-heat",
+        "name": "书房空调",
+        "model": "lumi.acpartner.mcn02",
+        "kind": "climate",
+        "targetTemperature": 26
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "heat"
+      },
+      "confirm": false
+    },
+    {
+      "id": "ac-setpoint-up",
+      "role": "pin",
+      "device": {
+        "id": "ac-setpoint-up",
+        "name": "书房空调",
+        "model": "lumi.acpartner.mcn02",
+        "kind": "climate",
+        "targetTemperature": 26
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 28
+      },
+      "confirm": false
+    },
+    {
+      "id": "fan-power-on",
+      "role": "pin",
+      "device": {
+        "id": "fan-power-on",
+        "name": "落地扇",
+        "model": "zhimi.fan.sa1",
+        "kind": "fan"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "missing-power-on",
+      "role": "pin",
+      "device": null,
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "kitchen-power-on",
+      "role": "pin",
+      "device": {
+        "id": "kitchen-power-on",
+        "name": "电饭煲",
+        "model": "chunmi.cooker.normal2",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "kitchen-power-off",
+      "role": "pin",
+      "device": {
+        "id": "kitchen-power-off",
+        "name": "电饭煲",
+        "model": "chunmi.cooker.normal2",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": true
+    },
+    {
+      "id": "kitchen-sensor-power",
+      "role": "pin",
+      "device": {
+        "id": "kitchen-sensor-power",
+        "name": "电饭煲",
+        "model": "chunmi.cooker.normal4",
+        "kind": "sensor"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "oven-power-on",
+      "role": "pin",
+      "device": {
+        "id": "oven-power-on",
+        "name": "烤箱",
+        "model": "chunmi.oven.s1",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "airfryer-power-on",
+      "role": "pin",
+      "device": {
+        "id": "airfryer-power-on",
+        "name": "空气炸锅",
+        "model": "careli.fryer.maf02",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "microwave-power-on",
+      "role": "pin",
+      "device": {
+        "id": "microwave-power-on",
+        "name": "微波炉",
+        "model": "chunmi.microwave.n5",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "healthpot-power-on",
+      "role": "pin",
+      "device": {
+        "id": "healthpot-power-on",
+        "name": "养生壶",
+        "model": "chunmi.healthpot.h1",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "airer-plug-power-on",
+      "role": "pin",
+      "device": {
+        "id": "airer-plug-power-on",
+        "name": "阳台晾衣架",
+        "model": "mijia.plug.mcn01",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "curtain-plug-power-on",
+      "role": "pin",
+      "device": {
+        "id": "curtain-plug-power-on",
+        "name": "客厅窗帘",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "garage-plug-power-on",
+      "role": "pin",
+      "device": {
+        "id": "garage-plug-power-on",
+        "name": "车库门",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "lock-power-on",
+      "role": "pin",
+      "device": {
+        "id": "lock-power-on",
+        "name": "入户门锁",
+        "model": "lumi.lock.mcn002",
+        "kind": "sensor"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "plug-named-heater-off",
+      "role": "pin",
+      "device": {
+        "id": "plug-named-heater-off",
+        "name": "热水器",
+        "model": "cuco.plug.v3",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": true
+    },
+    {
+      "id": "diffuser-named-heater-on",
+      "role": "pin",
+      "device": {
+        "id": "diffuser-named-heater-on",
+        "name": "热水器",
+        "model": "zhimi.diffuser.v1",
+        "kind": "plug"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "light-named-heater-on",
+      "role": "pin",
+      "device": {
+        "id": "light-named-heater-on",
+        "name": "热水器",
+        "model": "yeelink.light.lamp4",
+        "kind": "light"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": false
+    },
+    {
+      "id": "waterheater-model-power-on",
+      "role": "pin",
+      "device": {
+        "id": "waterheater-model-power-on",
+        "name": "电热水器",
+        "model": "viomi.waterheater.e13",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "waterheater-model-power-off",
+      "role": "pin",
+      "device": {
+        "id": "waterheater-model-power-off",
+        "name": "电热水器",
+        "model": "viomi.waterheater.e13",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": false
+    },
+    {
+      "id": "waterheater-model-setpoint-down",
+      "role": "pin",
+      "device": {
+        "id": "waterheater-model-setpoint-down",
+        "name": "电热水器",
+        "model": "viomi.waterheater.e13",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 40
+      },
+      "confirm": true
+    },
+    {
+      "id": "waterheater-model-mode-off",
+      "role": "pin",
+      "device": {
+        "id": "waterheater-model-mode-off",
+        "name": "电热水器",
+        "model": "viomi.waterheater.e13",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "off"
+      },
+      "confirm": false
+    },
+    {
+      "id": "water-name-power-on",
+      "role": "new",
+      "device": {
+        "id": "water-name-power-on",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confirm": true
+    },
+    {
+      "id": "water-name-power-off",
+      "role": "pin",
+      "device": {
+        "id": "water-name-power-off",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": false
+      },
+      "confirm": false
+    },
+    {
+      "id": "water-name-setpoint-up",
+      "role": "new",
+      "device": {
+        "id": "water-name-setpoint-up",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 50
+      },
+      "confirm": true
+    },
+    {
+      "id": "water-name-setpoint-down",
+      "role": "pin",
+      "device": {
+        "id": "water-name-setpoint-down",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 40
+      },
+      "confirm": false
+    },
+    {
+      "id": "water-name-setpoint-equal",
+      "role": "pin",
+      "device": {
+        "id": "water-name-setpoint-equal",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "targetTemperature",
+        "celsius": 45
+      },
+      "confirm": false
+    },
+    {
+      "id": "water-name-mode-heat",
+      "role": "new",
+      "device": {
+        "id": "water-name-mode-heat",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "heat"
+      },
+      "confirm": true
+    },
+    {
+      "id": "water-name-mode-auto",
+      "role": "new",
+      "device": {
+        "id": "water-name-mode-auto",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "auto"
+      },
+      "confirm": true
+    },
+    {
+      "id": "water-name-mode-off",
+      "role": "pin",
+      "device": {
+        "id": "water-name-mode-off",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "hvacMode",
+        "mode": "off"
+      },
+      "confirm": false
+    },
+    {
+      "id": "water-name-fan",
+      "role": "pin",
+      "device": {
+        "id": "water-name-fan",
+        "name": "厨房热水器",
+        "model": "viomi.wh.e1",
+        "kind": "climate",
+        "targetTemperature": 45
+      },
+      "operation": {
+        "kind": "fanSpeed",
+        "speed": "high"
+      },
+      "confirm": false
+    }
+  ]
+}

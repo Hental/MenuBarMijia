@@ -18,6 +18,10 @@ export interface LightSpec {
   readonly maxKelvin: number;
   currentEffect: string | null;
   readonly availableEffects: readonly string[];
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly brightnessWritable?: boolean;
+  readonly colorWritable?: boolean;
 }
 
 export interface ClimateSpec {
@@ -33,6 +37,9 @@ export interface ClimateSpec {
   readonly step: number;
   fanMode: string | null;
   readonly availableFanModes: readonly string[];
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly temperatureWritable?: boolean;
 }
 
 export interface FanSpec {
@@ -48,6 +55,10 @@ export interface FanSpec {
   readonly temperature?: number | null;
   readonly humidity?: number | null;
   readonly filterLifePercent?: number | null;
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly speedWritable?: boolean;
+  readonly swingWritable?: boolean;
 }
 
 export interface PlugSpec {
@@ -58,6 +69,7 @@ export interface PlugSpec {
   readonly energyKwh?: number | null;
   readonly childLockEntityId: string | null;
   isChildLocked: boolean;
+  readonly powerWritable?: boolean;
 }
 
 export interface FridgeSpec {
@@ -81,6 +93,7 @@ export interface VacuumSpec {
   readonly modeEntityId: string | null;
   currentMode: string | null;
   readonly availableModes: readonly string[];
+  readonly actionsWritable?: boolean;
 }
 
 export interface CameraSpec {
@@ -94,6 +107,7 @@ export interface CameraSpec {
   readonly streamEntityId: string | null;
   /** HA-only still frame URL; always absent on the MIoT backend (model parity with macOS). */
   readonly snapshotPath?: string | null;
+  readonly powerWritable?: boolean;
 }
 
 export interface SensorSpec {
@@ -214,6 +228,68 @@ export interface ScheduledCommand {
 }
 
 /** Plugs often power a router, fridge or NAS, and 全关 should not send a cleaning vacuum home (#23). */
+export function deviceCanTogglePower(device: SmartDevice): boolean {
+  const kind = device.kind;
+  switch (kind.kind) {
+    case "light":
+    case "climate":
+    case "fan":
+    case "plug":
+    case "camera":
+      return kind.powerWritable !== false;
+    case "vacuum":
+      return kind.actionsWritable !== false;
+    case "fridge":
+    case "sensor":
+      return false;
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
+}
+
+export function deviceAcceptsControlWrites(device: SmartDevice): boolean {
+  const kind = device.kind;
+  switch (kind.kind) {
+    case "light":
+      return (
+        kind.powerWritable !== false ||
+        kind.brightnessWritable !== false ||
+        kind.colorWritable !== false ||
+        kind.availableEffects.length > 0
+      );
+    case "climate":
+      return (
+        kind.powerWritable !== false ||
+        kind.temperatureWritable !== false ||
+        kind.availableModes.length > 0 ||
+        kind.availableFanModes.length > 0
+      );
+    case "fan":
+      return (
+        kind.powerWritable !== false ||
+        (kind.speedWritable !== false && kind.percentage !== null) ||
+        (kind.swingWritable !== false && kind.isOscillating !== null) ||
+        kind.availablePresetModes.length > 0
+      );
+    case "plug":
+      return kind.powerWritable !== false || kind.childLockEntityId !== null;
+    case "camera":
+      return kind.powerWritable !== false || kind.availableNightShots.length > 0 || kind.motionDetectionEntityId !== null;
+    case "vacuum":
+      return kind.actionsWritable !== false;
+    case "fridge":
+      return kind.modeEntityId !== null || kind.fridgeTargetEntityId !== null || kind.freezerTargetEntityId !== null;
+    case "sensor":
+      return false;
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
+}
+
 export function joinsAllOffByDefault(device: SmartDevice): boolean {
   return (
     device.kind.kind !== "plug" &&
@@ -232,7 +308,7 @@ export function allOffTargets(
   visible: readonly SmartDevice[],
   overrides: Readonly<Record<string, boolean>>
 ): SmartDevice[] {
-  return visible.filter((d) => isDeviceActiveOn(d) && joinsAllOff(d, overrides));
+  return visible.filter((d) => isDeviceActiveOn(d) && joinsAllOff(d, overrides) && deviceCanTogglePower(d));
 }
 
 /** A timer that comes due more than this late (the PC slept, the app was frozen) waits for the user (#22). */

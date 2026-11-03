@@ -35,7 +35,7 @@ struct ClimatePanelModule: View {
         VStack(alignment: .leading, spacing: 9) {
             strip
             gauge
-            if isExpanded {
+            if isExpanded, (spec.temperatureWritable || !modes.isEmpty || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty) {
                 VStack(alignment: .leading, spacing: 8) {
                     if !modes.isEmpty { modeChips }
                     if !spec.availableFanModes.isEmpty {
@@ -64,6 +64,7 @@ struct ClimatePanelModule: View {
 
     private var strip: some View {
         HStack(spacing: 8) {
+            if spec.powerWritable {
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
@@ -85,9 +86,15 @@ struct ClimatePanelModule: View {
                 ? L10n.tr("关闭 \(device.name)", "Turn off \(device.name)")
                 : L10n.tr("打开 \(device.name)", "Turn on \(device.name)")))
             .panelHelp(isRunning ? L10n.tr("关闭空调", "Turn off") : L10n.tr("打开空调", "Turn on"))
+            } else {
+                iconBadge
+            }
 
             Button {
-                guard !isEditingLayout else { return }
+                guard !isEditingLayout, (
+                    spec.powerWritable || spec.temperatureWritable || !modes.isEmpty
+                        || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
+                ) else { return }
                 withAnimation(AppleMotion.snappySpring) { store.toggleExpanded(device.id) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -107,9 +114,14 @@ struct ClimatePanelModule: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .panelHelp(L10n.tr("展开模式与风速", "Show modes and fan speed"))
+            .panelHelp(spec.powerWritable || spec.temperatureWritable || !modes.isEmpty
+                || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
+                ? L10n.tr("展开模式与风速", "Show modes and fan speed")
+                : L10n.tr("只读状态", "Read only"))
 
+            if spec.temperatureWritable {
             stepButton(symbol: "minus", delta: -L10n.celsiusStep(spec.step))
+            }
 
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(L10n.temperatureValue(spec.targetTemperature))
@@ -123,8 +135,22 @@ struct ClimatePanelModule: View {
             .foregroundStyle(fg)
             .frame(minWidth: 44)
 
+            if spec.temperatureWritable {
             stepButton(symbol: "plus", delta: L10n.celsiusStep(spec.step))
+            }
         }
+    }
+
+    private var iconBadge: some View {
+        ZStack {
+            Circle()
+                .fill(isRunning ? AnyShapeStyle(accent) : AnyShapeStyle(Color.primary.opacity(0.08)))
+                .frame(width: 32, height: 32)
+            Image(systemName: spec.hvacMode == "heat" ? "flame.fill" : "snowflake")
+                .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                .foregroundStyle(isRunning ? Color.white : muted)
+        }
+        .accessibilityHidden(true)
     }
 
     private var statusLine: String {

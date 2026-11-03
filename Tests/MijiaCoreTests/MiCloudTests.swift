@@ -913,7 +913,7 @@ actor StubMiCloudAPI: MiCloudAPI {
 }
 
 actor StubXiaomiCameraBridge: XiaomiCameraBridging {
-    private(set) var startCalls: [(did: String, model: String, localIP: String, vendor: String, uid: String?)] = []
+    private(set) var startCalls: [(did: String, model: String, localIP: String, vendor: String, uid: String?, quality: XiaomiCameraStreamQuality)] = []
     private(set) var stopCalls: [String] = []
     var startDelay: Duration?
     var onStartEntered: (@Sendable () -> Void)?
@@ -936,9 +936,10 @@ actor StubXiaomiCameraBridge: XiaomiCameraBridging {
         devicePublic: String,
         sign: String,
         vendor: String,
-        uid: String?
+        uid: String?,
+        quality: XiaomiCameraStreamQuality
     ) async throws -> XiaomiCameraStreamEndpoints {
-        startCalls.append((did: did, model: model, localIP: localIP, vendor: vendor, uid: uid))
+        startCalls.append((did: did, model: model, localIP: localIP, vendor: vendor, uid: uid, quality: quality))
         onStartEntered?()
         if let startDelay {
             try? await Task.sleep(for: startDelay)
@@ -1251,6 +1252,7 @@ struct MiCloudProviderTests {
         #expect(starts.first?.localIP == "192.168.50.145")
         #expect(starts.first?.vendor == "cs2")
         #expect(starts.first?.uid == "TICK-123456-ABCDE")
+        #expect(starts.first?.quality == .hd)
 
         await provider.stopCameraStream(for: cameraDevice)
         let stops = await bridge.stopCalls

@@ -50,6 +50,9 @@ public struct LightSpec: Equatable, Sendable {
     public var maxKelvin: Int
     public var currentEffect: String?
     public var availableEffects: [String]
+    public var powerWritable: Bool
+    public var brightnessWritable: Bool
+    public var colorWritable: Bool
 
     public init(
         entityId: String,
@@ -59,7 +62,10 @@ public struct LightSpec: Equatable, Sendable {
         minKelvin: Int = 2700,
         maxKelvin: Int = 6500,
         currentEffect: String? = nil,
-        availableEffects: [String] = []
+        availableEffects: [String] = [],
+        powerWritable: Bool = true,
+        brightnessWritable: Bool = true,
+        colorWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -69,6 +75,9 @@ public struct LightSpec: Equatable, Sendable {
         self.maxKelvin = maxKelvin
         self.currentEffect = currentEffect
         self.availableEffects = availableEffects
+        self.powerWritable = powerWritable
+        self.brightnessWritable = brightnessWritable
+        self.colorWritable = colorWritable
     }
 }
 
@@ -86,6 +95,8 @@ public struct ClimateSpec: Equatable, Sendable {
     public var availableFanModes: [String]
     public var swingMode: String?
     public var availableSwingModes: [String]
+    public var powerWritable: Bool
+    public var temperatureWritable: Bool
 
     public init(
         entityId: String,
@@ -100,7 +111,9 @@ public struct ClimateSpec: Equatable, Sendable {
         fanMode: String? = nil,
         availableFanModes: [String] = [],
         swingMode: String? = nil,
-        availableSwingModes: [String] = []
+        availableSwingModes: [String] = [],
+        powerWritable: Bool = true,
+        temperatureWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -115,6 +128,8 @@ public struct ClimateSpec: Equatable, Sendable {
         self.availableFanModes = availableFanModes
         self.swingMode = swingMode
         self.availableSwingModes = availableSwingModes
+        self.powerWritable = powerWritable
+        self.temperatureWritable = temperatureWritable
     }
 }
 
@@ -130,6 +145,9 @@ public struct FanSpec: Equatable, Sendable {
     public var temperature: Double?
     public var humidity: Double?
     public var filterLifePercent: Int?
+    public var powerWritable: Bool
+    public var speedWritable: Bool
+    public var swingWritable: Bool
 
     public init(
         entityId: String,
@@ -142,7 +160,10 @@ public struct FanSpec: Equatable, Sendable {
         airQuality: String? = nil,
         temperature: Double? = nil,
         humidity: Double? = nil,
-        filterLifePercent: Int? = nil
+        filterLifePercent: Int? = nil,
+        powerWritable: Bool = true,
+        speedWritable: Bool = true,
+        swingWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -155,6 +176,9 @@ public struct FanSpec: Equatable, Sendable {
         self.temperature = temperature
         self.humidity = humidity
         self.filterLifePercent = filterLifePercent
+        self.powerWritable = powerWritable
+        self.speedWritable = speedWritable
+        self.swingWritable = swingWritable
     }
 }
 
@@ -165,6 +189,7 @@ public struct PlugSpec: Equatable, Sendable {
     public var energyKwh: Double?
     public var childLockEntityId: String?
     public var isChildLocked: Bool
+    public var powerWritable: Bool
 
     public init(
         switchEntityId: String,
@@ -172,7 +197,8 @@ public struct PlugSpec: Equatable, Sendable {
         powerWatts: Double? = nil,
         energyKwh: Double? = nil,
         childLockEntityId: String? = nil,
-        isChildLocked: Bool = false
+        isChildLocked: Bool = false,
+        powerWritable: Bool = true
     ) {
         self.switchEntityId = switchEntityId
         self.isOn = isOn
@@ -180,6 +206,7 @@ public struct PlugSpec: Equatable, Sendable {
         self.energyKwh = energyKwh
         self.childLockEntityId = childLockEntityId
         self.isChildLocked = isChildLocked
+        self.powerWritable = powerWritable
     }
 }
 
@@ -224,6 +251,7 @@ public struct VacuumSpec: Equatable, Sendable {
     public var modeEntityId: String?
     public var currentMode: String?
     public var availableModes: [String]
+    public var actionsWritable: Bool
 
     public init(
         entityId: String,
@@ -231,7 +259,8 @@ public struct VacuumSpec: Equatable, Sendable {
         battery: Int? = nil,
         modeEntityId: String? = nil,
         currentMode: String? = nil,
-        availableModes: [String] = []
+        availableModes: [String] = [],
+        actionsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.status = status
@@ -239,6 +268,7 @@ public struct VacuumSpec: Equatable, Sendable {
         self.modeEntityId = modeEntityId
         self.currentMode = currentMode
         self.availableModes = availableModes
+        self.actionsWritable = actionsWritable
     }
 
     public var isCleaning: Bool {
@@ -329,6 +359,7 @@ public struct CameraSpec: Equatable, Sendable {
     public var isMotionDetectionOn: Bool?
     public var streamEntityId: String?
     public var snapshotPath: String?
+    public var powerWritable: Bool
 
     public init(
         entityId: String,
@@ -338,7 +369,8 @@ public struct CameraSpec: Equatable, Sendable {
         motionDetectionEntityId: String? = nil,
         isMotionDetectionOn: Bool? = nil,
         streamEntityId: String? = nil,
-        snapshotPath: String? = nil
+        snapshotPath: String? = nil,
+        powerWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -348,6 +380,7 @@ public struct CameraSpec: Equatable, Sendable {
         self.isMotionDetectionOn = isMotionDetectionOn
         self.streamEntityId = streamEntityId
         self.snapshotPath = snapshotPath
+        self.powerWritable = powerWritable
     }
 }
 
@@ -401,6 +434,44 @@ public enum DeviceKind: Equatable, Sendable {
         default: return 3
         }
     }
+
+    public var canTogglePower: Bool {
+        switch self {
+        case .light(let spec): return spec.powerWritable
+        case .climate(let spec): return spec.powerWritable
+        case .fan(let spec): return spec.powerWritable
+        case .plug(let spec): return spec.powerWritable
+        case .camera(let spec): return spec.powerWritable
+        case .vacuum(let spec): return spec.actionsWritable
+        case .tv: return true
+        case .speaker, .fridge, .sensor: return false
+        }
+    }
+
+    public var acceptsControlWrites: Bool {
+        switch self {
+        case .light(let spec):
+            return spec.powerWritable || spec.brightnessWritable || spec.colorWritable || !spec.availableEffects.isEmpty
+        case .climate(let spec):
+            return spec.powerWritable || spec.temperatureWritable || !spec.availableModes.isEmpty || !spec.availableFanModes.isEmpty
+        case .fan(let spec):
+            let speed = spec.speedWritable && spec.percentage != nil
+            let swing = spec.swingWritable && spec.isOscillating != nil
+            return spec.powerWritable || speed || swing || !spec.availablePresetModes.isEmpty
+        case .plug(let spec):
+            return spec.powerWritable || spec.childLockEntityId != nil
+        case .camera(let spec):
+            return spec.powerWritable || !spec.availableNightShots.isEmpty || spec.motionDetectionEntityId != nil
+        case .vacuum(let spec):
+            return spec.actionsWritable
+        case .fridge(let spec):
+            return spec.modeEntityId != nil || spec.fridgeTargetEntityId != nil || spec.freezerTargetEntityId != nil
+        case .speaker, .tv:
+            return true
+        case .sensor:
+            return false
+        }
+    }
 }
 
 // MARK: - Unified SmartDevice
@@ -436,14 +507,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     }
 
     /// Whether this device can be toggled on/off with a single primary click
-    public var isPrimaryToggleable: Bool {
-        switch kind {
-        case .light, .climate, .fan, .plug, .vacuum, .tv, .camera:
-            return true
-        case .speaker, .fridge, .sensor:
-            return false
-        }
-    }
+    public var isPrimaryToggleable: Bool { kind.canTogglePower }
 
     /// Whether this device represents a stateless momentary action button (e.g. Home Assistant `button.*` / Wake on LAN, #100).
     public var isMomentaryButton: Bool {
@@ -472,7 +536,22 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     /// Whether this device has an expandable secondary control drawer
     public var hasDetailDrawer: Bool {
         switch kind {
-        case .light, .climate, .fan, .fridge, .vacuum, .speaker, .tv, .camera:
+        case .light(let spec):
+            return spec.brightnessWritable || spec.colorWritable || !spec.availableEffects.isEmpty
+        case .climate(let spec):
+            return spec.temperatureWritable || !spec.availableModes.isEmpty
+                || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
+        case .fan(let spec):
+            let hasReadings = spec.pm25Density != nil || spec.airQuality != nil
+                || spec.temperature != nil || spec.humidity != nil || spec.filterLifePercent != nil
+            let speed = spec.speedWritable && spec.percentage != nil
+            let swing = spec.swingWritable && spec.isOscillating != nil
+            return speed || swing || !spec.availablePresetModes.isEmpty || hasReadings
+        case .camera(let spec):
+            return spec.powerWritable || !spec.availableNightShots.isEmpty || spec.motionDetectionEntityId != nil
+        case .vacuum(let spec):
+            return spec.actionsWritable
+        case .fridge, .speaker, .tv:
             return true
         case .plug(let s):
             return s.powerWatts != nil || s.energyKwh != nil || s.childLockEntityId != nil

@@ -8,9 +8,11 @@ import { Window } from "happy-dom";
 
 import { installWindow } from "./dom.js";
 import { MenuMijiaWindowsApp } from "../src/ui/app.js";
+import { SKINS } from "../src/ui/panelPrefs.js";
 import { cloudFixture } from "./cloudFixture.js";
-import { MiCloudClient, MiotSynthesizer } from "../src/core/miCloudClient.js";
+import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
 import { MiCloudCrypto } from "../src/core/miCloudCrypto.js";
+import type { SmartDevice } from "../src/core/models.js";
 
 let dom: Window;
 
@@ -406,6 +408,62 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     }
   });
 
+  it("drops a card that goes offline while 只显示在线设备 is on", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      fixture.deviceRecords.push(fixture.sensorRecord("sensor-bedroom", "主卧温湿度计"));
+    });
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+    await click("#btn-toggle-hide-offline");
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = false;
+    const held = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(held.started, "Polling did not request properties");
+    held.release();
+    await withTimeout(held.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-tile-id="sensor-bedroom"]') === null);
+    assert.ok(document.querySelector('[data-tile-id="fixture-light"]'));
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
+  });
+
+  it("shows a collapsed group again when its only device comes online", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
+      sensor.isOnline = false;
+      fixture.deviceRecords.push(sensor);
+      const stored = localStorage.getItem("menumijia.windows.settings.v2");
+      assert.ok(stored);
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+        ...JSON.parse(stored),
+        hideOfflineDevices: true,
+        layout: {
+          groups: [{ id: "g-sensors", name: "传感器" }],
+          groupMap: { "sensor-bedroom": "g-sensors" },
+          collapsed: ["all|g-sensors"],
+        },
+      }));
+    });
+    assert.equal(document.querySelector('[data-collapse="g-sensors"]'), null);
+    assert.ok(document.querySelector('[data-tile-id="fixture-light"]'));
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = true;
+    const held = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(held.started, "Polling did not request properties");
+    held.release();
+    await withTimeout(held.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-collapse="g-sensors"]') !== null);
+    const header = element('[data-collapse="g-sensors"]');
+    assert.match(header.textContent ?? "", /传感器/);
+    assert.equal(header.querySelector(".cc-group-count")?.textContent, "1");
+    assert.equal(document.querySelector('[data-tile-id="sensor-bedroom"]'), null);
+    await click('[data-collapse="g-sensors"]');
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+  });
+
   it("appends new devices, removes missing devices and retains a partial custom order", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const light = fixture.deviceRecords[0];
@@ -458,6 +516,56 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
       Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId),
       ["second-light", "fixture-light"],
     );
+  });
+
+  function cachedFridgeDevice() {
+    return {
+      id: "did_fridge",
+      name: "冰箱",
+      roomId: "",
+      roomName: "",
+      model: "midjd6.fridge.v1",
+      isOnline: true,
+      kind: {
+        kind: "fridge",
+        modeEntityId: "miot:did_fridge:2",
+        currentMode: "Holiday",
+        availableModes: ["None", "Smart", "Holiday"],
+        fridgeCurrentTemp: null,
+        fridgeTargetTemp: 6,
+        fridgeTargetEntityId: "miot:did_fridge:3",
+        freezerCurrentTemp: null,
+        freezerTargetTemp: -20,
+        freezerTargetEntityId: "miot:did_fridge:4",
+      },
+    };
+  }
+
+  it("downgrades legacy cached fridge writable controls before the cloud spec re-synthesizes (#148)", () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [cachedFridgeDevice()],
+    }));
+
+    new MenuMijiaWindowsApp(element("#app"));
+    element('[data-expand-device="did_fridge"]').click();
+    assert.equal(document.querySelectorAll("[data-fridgemode]").length, 0);
+    assert.equal(document.querySelectorAll("[data-fridgestep]").length, 0);
+  });
+
+  it("keeps verified cached fridge controls when the cache version is current (#148)", () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedDevicesVersion: 1,
+      cachedXiaomiDevices: [cachedFridgeDevice()],
+    }));
+
+    new MenuMijiaWindowsApp(element("#app"));
+    element('[data-expand-device="did_fridge"]').click();
+    assert.ok(document.querySelector("[data-fridgemode]"), "mode controls should be preserved");
+    assert.equal(document.querySelectorAll("[data-fridgestep]").length, 4);
   });
 
   it("keeps the current DOM when polling returns the same snapshot", async () => {
@@ -841,6 +949,217 @@ describe("全关 (#23)", () => {
   });
 });
 
+describe("Unverified MIoT fallback controls (#154)", () => {
+  it("shows readings and hides power, preset, and setpoint controls", async () => {
+    const model = "zhimi.airp.fallback";
+    const spec = inferFallbackSpec({ model, name: "净化器" });
+    const fresh = MiotSynthesizer.synthesize(
+      [{ did: "fb-air", name: "净化器", model, isOnline: true, specType: null }],
+      [{ id: "r1", name: "客厅", dids: ["fb-air"] }],
+      { [model]: spec },
+      new Map<string, unknown>([
+        ["fb-air.2.1", true],
+        ["fb-air.2.4", 0],
+        ["fb-air.3.4", 12],
+      ]),
+    );
+    const verified = {
+      id: "real-light",
+      name: "书房灯",
+      roomId: "r1",
+      roomName: "书房",
+      model: "yeelink.light.ceiling22",
+      isOnline: true,
+      kind: {
+        kind: "light" as const,
+        entityId: "miot:real-light:2",
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [] as string[],
+      },
+    };
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [...fresh.devices, verified],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="fb-air"]'), null);
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanosc]"), null);
+    assert.ok(document.querySelector('[data-toggle-device="real-light"]'));
+    assert.match(tile("fb-air"), /PM2\.5 12/);
+
+    await click('[data-body-device="fb-air"]');
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanpercent]"), null);
+    assert.match(document.body.textContent ?? "", /PM2\.5 12/);
+  });
+
+  it("opens a read-only camera and expands a climate tile that can only change fan speed", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      isCompactGridMode: false,
+      climatePanel: true,
+      cachedXiaomiDevices: [
+        {
+          id: "cam-ro",
+          name: "门口摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-ro:2",
+            isOn: true,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "cam-off",
+          name: "休眠摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-off:2",
+            isOn: false,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "ac-fan",
+          name: "客厅空调",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "xiaomi.aircondition.mc5",
+          isOnline: true,
+          kind: {
+            kind: "climate",
+            entityId: "miot:ac-fan:2",
+            isOn: true,
+            hvacMode: "fan_only",
+            availableModes: [],
+            targetTemperature: 26,
+            currentTemperature: null,
+            minTemp: 16,
+            maxTemp: 30,
+            step: 1,
+            fanMode: "Low",
+            availableFanModes: ["Low", "High"],
+            powerWritable: false,
+            temperatureWritable: false,
+          },
+        },
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    await click('[data-body-device="cam-ro"]');
+    assert.ok(document.querySelector(".cc-camera-live-sheet"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    assert.ok(document.querySelector("#btn-toggle-camera-url"));
+
+    await click('[data-body-device="cam-off"]');
+    assert.ok(document.querySelector(".cc-camera-stage.is-sleeping"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-off"]'), null);
+
+    assert.ok(document.querySelector('[data-expand-device="ac-fan"]'));
+    assert.equal(document.querySelector('[data-toggle-device="ac-fan"]'), null);
+    assert.equal(document.querySelector("[data-acstep]"), null);
+    await click('[data-expand-device="ac-fan"]');
+    assert.ok(document.querySelector('[data-acfan="ac-fan:Low"]'));
+  });
+
+  it("does not dim a read-only light when the tile is dragged", async () => {
+    const skins = SKINS as Array<{ id: string; readonly title: string }>;
+    skins.push({ id: "frost", get title() { return "霜"; } });
+    try {
+      const light = (id: string, brightnessWritable: boolean) => ({
+        id,
+        name: id,
+        roomId: "r1",
+        roomName: "客厅",
+        model: "yeelink.light.ceiling22",
+        isOnline: true,
+        kind: {
+          kind: "light",
+          entityId: `miot:${id}:2`,
+          isOn: true,
+          brightnessPercent: 40,
+          colorTempKelvin: 4000,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+          powerWritable: true,
+          brightnessWritable,
+          colorWritable: false,
+        },
+      });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+        connectionMode: "xiaomiCloud",
+        hasCompletedOnboarding: true,
+        skin: "frost",
+        isCompactGridMode: false,
+        cachedXiaomiDevices: [light("ro-light", false), light("rw-light", true)],
+      }));
+      (globalThis as { CSS?: { escape: (value: string) => string } }).CSS = {
+        escape: (value: string) => value,
+      };
+      new MenuMijiaWindowsApp(element("#app"));
+      await setImmediate();
+
+      const fill = (id: string) =>
+        document.querySelector(`[data-tile-id="${id}"] .cc-tile-fill`)?.getAttribute("style") ?? "";
+      const drag = (id: string) => {
+        element(`[data-tile-id="${id}"]`).dispatchEvent(
+          new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 10, clientY: 40 }),
+        );
+        window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 180, clientY: 42 }));
+      };
+
+      const before = fill("ro-light");
+      assert.match(before, /width:40%/);
+      drag("ro-light");
+      await setImmediate();
+      assert.equal(fill("ro-light"), before);
+      window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+      await setImmediate();
+      assert.doesNotMatch(document.body.textContent ?? "", /已将|控制失败/);
+
+      drag("rw-light");
+      await setImmediate();
+      assert.match(fill("rw-light"), /width:100%/);
+    } finally {
+      skins.pop();
+      delete (globalThis as { CSS?: unknown }).CSS;
+    }
+  });
+});
+
 describe("Xiaomi cloud region switch (#37)", () => {
   it("names the current region in the empty state and saves a newly selected region", async () => {
     localStorage.removeItem("menumijia.windows.update.v1");
@@ -914,7 +1233,6 @@ describe("Update notice (#39)", () => {
   it("installs an update directly in-app when a verified installer asset is present", async () => {
     localStorage.removeItem("menumijia.windows.update.v1");
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-    const sha = "b".repeat(64);
     const expectedAsset = JSON.parse(
       readFileSync(new URL("./fixtures/windows-installer-asset.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
@@ -928,7 +1246,10 @@ describe("Update notice (#39)", () => {
           browser_download_url:
             "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe",
           size: 3145728,
-          digest: `sha256:${sha}`,
+        },
+        {
+          name: "MenuBarMijia-9.9.9.update.json",
+          size: 526,
         },
       ],
     });
@@ -2442,5 +2763,118 @@ describe("GrokBall side attachment (#114)", () => {
     new MenuMijiaWindowsApp(element("#app"));
     await waitFor(() => !!document.querySelector("[data-ha-error]"));
     assert.equal(element(".cc-grok-ball").dataset.emotion, "34");
+  });
+});
+
+describe("只显示在线设备 (#158)", () => {
+  function light(id: string, room: string, isOnline: boolean): SmartDevice {
+    return {
+      id,
+      name: id,
+      roomId: room,
+      roomName: room,
+      model: "yeelink.light.ceiling22",
+      isOnline,
+      kind: {
+        kind: "light",
+        entityId: `miot:${id}:2`,
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [],
+      },
+    };
+  }
+
+  function tileIds(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId ?? "").sort();
+  }
+
+  function startCached(extra: Record<string, unknown> = {}): void {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [
+        light("online-living", "客厅", true),
+        light("offline-living", "客厅", false),
+        light("offline-study", "书房", false),
+      ],
+      ...extra,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+  }
+
+  it("stays off by default, hides offline cards and 全关 targets, and survives a restart", async () => {
+    startCached();
+    const toggle = element("#btn-toggle-hide-offline");
+    assert.equal(element("#btn-toggle-grid").nextElementSibling, toggle);
+    assert.equal(toggle.getAttribute("aria-label"), "只显示在线设备");
+    assert.equal(toggle.getAttribute("aria-pressed"), "false");
+    assert.equal(toggle.getAttribute("title"), "点击隐藏未通电/离线设备");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
+    assert.match(element("#btn-all-off").textContent ?? "", /全关 \(3\)/);
+
+    await click("#btn-toggle-hide-offline");
+    const enabled = element("#btn-toggle-hide-offline");
+    assert.equal(enabled.getAttribute("aria-pressed"), "true");
+    assert.equal(enabled.classList.contains("is-selected"), true);
+    assert.equal(enabled.getAttribute("title"), "当前只显示在线设备（点击显示全部）");
+    assert.deepEqual(tileIds(), ["online-living"]);
+    assert.match(element("#btn-all-off").textContent ?? "", /全关 \(1\)/);
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(stored.hideOfflineDevices, true);
+
+    document.body.innerHTML = '<div id="app"></div>';
+    new MenuMijiaWindowsApp(element("#app"));
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
+    assert.deepEqual(tileIds(), ["online-living"]);
+
+    await click("#btn-toggle-hide-offline");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
+    const cleared = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(cleared.hideOfflineDevices, false);
+  });
+
+  it("offers 显示离线设备 when the selected room has no online device", async () => {
+    startCached({ hideOfflineDevices: true });
+    await click('[data-room="书房"]');
+    assert.deepEqual(tileIds(), []);
+    assert.equal(element(".cc-empty-title").textContent, "该房间暂无通电在线的设备");
+    await click("#btn-show-offline");
+    assert.deepEqual(tileIds(), ["offline-study"]);
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "false");
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(stored.hideOfflineDevices, false);
+  });
+
+  it("follows the settings checkbox and the macOS English copy", async () => {
+    startCached({ interfaceLanguage: "en" });
+    const toggle = element("#btn-toggle-hide-offline");
+    assert.equal(toggle.getAttribute("aria-label"), "Show online devices only");
+    assert.equal(toggle.getAttribute("title"), "Hide offline/unplugged devices");
+
+    await click("#btn-settings");
+    const box = document.querySelector<HTMLInputElement>("#settings-hide-offline");
+    assert.ok(box);
+    assert.equal(element("label[for='settings-hide-offline']").textContent, "Hide Offline / Unpowered Devices");
+    assert.equal(box.checked, false);
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await setImmediate();
+    assert.deepEqual(tileIds(), ["online-living"]);
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("title"), "Showing online devices only (click to show all)");
+
+    await click('[data-room="书房"]');
+    assert.equal(element("#btn-show-offline").textContent, "Show Offline Devices");
+    assert.equal(element(".cc-empty-title").textContent, "No online devices in this room");
+  });
+
+  it("treats a non-boolean stored value as off", () => {
+    startCached({ hideOfflineDevices: "yes" });
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "false");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
   });
 });

@@ -841,6 +841,9 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
   const m = record.model.toLowerCase();
   const n = record.name.toLowerCase();
 
+  // A guessed (siid, piid) can hit the wrong attribute. Unverified fallbacks stay
+  // read-only until a released model spec replaces them (#154). Fridge fallback
+  // writes stay with #152 so this change does not redo that migration.
   if (m.includes("light") || m.includes("lamp") || m.includes("bulb") || n.includes("灯")) {
     return {
       type: "urn:miot-spec-v2:device:light:0000A001:fallback:1",
@@ -849,19 +852,19 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           iid: 2,
           type: "urn:miot-spec-v2:service:light:00007802:fallback:1",
           properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read", "write"] },
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
             {
               iid: 2,
               type: "urn:miot-spec-v2:property:brightness:0000000D:fallback:1",
               format: "uint8",
-              access: ["read", "write"],
+              access: ["read"],
               valueRange: [1, 100, 1],
             },
             {
               iid: 3,
               type: "urn:miot-spec-v2:property:color-temperature:0000000F:fallback:1",
               format: "uint32",
-              access: ["read", "write"],
+              access: ["read"],
               valueRange: [2700, 6500, 100],
             },
           ],
@@ -886,12 +889,12 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           iid: 2,
           type: "urn:miot-spec-v2:service:air-conditioner:0000780F:fallback:1",
           properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read", "write"] },
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
             {
               iid: 2,
               type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
               format: "uint8",
-              access: ["read", "write"],
+              access: ["read"],
               valueList: [
                 { value: 2, description: "Cool" },
                 { value: 5, description: "Heat" },
@@ -904,7 +907,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
               iid: 4,
               type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
               format: "float",
-              access: ["read", "write"],
+              access: ["read"],
               valueRange: [16, 30, 0.5],
             },
           ],
@@ -922,12 +925,12 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           iid: 2,
           type: "urn:miot-spec-v2:service:fan:00007808:fallback:1",
           properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read", "write"] },
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
             {
               iid: 2,
               type: "urn:miot-spec-v2:property:fan-level:00000016:fallback:1",
               format: "uint8",
-              access: ["read", "write"],
+              access: ["read"],
               valueList: [
                 { value: 1, description: "Level 1" },
                 { value: 2, description: "Level 2" },
@@ -939,7 +942,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
               iid: 3,
               type: "urn:miot-spec-v2:property:horizontal-swing:00000017:fallback:1",
               format: "bool",
-              access: ["read", "write"],
+              access: ["read"],
             },
           ],
           actions: [],
@@ -965,12 +968,12 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           iid: 2,
           type: "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
           properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read", "write"] },
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
             {
               iid: 4,
               type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
               format: "uint8",
-              access: ["read", "write"],
+              access: ["read"],
               valueList: [
                 { value: 0, description: "Auto" },
                 { value: 1, description: "Sleep" },
@@ -1024,10 +1027,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
               ],
             },
           ],
-          actions: [
-            { iid: 1, type: "urn:miot-spec-v2:action:start-sweep:00002804:fallback:1" },
-            { iid: 2, type: "urn:miot-spec-v2:action:stop-sweeping:00002805:fallback:1" },
-          ],
+          actions: [],
         },
       ],
     };
@@ -1052,13 +1052,13 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
               iid: 1,
               type: "urn:miot-spec-v2:property:on:00000006:fallback:1",
               format: "bool",
-              access: ["read", "write"],
+              access: ["read"],
             },
             {
               iid: 3,
               type: "urn:miot-spec-v2:property:night-shot:00000057:fallback:1",
               format: "uint8",
-              access: ["read", "write"],
+              access: ["read"],
               valueList: [
                 { value: 0, description: "Off" },
                 { value: 1, description: "On" },
@@ -1152,6 +1152,8 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
     };
   }
 
+  // A guessed (siid, piid) can hit the wrong attribute, so this fallback is read-only
+  // until a verified model-specific spec replaces it (#148).
   if (m.includes(".fridge.") || n.includes("冰箱")) {
     return {
       type: "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
@@ -1159,19 +1161,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
         {
           iid: 2,
           type: "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
-          properties: [
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
-              format: "uint8",
-              access: ["read", "write"],
-              valueList: [
-                { value: 0, description: "None" },
-                { value: 1, description: "Holiday" },
-                { value: 2, description: "Smart" },
-              ],
-            },
-          ],
+          properties: [],
           actions: [],
         },
         {
@@ -1179,7 +1169,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-30, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [2, 8, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [2, 8, 1] },
           ],
           actions: [],
         },
@@ -1188,7 +1178,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-50, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [-24, -15, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [-24, -15, 1] },
           ],
           actions: [],
         },
@@ -1203,7 +1193,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
         iid: 2,
         type: "urn:miot-spec-v2:service:switch:0000780C:fallback:1",
         properties: [
-          { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read", "write"] },
+          { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
         ],
         actions: [],
       },
@@ -1337,6 +1327,18 @@ export class MiotSpecResolver {
     }
     return null;
   }
+}
+
+function exposesWrite(access: readonly string[] | undefined): boolean {
+  return Boolean(access?.includes("write"));
+}
+
+function readOnlyFlags(flags: Record<string, boolean>): Record<string, false> {
+  const out: Record<string, false> = {};
+  for (const [key, writable] of Object.entries(flags)) {
+    if (!writable) out[key] = false;
+  }
+  return out;
 }
 
 function miotBool(val: unknown): boolean | null {
@@ -1728,6 +1730,7 @@ export const MiotSynthesizer = {
           : null;
 
       const isLightGroup = did.startsWith("group.");
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "light",
         entityId: makeMiotAddress(did, primaryService.iid),
@@ -1737,7 +1740,15 @@ export const MiotSynthesizer = {
         minKelvin: Math.round(ct?.prop.valueRange?.[0] ?? 2700),
         maxKelvin: Math.round(ct?.prop.valueRange?.[1] ?? 6500),
         currentEffect: isLightGroup ? null : currentEffect,
-        availableEffects: isLightGroup ? [] : (mode?.prop.valueList?.map((i) => i.description) ?? []),
+        availableEffects:
+          isLightGroup || !exposesWrite(mode?.prop.access)
+            ? []
+            : (mode?.prop.valueList?.map((i) => i.description) ?? []),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          brightnessWritable: bri ? exposesWrite(bri.prop.access) : true,
+          colorWritable: ct ? exposesWrite(ct.prop.access) : true,
+        }),
       };
     }
 
@@ -1759,32 +1770,43 @@ export const MiotSynthesizer = {
       );
 
       const isOn = miotBool(on?.val) ?? false;
+      const onWritable = exposesWrite(on?.prop.access);
+      const modeWritable = exposesWrite(mode?.prop.access);
       const haModes: string[] = [];
       for (const item of mode?.prop.valueList ?? []) {
         const mapped = hvacModeFromDescription(item.description);
         if (mapped && !haModes.includes(mapped)) haModes.push(mapped);
       }
-      if (haModes.length === 0) haModes.push(sName === "air-conditioner" ? "cool" : "heat");
+      if (haModes.length === 0 && (modeWritable || (!mode && onWritable))) {
+        haModes.push(sName === "air-conditioner" ? "cool" : "heat");
+      }
       const modeVal = typeof mode?.val === "number" ? Math.trunc(mode.val) : null;
       const rawDesc = modeVal !== null ? mode?.prop.valueList?.find((i) => i.value === modeVal)?.description : null;
-      const activeMode = (rawDesc ? hvacModeFromDescription(rawDesc) : null) ?? haModes[0] ?? "cool";
+      const activeMode = (rawDesc ? hvacModeFromDescription(rawDesc) : null) ?? haModes[0] ?? (sName === "air-conditioner" ? "cool" : "heat");
       const fanVal = typeof fanLevel?.val === "number" ? Math.trunc(fanLevel.val) : null;
       const fanDesc =
         fanVal !== null ? (fanLevel?.prop.valueList?.find((i) => i.value === fanVal)?.description ?? null) : null;
+      const exposeModes = modeWritable || (!mode && onWritable);
 
       return {
         kind: "climate",
         entityId: makeMiotAddress(did, primaryService.iid),
         isOn,
         hvacMode: isOn ? activeMode : "off",
-        availableModes: [...haModes, "off"],
+        availableModes: exposeModes ? [...haModes, "off"] : [],
         targetTemperature: typeof target?.val === "number" ? target.val : 26,
         currentTemperature: typeof current?.val === "number" ? current.val : null,
         minTemp: target?.prop.valueRange?.[0] ?? 16,
         maxTemp: target?.prop.valueRange?.[1] ?? 30,
         step: target?.prop.valueRange?.[2] ?? 1,
         fanMode: fanDesc,
-        availableFanModes: fanLevel?.prop.valueList?.map((i) => i.description) ?? [],
+        availableFanModes: exposesWrite(fanLevel?.prop.access)
+          ? (fanLevel?.prop.valueList?.map((i) => i.description) ?? [])
+          : [],
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          temperatureWritable: target ? exposesWrite(target.prop.access) : true,
+        }),
       };
     }
 
@@ -1813,14 +1835,22 @@ export const MiotSynthesizer = {
           ? (presetRef?.prop.valueList?.find((i) => i.value === presetVal)?.description ?? null)
           : null;
 
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "fan",
         entityId: makeMiotAddress(did, primaryService.iid),
         isOn: miotBool(on?.val) ?? false,
         percentage,
         presetMode: presetDesc,
-        availablePresetModes: presetRef?.prop.valueList?.map((i) => i.description) ?? [],
+        availablePresetModes: exposesWrite(presetRef?.prop.access)
+          ? (presetRef?.prop.valueList?.map((i) => i.description) ?? [])
+          : [],
         isOscillating: miotBool(swing?.val),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          speedWritable: percentRef ? exposesWrite(percentRef.prop.access) : true,
+          swingWritable: swing ? exposesWrite(swing.prop.access) : true,
+        }),
       };
     }
 
@@ -1901,19 +1931,26 @@ export const MiotSynthesizer = {
       const humidity = typeof hum?.val === "number" ? hum.val : null;
       const filterLifePercent = typeof filterLife?.val === "number" ? Math.round(filterLife.val) : null;
 
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "fan",
         entityId: makeMiotAddress(did, primaryService.iid),
         isOn: miotBool(on?.val) ?? false,
         percentage,
         presetMode: presetDesc,
-        availablePresetModes: presetRef?.prop.valueList?.map((i) => i.description) ?? [],
+        availablePresetModes: exposesWrite(presetRef?.prop.access)
+          ? (presetRef?.prop.valueList?.map((i) => i.description) ?? [])
+          : [],
         isOscillating: null,
         ...(pm25Density !== null ? { pm25Density } : {}),
         ...(airQuality !== null ? { airQuality } : {}),
         ...(temperature !== null ? { temperature } : {}),
         ...(humidity !== null ? { humidity } : {}),
         ...(filterLifePercent !== null ? { filterLifePercent } : {}),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          speedWritable: speedRef ? exposesWrite(speedRef.prop.access) : true,
+        }),
       };
     }
 
@@ -1966,6 +2003,13 @@ export const MiotSynthesizer = {
         modeEntityId: mode ? makeMiotAddress(did, mode.service.iid) : null,
         currentMode,
         availableModes: mode?.prop.valueList?.map((i) => i.description) ?? [],
+        ...readOnlyFlags({
+          actionsWritable: spec.services.some((service) =>
+            service.actions.some((action) =>
+              ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"].includes(miotShortName(action.type)),
+            ),
+          ),
+        }),
       };
     }
 
@@ -2027,15 +2071,20 @@ export const MiotSynthesizer = {
           ? (nightShot?.prop.valueList?.find((i) => i.value === nightVal)?.description ?? null)
           : null;
 
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "camera",
         entityId: makeMiotAddress(did, primaryService.iid),
         isOn: miotBool(on?.val) ?? false,
         nightShot: currentNightShot,
-        availableNightShots: nightShot?.prop.valueList?.map((i) => i.description) ?? [],
-        motionDetectionEntityId: motion ? makeMiotAddress(did, motion.service.iid) : null,
+        availableNightShots: exposesWrite(nightShot?.prop.access)
+          ? (nightShot?.prop.valueList?.map((i) => i.description) ?? [])
+          : [],
+        motionDetectionEntityId:
+          motion && exposesWrite(motion.prop.access) ? makeMiotAddress(did, motion.service.iid) : null,
         isMotionDetectionOn: miotBool(motion?.val),
         streamEntityId: streamSvc ? makeMiotAddress(did, streamSvc.iid) : null,
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 
@@ -2189,6 +2238,7 @@ export const MiotSynthesizer = {
       const env = spec.services.filter((s) => miotShortName(s.type) === "environment");
       const temperature = readFirst(env, "temperature");
       const humidity = readFirst(env, "relative-humidity");
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "fan",
         entityId: makeMiotAddress(did, primaryService.iid),
@@ -2199,6 +2249,7 @@ export const MiotSynthesizer = {
         isOscillating: null,
         temperature: typeof temperature?.val === "number" ? temperature.val : null,
         humidity: typeof humidity?.val === "number" ? humidity.val : null,
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 
@@ -2225,6 +2276,7 @@ export const MiotSynthesizer = {
       const lockSvc = spec.services.find((s) => miotShortName(s.type) === "physical-controls-locked");
       const lock = lockSvc ? readProp(lockSvc, "physical-controls-locked") : null;
 
+      const onWritable = exposesWrite(on?.prop.access);
       return {
         kind: "plug",
         switchEntityId: makeMiotAddress(did, primaryService.iid),
@@ -2233,6 +2285,7 @@ export const MiotSynthesizer = {
         ...(energyKwh !== null ? { energyKwh } : {}),
         childLockEntityId: lock ? makeMiotAddress(did, lock.service.iid) : null,
         isChildLocked: miotBool(lock?.val) ?? false,
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 

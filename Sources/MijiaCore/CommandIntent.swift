@@ -186,19 +186,31 @@ public enum IntentValidator {
     public static func normalize(_ operation: IntentOperation, for device: SmartDevice) -> IntentOperation? {
         switch (operation, device.kind) {
         case (.power(let on), .plug(let s)):
+            guard s.powerWritable else { return nil }
             if s.switchEntityId.hasPrefix("button."), !on {
                 return nil
             }
             return operation
 
-        case (.power, .light), (.power, .climate), (.power, .fan), (.power, .vacuum), (.power, .tv), (.power, .camera):
+        case (.power, .light(let s)):
+            return s.powerWritable ? operation : nil
+        case (.power, .climate(let s)):
+            return s.powerWritable ? operation : nil
+        case (.power, .fan(let s)):
+            return s.powerWritable ? operation : nil
+        case (.power, .camera(let s)):
+            return s.powerWritable ? operation : nil
+        case (.power, .vacuum(let s)):
+            return s.actionsWritable ? operation : nil
+        case (.power, .tv):
             return operation
 
-        case (.brightness(let percent), .light):
+        case (.brightness(let percent), .light(let s)):
+            guard s.brightnessWritable else { return nil }
             return .brightness(min(100, max(1, percent)))
 
         case (.colorTemperature(let kelvin), .light(let s)):
-            guard kelvin > 0 else { return nil }
+            guard s.colorWritable, kelvin > 0 else { return nil }
             return .colorTemperature(min(s.maxKelvin, max(s.minKelvin, kelvin)))
 
         case (.lightEffect(let raw), .light(let s)):
@@ -212,9 +224,10 @@ public enum IntentValidator {
             return .lightEffect(matched)
 
         case (.hvacMode(let raw), .climate(let s)):
+            guard !s.availableModes.isEmpty else { return nil }
             let lowered = raw.lowercased()
             let mode = hvacModeAliases[lowered] ?? lowered
-            if mode == "off" || s.availableModes.isEmpty || s.availableModes.contains(mode) {
+            if mode == "off" || s.availableModes.contains(mode) {
                 return .hvacMode(mode)
             }
             // HA climate entities expose "heat_cool" where users say "auto".
@@ -224,15 +237,16 @@ public enum IntentValidator {
             return nil
 
         case (.targetTemperature(let t), .climate(let s)):
-            guard t.isFinite else { return nil }
+            guard s.temperatureWritable, t.isFinite else { return nil }
             return .targetTemperature(min(s.maxTemp, max(s.minTemp, t)))
 
         case (.brightnessStep(let delta), .light(let s)):
+            guard s.brightnessWritable else { return nil }
             let base = s.isOn ? (s.brightnessPercent ?? 100) : 0
             return .brightness(min(100, max(1, base + delta)))
 
         case (.temperatureStep(let delta), .climate(let s)):
-            guard delta.isFinite else { return nil }
+            guard s.temperatureWritable, delta.isFinite else { return nil }
             return .targetTemperature(min(s.maxTemp, max(s.minTemp, s.targetTemperature + delta)))
 
         case (.fanSpeed(let raw), .fan(let s)):
@@ -246,7 +260,7 @@ public enum IntentValidator {
         case (.hvacMode(let raw), .fan(let s)) where raw.lowercased() == "auto":
             return FanSpeedMatcher.match("auto", in: s.availablePresetModes).map(IntentOperation.fanSpeed)
 
-        case (.oscillation, .fan(let s)) where s.isOscillating != nil:
+        case (.oscillation, .fan(let s)) where s.swingWritable && s.isOscillating != nil:
             return operation
 
         default:
@@ -399,7 +413,7 @@ public struct IntentCatalog: Sendable {
         var deviceRows: [String] = []
         for device in devices {
             let category = IntentDeviceCategory(device)
-            guard category.isAssistantControllable else { continue }
+            guard category.isAssistantControllable, device.kind.acceptsControlWrites else { continue }
             let alias = "d\(aliasDevices.count + 1)"
             aliasDevices.append((alias, device))
             map[alias] = [device.id]
