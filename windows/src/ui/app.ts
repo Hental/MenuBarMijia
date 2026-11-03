@@ -4124,6 +4124,18 @@ export class MenuMijiaWindowsApp {
     return parsed.pathname === "/api" || parsed.pathname.startsWith("/api/");
   }
 
+  private ownedGo2rtcStreamName(url: string): string | null {
+    if (!this.isOwnedGo2rtcApiUrl(url)) return null;
+    let src: string | null;
+    try {
+      src = new URL(url).searchParams.get("src");
+    } catch {
+      return null;
+    }
+    if (!src || !/^[A-Za-z0-9_]+$/.test(src)) return null;
+    return src;
+  }
+
   private needsHlsTranscodeBridge(url: string): boolean {
     if (!window.__TAURI_INTERNALS__?.invoke) return false;
     if (this.isOwnedGo2rtcApiUrl(url)) return false;
@@ -5858,19 +5870,27 @@ export class MenuMijiaWindowsApp {
     const input = this.root.querySelector<HTMLInputElement>("#camera-stream-url-input");
     const val = input?.value.trim() ?? "";
     this.stopLiveTransport();
+    const token = this.liveCameraToken;
     await this.refreshOwnedGo2rtcOrigin();
+    if (val) this.cameraStreamURLs[id] = val;
+    else delete this.cameraStreamURLs[id];
+    this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
+    this.saveSettings();
+    if (this.liveCameraToken !== token || this.activeLiveCameraId !== id) return;
     if (val) {
       const playable = this.normalizeWindowsCameraStreamUrl(val);
-      this.cameraStreamURLs[id] = val;
       this.liveCameraStreamURL = playable;
       this.liveCameraError = null;
       this.liveCameraLoading = false;
       const dev = this.devices.find((d) => d.id === id);
-      if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
+      const ownedSrc = this.ownedGo2rtcStreamName(playable);
+      if (dev && dev.kind.kind === "camera" && dev.kind.isOn && ownedSrc) {
+        this.liveCameraStreamURL = ownedSrc;
+        this.startMjpegTransport(ownedSrc);
+      } else if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
         void this.bridgeHlsStreamToMjpeg(id, playable);
       }
     } else {
-      delete this.cameraStreamURLs[id];
       const dev = this.devices.find((d) => d.id === id);
       this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
       if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
@@ -5881,10 +5901,9 @@ export class MenuMijiaWindowsApp {
         }
       }
     }
-    this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
-    this.saveSettings();
     this.liveCameraShowingURLInput = false;
     this.render();
+    if (this.liveCameraMode === "mjpeg") this.attachLiveMedia();
   }
 
   // MARK: Layout editing

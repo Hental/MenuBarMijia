@@ -1293,13 +1293,17 @@ describe("Smart camera support and live view (#97)", () => {
 
   it("bridges a loopback HLS server that is not the owned go2rtc origin", async () => {
     const bridgedCalls: string[] = [];
+    const frameCalls: string[] = [];
     const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
       if (name === "go2rtc_endpoint") return { origin: "http://127.0.0.1:43123", authorization: "Basic aa" };
       if (name === "bridge_hls_camera_stream") {
         bridgedCalls.push(String(args.hlsUrl));
         return "cam_mjpeg_living";
       }
-      if (name === "go2rtc_jpeg_frame") return "aGVsbG8";
+      if (name === "go2rtc_jpeg_frame") {
+        frameCalls.push(String(args.src));
+        return "aGVsbG8";
+      }
       return undefined;
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
@@ -1319,12 +1323,45 @@ describe("Smart camera support and live view (#97)", () => {
     await click("#btn-toggle-camera-url");
     (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:43123/api/stream.m3u8?src=cam";
     await click("#btn-save-camera-url");
-    await setImmediate();
+    await waitFor(() => frameCalls.includes("cam"));
     assert.deepEqual(bridgedCalls, []);
     assert.equal(
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:43123/api/stream.mjpeg?src=cam",
+      "data:image/jpeg;base64,aGVsbG8",
     );
+  });
+
+  it("does not start a bridge after the camera closes during the endpoint refresh", async () => {
+    let releaseEndpoint: (value: { origin: string; authorization: string }) => void = () => {};
+    const endpointGate = new Promise<{ origin: string; authorization: string }>((resolve) => {
+      releaseEndpoint = resolve;
+    });
+    const bridgedCalls: string[] = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
+      if (name === "go2rtc_endpoint") return endpointGate;
+      if (name === "bridge_hls_camera_stream") {
+        bridgedCalls.push(String(args.hlsUrl));
+        return "cam_mjpeg_living";
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+    }));
+    const app = new MenuMijiaWindowsApp(element("#app"));
+    app.cameraKeepAliveMs = 20;
+    await click('[data-body-device="camera.living_cam"]');
+    await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:8080/live.m3u8";
+    await click("#btn-save-camera-url");
+    await click("#btn-close-camera-live");
+    await waitFor(() => document.querySelector(".cc-camera-live-sheet") === null);
+    releaseEndpoint({ origin: "http://127.0.0.1:43123", authorization: "Basic aa" });
+    await setImmediate();
+    assert.deepEqual(bridgedCalls, []);
+    assert.equal(document.querySelector(".cc-camera-live-sheet"), null);
   });
 
   it("releases an active P2P session when negotiation fails while the camera modal remains open", async () => {
