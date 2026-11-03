@@ -43,6 +43,11 @@ public enum ControlReadBack: Sendable {
 public enum HomeProviderEvent: Sendable {
     case statusChanged(ConnectionStatus)
     case snapshotUpdated(SynthesizedHome)
+    /// Per-source states for a composite provider, emitted even when no snapshot is available
+    /// (for example while both sources are reconnecting) so the panel footer cannot go stale (#111).
+    case sourceStatusesChanged([HomeBackend: ConnectionStatus])
+    /// The cloud rejected the session; the store persists it as the session's end (#181).
+    case sessionExpired(MiSession)
 }
 
 public enum HomeProviderError: LocalizedError, Equatable, Sendable {

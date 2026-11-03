@@ -28,6 +28,18 @@ public struct ControlCenterPanel: View {
     @AppStorage(GroupPrefs.collapsedKey) private var collapsedRaw: String = "[]"
     @State private var liveGroupMap: [String: String]?
     @AppStorage(GroupPrefs.aliasesKey) private var aliasesRaw: String = "{}"
+    // #146: room aliases and order, separate from device prefs so a room rename never touches devices.
+    @AppStorage(RoomPrefs.aliasesKey) private var roomAliasesRaw: String = "{}"
+    @AppStorage(RoomPrefs.orderKey) private var roomOrderRaw: String = "[]"
+    @State private var isEditingRooms = false
+    @State private var draggingRoomId: String?
+    @State private var roomDragLocation: CGPoint?
+    @State private var roomGrabOffset: CGFloat = 0
+    @State private var roomFrames: [String: CGRect] = [:]
+    @State private var lastRoomSwapAt: Date = .distantPast
+    @State private var lastRoomSwapTarget: String?
+    @State private var roomPressTask: Task<Void, Never>?
+    @State private var roomPressCancelled = false
     @State private var layoutUI = LayoutUIState.shared
     /// #60: type-to-search. The query lives outside `@State` because the app-wide key monitor
     /// (`PanelSearchKeyboard`) has to read and write it before AppKit dispatches the event.
@@ -63,7 +75,7 @@ public struct ControlCenterPanel: View {
     public var body: some View {
         let _ = (store.effectiveLanguage, store.selectedRoomId, store.rooms.count)
         ZStack(alignment: .bottom) {
-            if store.shouldShowOnboarding {
+            if store.showsFullOnboardingGuide {
                 OnboardingGuideView(store: store)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -77,6 +89,13 @@ public struct ControlCenterPanel: View {
 
             groupPromptOverlay
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if store.isShowingMiReauth {
+                miReauthOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+                    .zIndex(3)
+            }
         }
         // Keep the in-memory mirrors in step with edits made elsewhere (card context menus).
         .onChange(of: groupMapRaw) { _, raw in
@@ -105,13 +124,21 @@ public struct ControlCenterPanel: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.newGroupForDevice)
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingGroupId)
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingDeviceId)
+        .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingRoomId)
         // #41: the context menu's "Edit Layout" replaces the 0.6 s long-press for keyboard/VoiceOver users.
         .onChange(of: layoutUI.isEditingLayoutRequested) { _, requested in
             guard requested else { return }
             layoutUI.isEditingLayoutRequested = false
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 store.expandedDeviceId = nil
+                isEditingRooms = false
                 isEditingLayout = true
+            }
+        }
+        // Room preferences survive a room disappearing; only the open prompt cannot.
+        .onChange(of: store.rooms.map(\.id)) { _, ids in
+            if let rid = layoutUI.renamingRoomId, !ids.contains(rid) {
+                layoutUI.renamingRoomId = nil
             }
         }
         .frame(width: Self.panelWidth, height: panelHeight)
@@ -156,7 +183,18 @@ public struct ControlCenterPanel: View {
         }
         // Leaving search puts the caret back on the panel, so Esc closes it instead of resigning the field.
         .onChange(of: search.isSearching) { _, searching in
-            if !searching { isSearchFieldFocused = false }
+            if searching {
+                // The query bar replaces the room strip; reordering underneath it would be invisible.
+                isEditingRooms = false
+                draggingRoomId = nil
+                roomDragLocation = nil
+            } else {
+                isSearchFieldFocused = false
+            }
+        }
+        // #180: typing a query — through the key monitor or the field — ticks the guide's search step.
+        .onChange(of: search.query) { _, query in
+            if !query.isEmpty { store.recordOnboardingMilestone(.searchedDevice) }
         }
         // Mi cloud polls every 6 s only while the panel is on screen (#26).
         .onChange(of: isPresented) { _, visible in store.setPanelVisible(visible) }
@@ -173,6 +211,81 @@ public struct ControlCenterPanel: View {
         MenuBarPanelController.shared.updatePanelSize(width: Self.panelWidth, height: panelHeight)
     }
 
+    // MARK: - Mi Session Expiry (#181)
+
+    private var miSessionExpiryBanner: some View {
+        let expired = store.miSessionShowsExpired
+        let dateText = store.miSessionExpiringSoonDate?
+            .formatted(date: .abbreviated, time: .omitted) ?? ""
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        return HStack(spacing: 8) {
+            Image(systemName: expired ? "exclamationmark.triangle.fill" : "clock")
+                .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                .foregroundStyle(expired ? Color.orange : Color.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(expired
+                    ? L10n.tr("米家登录已过期", "Xiaomi Home session expired")
+                    : L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
+                    .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                Text(expired
+                    ? L10n.tr("设备控制已暂停，扫码后恢复", "Device controls are paused; scan to restore them")
+                    : L10n.tr("提前扫码可以避免控制中断", "Scan now to avoid an interruption"))
+                    .font(.system(size: DesignTokens.TypeSize.micro))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(expired
+                ? L10n.tr("扫码重新登录", "Scan to sign in")
+                : L10n.tr("现在重新扫码", "Re-scan now")) {
+                withAnimation(AppleMotion.snappySpring) { store.presentMiReauth() }
+            }
+            .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .adaptiveGlass(in: shape)
+    }
+
+    private var miReauthOverlay: some View {
+        promptBackdrop(onDismiss: {
+            withAnimation(AppleMotion.snappySpring) { store.dismissMiReauth() }
+        }) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "qrcode")
+                        .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text(store.miSessionShowsExpired
+                        ? L10n.tr("米家登录已过期", "Xiaomi Home session expired")
+                        : L10n.tr("扫码登录米家账号", "Sign in to Xiaomi Home"))
+                        .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                    Spacer()
+                    Button {
+                        withAnimation(AppleMotion.snappySpring) { store.dismissMiReauth() }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(L10n.tr("关闭", "Close")))
+                }
+
+                MiAccountSection(store: store, autoStartsQRLogin: true, showsRegionPicker: false)
+            }
+            .padding(14)
+            .frame(maxWidth: 332)
+            .adaptiveGlass(in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
+            .shadow(color: .black.opacity(0.20), radius: 14, y: 5)
+            .padding(16)
+        }
+    }
+
     // MARK: - Main Dashboard
 
     private var mainDashboard: some View {
@@ -181,6 +294,25 @@ public struct ControlCenterPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+
+            // #180 review: after connecting, the lessons stay above the dashboard so search and
+            // All Off/Undo can be tried while these instructions are still on screen.
+            if store.showsOnboardingChecklist {
+                OnboardingChecklistCard(
+                    store: store,
+                    onBeginSearch: { withAnimation(AppleMotion.snappySpring) { search.begin() } }
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .transition(AppleMotion.drawerTransition)
+            }
+
+            if store.miSessionShowsExpired || store.miSessionExpiringSoonDate != nil {
+                miSessionExpiryBanner
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .transition(AppleMotion.drawerTransition)
+            }
 
             if store.isShowingAssistantBar {
                 AssistantCommandBar(store: store)
@@ -430,8 +562,150 @@ public struct ControlCenterPanel: View {
             onCycleSize: { cycleSize(device) },
             onBeginResize: { beginResizeIfNeeded(device.id) },
             onResizeDrag: { translation in updateResize(device.id, translation: translation) },
-            onEndResize: { translation, samples in endResize(device.id, translation: translation, samples: samples) }
+            onEndResize: { translation, samples in endResize(device.id, translation: translation, samples: samples) },
+            onRename: { layoutUI.renamingDeviceId = device.id }
         )
+    }
+
+    // MARK: - Room Strip Editing (#146)
+
+    private enum RoomSpace {
+        static let name = "room_pills"
+    }
+
+    private var roomAliases: [String: String] { RoomPrefs.decodeAliases(roomAliasesRaw) }
+
+    /// Rooms with the saved order applied; saved ids for rooms that vanished are ignored.
+    private var displayRooms: [RoomArea] {
+        RoomPrefs.apply(order: RoomPrefs.decodeOrder(roomOrderRaw), to: store.rooms)
+    }
+
+    private func roomDisplayTitle(_ room: RoomArea) -> String {
+        RoomPrefs.alias(for: room.id, in: roomAliases) ?? L10n.displayRoomName(room.name)
+    }
+
+    /// The All-Off button names the selected room; a saved alias wins over the snapshot name.
+    private var allOffScopeDisplayName: String? {
+        guard case .room(let id) = store.listCut,
+              let room = store.rooms.first(where: { $0.id == id }) else {
+            return store.allOffScopeName
+        }
+        return roomDisplayTitle(room)
+    }
+
+    /// Saved order seeded with every visible room, so a move never drops an id whose room is
+    /// temporarily missing from the snapshot.
+    private var currentRoomOrder: [String] {
+        RoomPrefs.seededOrder(RoomPrefs.decodeOrder(roomOrderRaw), rooms: store.rooms)
+    }
+
+    private func roomId(at point: CGPoint) -> String? {
+        roomFrames.first { $0.value.contains(point) }?.key
+    }
+
+    private func roomPhase(_ id: String) -> Double {
+        Double(abs(id.hashValue % 97)) / 97 * .pi * 2
+    }
+
+    /// Long press enters room edit mode; while editing, a drag reorders rooms. Mirrors the tile
+    /// container gesture so both strips behave the same way.
+    private var roomStripGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(RoomSpace.name))
+            .onChanged { value in
+                guard !search.isSearching else { return }
+                let moved = hypot(value.translation.width, value.translation.height)
+                if isEditingRooms {
+                    if draggingRoomId == nil, moved > 3, let id = roomId(at: value.startLocation) {
+                        beginRoomDrag(id, at: value.startLocation)
+                    }
+                    if let id = draggingRoomId {
+                        roomDragLocation = value.location
+                        swapRoomIfNeeded(dragged: id, at: value.location)
+                    }
+                    return
+                }
+                if roomPressTask == nil, !roomPressCancelled, moved <= 8, let id = roomId(at: value.startLocation) {
+                    let start = value.startLocation
+                    roomPressTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard !Task.isCancelled else { return }
+                        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            isEditingLayout = false
+                            draggingId = nil
+                            activeResize = nil
+                            store.expandedDeviceId = nil
+                            isEditingRooms = true
+                        }
+                        beginRoomDrag(id, at: start)
+                    }
+                } else if moved > 8 {
+                    roomPressTask?.cancel()
+                    roomPressCancelled = true
+                }
+            }
+            .onEnded { _ in
+                roomPressTask?.cancel()
+                roomPressTask = nil
+                roomPressCancelled = false
+                lastRoomSwapTarget = nil
+                guard draggingRoomId != nil else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                    draggingRoomId = nil
+                    roomDragLocation = nil
+                }
+            }
+    }
+
+    private func beginRoomDrag(_ id: String, at start: CGPoint) {
+        let origin = roomFrames[id]?.minX ?? start.x
+        roomGrabOffset = start.x - origin
+        roomDragLocation = start
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { draggingRoomId = id }
+    }
+
+    /// Horizontal offset that keeps the picked-up pill under the pointer after a reorder.
+    private func roomDragOffset(for id: String) -> CGFloat {
+        guard draggingRoomId == id, let location = roomDragLocation, let frame = roomFrames[id] else { return 0 }
+        return location.x - roomGrabOffset - frame.minX
+    }
+
+    private func swapRoomIfNeeded(dragged: String, at location: CGPoint) {
+        guard Date().timeIntervalSince(lastRoomSwapAt) > 0.2 else { return }
+        guard let target = roomFrames.first(where: { $0.key != dragged && $0.value.contains(location) })?.key else { return }
+        let after = location.x > (roomFrames[target]?.midX ?? location.x)
+        let slot = "\(target)|\(after)"
+        guard slot != lastRoomSwapTarget else { return }
+        let order = RoomPrefs.move(currentRoomOrder, id: dragged, relativeTo: target, after: after)
+        guard order != currentRoomOrder else { return }
+        lastRoomSwapTarget = slot
+        lastRoomSwapAt = Date()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            roomOrderRaw = RoomPrefs.encodeOrder(order)
+        }
+    }
+
+    /// "Move Left" / "Move Right" for a room pill's context menu.
+    private func moveRoom(_ id: String, by delta: Int) {
+        let order = RoomPrefs.shift(
+            currentRoomOrder,
+            id: id,
+            by: delta,
+            visible: Set(store.rooms.map(\.id))
+        )
+        guard order != currentRoomOrder else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            roomOrderRaw = RoomPrefs.encodeOrder(order)
+        }
+    }
+
+    private func resetRoomPrefs() {
+        let cleared = RoomPrefs.reset()
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            roomAliasesRaw = cleared.aliases
+            roomOrderRaw = cleared.order
+            layoutUI.renamingRoomId = nil
+        }
     }
 
     // MARK: - Page Sections (favorites, custom groups, ungrouped)
@@ -476,11 +750,36 @@ public struct ControlCenterPanel: View {
         }
         let rest = DeviceLayoutPrefs.apply(order: order, to: pool.filter { map[$0.id] == nil })
         if !rest.isEmpty {
-            let titled = !sections.isEmpty
-            let title: String? = store.selectedRoomId == nil
-                ? (sections.isEmpty ? L10n.tr("全屋设备", "All Devices") : L10n.tr("更多设备", "More Devices"))
-                : (titled ? L10n.tr("其他", "Other") : nil)
-            sections.append(PageSection(id: "rest", title: title, devices: rest, groupId: nil))
+            // Several Mi Cloud accounts in one panel: devices stay grouped under the account that
+            // owns them. Other backends have no account to group by, even when Mi accounts remain
+            // signed in.
+            if store.miAccounts.count > 1, store.selectedRoomId == nil, store.homeBackend == .xiaomiCloud {
+                let accountIds = Set(store.miAccounts.map(\.id))
+                for account in store.miAccounts {
+                    let members = rest.filter { $0.accountId == account.id }
+                    if !members.isEmpty {
+                        sections.append(PageSection(
+                            id: "account:\(account.id)",
+                            title: account.displayName,
+                            devices: members,
+                            groupId: nil
+                        ))
+                    }
+                }
+                let unowned = rest.filter { device in
+                    guard let accountId = device.accountId else { return true }
+                    return !accountIds.contains(accountId)
+                }
+                if !unowned.isEmpty {
+                    sections.append(PageSection(id: "rest", title: L10n.tr("其他", "Other"), devices: unowned, groupId: nil))
+                }
+            } else {
+                let titled = !sections.isEmpty
+                let title: String? = store.selectedRoomId == nil
+                    ? (sections.isEmpty ? L10n.tr("全屋设备", "All Devices") : L10n.tr("更多设备", "More Devices"))
+                    : (titled ? L10n.tr("其他", "Other") : nil)
+                sections.append(PageSection(id: "rest", title: title, devices: rest, groupId: nil))
+            }
         }
         return sections
     }
@@ -629,6 +928,34 @@ public struct ControlCenterPanel: View {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { layoutUI.renamingDeviceId = nil }
                 }
             }
+        } else if let rid = layoutUI.renamingRoomId, let room = store.rooms.first(where: { $0.id == rid }) {
+            let currentAliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+            let originalName = room.name
+            promptBackdrop {
+                GroupNamePrompt(
+                    title: L10n.tr("重命名房间", "Rename Room"),
+                    name: RoomPrefs.alias(for: rid, in: currentAliases) ?? L10n.displayRoomName(originalName),
+                    placeholder: L10n.displayRoomName(originalName),
+                    onReset: currentAliases[rid] != nil ? {
+                        var aliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+                        aliases.removeValue(forKey: rid)
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                            roomAliasesRaw = RoomPrefs.encodeAliases(aliases)
+                            layoutUI.renamingRoomId = nil
+                        }
+                    } : nil
+                ) { name in
+                    var aliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+                    // Saving the original room name clears the alias.
+                    aliases[rid] = name == L10n.displayRoomName(originalName) ? nil : name
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                        roomAliasesRaw = RoomPrefs.encodeAliases(aliases)
+                        layoutUI.renamingRoomId = nil
+                    }
+                } onCancel: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { layoutUI.renamingRoomId = nil }
+                }
+            }
         } else if let gid = layoutUI.renamingGroupId, let group = groups.first(where: { $0.id == gid }) {
             promptBackdrop {
                 GroupNamePrompt(title: L10n.tr("重命名分组", "Rename Group"), name: group.name) { name in
@@ -643,17 +970,25 @@ public struct ControlCenterPanel: View {
         }
     }
 
-    private func promptBackdrop<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+    private func promptBackdrop<C: View>(
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder _ content: () -> C
+    ) -> some View {
         ZStack {
             Rectangle()
                 .fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.ultraThinMaterial))
                 .overlay(Color.black.opacity(reduceTransparency ? 0.32 : 0.18))
                 .ignoresSafeArea()
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        layoutUI.newGroupForDevice = nil
-                        layoutUI.renamingGroupId = nil
-                        layoutUI.renamingDeviceId = nil
+                    if let onDismiss {
+                        onDismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            layoutUI.newGroupForDevice = nil
+                            layoutUI.renamingGroupId = nil
+                            layoutUI.renamingDeviceId = nil
+                            layoutUI.renamingRoomId = nil
+                        }
                     }
                 }
                 .transition(.opacity)
@@ -691,6 +1026,7 @@ public struct ControlCenterPanel: View {
                             NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                 store.expandedDeviceId = nil
+                                isEditingRooms = false
                                 isEditingLayout = true
                             }
                             beginDrag(id, at: start)
@@ -881,8 +1217,11 @@ public struct ControlCenterPanel: View {
         Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 isEditingLayout = false
+                isEditingRooms = false
                 draggingId = nil
                 activeResize = nil
+                draggingRoomId = nil
+                roomDragLocation = nil
             }
         } label: {
             Text(L10n.tr("完成", "Done")).font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
@@ -1083,14 +1422,14 @@ public struct ControlCenterPanel: View {
                 .accessibilityHint(Text(L10n.tr("用一句话控制设备", "Control devices with natural language")))
                 .panelHelp(L10n.tr("AI 指令：用一句话控制设备（快捷键 /）", "AI command: control devices with natural language (shortcut /)"))
 
-                if isEditingLayout {
+                if isEditingLayout || isEditingRooms {
                     doneEditingButton
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
                 } else if !store.allOffTargets.isEmpty {
                     // The label says what will be switched off (#23); a hold confirms.
                     let count = store.allOffTargets.count
                     HoldToConfirmButton(
-                        title: store.allOffScopeName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
+                        title: allOffScopeDisplayName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
                         count: count,
                         onConfirm: {
                             withAnimation(AppleMotion.snappySpring) { store.turnAllOff() }
@@ -1111,7 +1450,8 @@ public struct ControlCenterPanel: View {
         }
     }
 
-    /// Dashboard title; with several Mi Homes it becomes a menu that switches between them.
+    /// Dashboard title; with several Mi Homes it becomes a menu that switches between them. Several
+    /// signed-in accounts list their homes under the account that owns them.
     @ViewBuilder
     private var homeTitle: some View {
         if store.homes.count > 1 {
@@ -1122,14 +1462,22 @@ public struct ControlCenterPanel: View {
                     Label(L10n.tr("全部家庭", "All Homes"), systemImage: store.selectedMiHomeId == nil ? "checkmark" : "")
                 }
                 Divider()
-                ForEach(store.homes) { home in
-                    Button {
-                        store.selectMiHome(home.id)
-                    } label: {
-                        Label(
-                            "\(home.name)  \(home.deviceCount)",
-                            systemImage: store.selectedMiHomeId == home.id ? "checkmark" : ""
-                        )
+                if store.miAccounts.count > 1 {
+                    ForEach(store.miAccounts) { account in
+                        let accountHomes = store.homes.filter { $0.accountId == account.id }
+                        if !accountHomes.isEmpty {
+                            Section {
+                                ForEach(accountHomes) { home in
+                                    homeMenuButton(home)
+                                }
+                            } header: {
+                                Text(account.displayName)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(store.homes) { home in
+                        homeMenuButton(home)
                     }
                 }
             } label: {
@@ -1154,6 +1502,17 @@ public struct ControlCenterPanel: View {
         }
     }
 
+    private func homeMenuButton(_ home: HomeOption) -> some View {
+        Button {
+            store.selectMiHome(home.id)
+        } label: {
+            Label(
+                "\(home.name)  \(home.deviceCount)",
+                systemImage: store.selectedMiHomeId == home.id ? "checkmark" : ""
+            )
+        }
+    }
+
     private var selectedHomeTitle: String {
         if let id = store.selectedMiHomeId, let home = store.homes.first(where: { $0.id == id }) {
             return home.name
@@ -1166,8 +1525,14 @@ public struct ControlCenterPanel: View {
     private var environmentStatusLine: some View {
         // One representative reading keeps the line quiet: the selected room's reading first,
         // then the user's preferred menu-bar temperature source (#103).
-        let selectedRoomName = store.rooms.first { $0.id == store.selectedRoomId }?.name
+        let selectedRoomId = store.selectedRoomId
+        let selectedRoomName = store.rooms.first { $0.id == selectedRoomId }?.name
+        let roomDeviceIds = selectedRoomId.map { roomId in
+            Set(store.devices.filter { $0.roomId == roomId }.map(\.id))
+        }
         let reading = store.environmentReadings.first { env in
+            roomDeviceIds?.contains(env.id) == true
+        } ?? store.environmentReadings.first { env in
             selectedRoomName != nil && env.roomName == selectedRoomName
         } ?? store.preferredEnvironmentReading
         let watts = store.totalPowerWatts
@@ -1247,6 +1612,9 @@ public struct ControlCenterPanel: View {
     }
 
     private var statusSummaryText: String {
+        if isEditingRooms {
+            return L10n.tr("拖动房间排序，点铅笔图标改名", "Drag rooms to reorder, tap the pencil to rename")
+        }
         if isEditingLayout {
             return L10n.tr("拖动卡片排序，点右下角圆弧手柄改大小", "Drag to reorder, drag or tap the corner handle to resize")
         }
@@ -1328,11 +1696,49 @@ public struct ControlCenterPanel: View {
     private var roomPillsRow: some View {
         HStack(spacing: 5) {
             roomPill(title: L10n.tr("全部", "All"), roomId: nil)
-            ForEach(store.rooms) { room in
-                roomPill(title: L10n.displayRoomName(room.name), roomId: room.id)
-                    .id(room.id)
+            ForEach(displayRooms) { room in
+                roomPillRowItem(room)
+            }
+            if isEditingRooms {
+                Button {
+                    resetRoomPrefs()
+                } label: {
+                    Label(L10n.tr("重置", "Reset"), systemImage: "arrow.counterclockwise")
+                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        .lineLimit(1)
+                }
+                .buttonStyle(PillActionButtonStyle())
+                .accessibilityHint(Text(L10n.tr("清除房间名称和顺序", "Clears room names and order")))
+                .panelHelp(L10n.tr("恢复房间原名与默认顺序", "Restore original room names and order"))
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
             }
         }
+        .animation(AppleMotion.snappySpring, value: displayRooms.map(\.id))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isEditingRooms)
+    }
+
+    private func roomPillRowItem(_ room: RoomArea) -> some View {
+        roomPill(title: roomDisplayTitle(room), roomId: room.id)
+            .id(room.id)
+            .offset(x: roomDragOffset(for: room.id))
+            // Measured outside the drag offset and the jiggle, like device cards: those transforms
+            // would otherwise feed back into `roomDragOffset` (the reported frame would already
+            // include the offset) and the pill would jump.
+            .background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named(RoomSpace.name))
+                    Color.clear.preference(
+                        key: RoomFramesKey.self,
+                        value: [room.id: CGRect(
+                            x: frame.minX.rounded(),
+                            y: frame.minY.rounded(),
+                            width: frame.width.rounded(),
+                            height: frame.height.rounded()
+                        )]
+                    )
+                }
+            }
+            .zIndex(draggingRoomId == room.id ? 2 : 0)
     }
 
     private func scrollRoomStrip(using proxy: ScrollViewProxy, roomId: String?, animated: Bool) {
@@ -1461,6 +1867,11 @@ public struct ControlCenterPanel: View {
                         roomPillsRow
                             .padding(.vertical, 3)
                             .padding(.horizontal, 4)
+                            .coordinateSpace(name: RoomSpace.name)
+                            .simultaneousGesture(roomStripGesture)
+                            .onPreferenceChange(RoomFramesKey.self) { frames in
+                                if frames != roomFrames { roomFrames = frames }
+                            }
                     }
                     .horizontalWheelScroll()
                 }
@@ -1588,28 +1999,86 @@ public struct ControlCenterPanel: View {
         let isSelected = roomId == nil
             ? store.listCut == .all
             : store.selectedRoomId == roomId
+        let isEditable = isEditingRooms && roomId != nil
         // The selected pill is a lit tile of its own, so its label takes the tile's ink: a dark
         // capsule in dark mode would otherwise keep the light-mode platter ink.
         let surface = TileSurface(isActive: true, scheme: effectiveScheme)
-        return Button {
-            selectRoom(roomId, animation: AppleMotion.snappySpring)
-        } label: {
+        let content = HStack(spacing: 4) {
             Text(title)
                 .font(.system(size: DesignTokens.TypeSize.caption, weight: isSelected ? .semibold : .medium))
                 .foregroundStyle(isSelected ? surface.ink : Color.secondary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background {
-                    if isSelected {
-                        Capsule(style: .continuous)
-                            .fill(surface.fill)
-                            .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
-                    }
+            if isEditable, let roomId {
+                // #146: an explicit pencil so the edit-mode pill never doubles as "rename" on a
+                // long-press release.
+                Button {
+                    layoutUI.renamingRoomId = roomId
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: DesignTokens.TypeSize.micro, weight: .semibold))
+                        .foregroundStyle(isSelected ? surface.ink : Color.secondary)
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
                 }
-                .contentShape(Capsule(style: .continuous))
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(L10n.tr("重命名房间", "Rename Room")))
+                .panelHelp(L10n.tr("重命名这个房间", "Rename this room"))
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 5)
+        .background {
+            if isSelected {
+                Capsule(style: .continuous)
+                    .fill(surface.fill)
+                    .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
+            }
+        }
+        .contentShape(Capsule(style: .continuous))
+
+        Group {
+            if roomId == nil || !isEditingRooms {
+                Button {
+                    selectRoom(roomId, animation: AppleMotion.snappySpring)
+                } label: {
+                    content
+                }
+                .buttonStyle(.plain)
+            } else {
+                content
+            }
+        }
         .animation(AppleMotion.snappySpring, value: isSelected)
+        .contextMenu {
+            if let roomId {
+                Button {
+                    layoutUI.renamingRoomId = roomId
+                } label: {
+                    Label(L10n.tr("重命名房间…", "Rename Room…"), systemImage: "pencil")
+                }
+                Button {
+                    moveRoom(roomId, by: -1)
+                } label: {
+                    Label(L10n.tr("左移", "Move Left"), systemImage: "arrow.left")
+                }
+                .disabled(displayRooms.first?.id == roomId)
+                Button {
+                    moveRoom(roomId, by: 1)
+                } label: {
+                    Label(L10n.tr("右移", "Move Right"), systemImage: "arrow.right")
+                }
+                .disabled(displayRooms.last?.id == roomId)
+                Divider()
+                Button {
+                    resetRoomPrefs()
+                } label: {
+                    Label(L10n.tr("重置房间名称与顺序", "Reset Room Names & Order"), systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
+        .accessibilityHint(Text(isEditable
+            ? L10n.tr("点按铅笔改名，拖动调整顺序", "Tap the pencil to rename, drag to reorder")
+            : L10n.tr("切换到该房间", "Show this room")))
+        .modifier(RoomPillJiggle(active: isEditable && draggingRoomId != roomId, phase: roomPhase(roomId ?? "")))
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
@@ -1627,6 +2096,12 @@ public struct ControlCenterPanel: View {
         .padding(.bottom, -3)
     }
 
+    private var disconnectedEmptyBackend: HomeBackend {
+        if store.hasMiSource && !store.hasHASource { return .xiaomiCloud }
+        if store.hasHASource && !store.hasMiSource { return .homeAssistant }
+        return store.homeBackend
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 8) {
             Image(systemName: "sparkles")
@@ -1634,16 +2109,20 @@ public struct ControlCenterPanel: View {
                 .foregroundStyle(.secondary)
             if case .disconnected = store.connectionStatus {
                 Text(
-                    store.homeBackend == .xiaomiCloud
-                        ? L10n.tr("尚未登录米家云端账号", "Not signed in to Xiaomi Cloud")
-                        : L10n.tr("尚未连接到 Home Assistant", "Not connected to Home Assistant")
+                    store.isDualSourceActive
+                        ? L10n.tr("尚未连接到 Home Assistant 或米家云端", "Not connected to Home Assistant or Xiaomi Cloud")
+                        : (disconnectedEmptyBackend == .xiaomiCloud
+                            ? L10n.tr("尚未登录米家云端账号", "Not signed in to Xiaomi Cloud")
+                            : L10n.tr("尚未连接到 Home Assistant", "Not connected to Home Assistant"))
                 )
                     .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(
-                    store.homeBackend == .xiaomiCloud
-                        ? L10n.tr("无需额外部署服务器，使用手机「米家」App 扫码即可同步设备", "Scan with the Mi Home app on your phone to sync devices without a server")
-                        : L10n.tr("点击下方按钮配置服务器地址与令牌，或切换为手机米家扫码直连", "Configure your server URL and token below, or switch to Xiaomi Cloud QR login")
+                    store.isDualSourceActive
+                        ? L10n.tr("请检查两端配置，或在偏好设置中查看连接状态", "Check both configurations, or review connection status in Preferences")
+                        : (disconnectedEmptyBackend == .xiaomiCloud
+                            ? L10n.tr("无需额外部署服务器，使用手机「米家」App 扫码即可同步设备", "Scan with the Mi Home app on your phone to sync devices without a server")
+                            : L10n.tr("点击下方按钮配置服务器地址与令牌，或切换为手机米家扫码直连", "Configure your server URL and token below, or switch to Xiaomi Cloud QR login"))
                 )
                     .font(.system(size: DesignTokens.TypeSize.caption))
                     .foregroundStyle(.secondary)
@@ -1974,12 +2453,16 @@ public struct ControlCenterPanel: View {
     }
 
     private var statusFooterLabel: String {
+        if let dual = store.dualSourceStatusSummary { return dual }
         switch store.connectionStatus {
         case .connected:
             if store.homeBackend == .demo {
                 return L10n.tr("虚拟设备，离线运行", "Virtual devices, offline")
             }
-            if store.homeBackend == .xiaomiCloud {
+            if store.connectedBackends.contains(.homeAssistant) && store.connectedBackends.contains(.xiaomiCloud) {
+                return L10n.tr("HA + 米家云 (\(store.serverHostSummary))", "HA + Xiaomi Cloud (\(store.serverHostSummary))")
+            }
+            if store.connectedBackends.contains(.xiaomiCloud) {
                 return L10n.tr("\(store.serverHostSummary)，Miot 直连", "\(store.serverHostSummary), MIoT Direct")
             }
             return L10n.tr("HA 实时连接 (\(store.serverHostSummary))", "HA Live (\(store.serverHostSummary))")
@@ -2201,6 +2684,25 @@ enum PanelSearchKeyboard {
         store.presentAssistantBar()
         Task { @MainActor in
             await store.runAssistantCommand(utterance)
+        }
+    }
+}
+
+/// iOS-style jiggle for room pills in edit mode (#146), phase-shifted per room so neighbours do
+/// not swing in sync. Reduce Motion keeps the strip still.
+private struct RoomPillJiggle: ViewModifier {
+    @Environment(\.effectiveReduceMotion) private var reduceMotion
+    let active: Bool
+    let phase: Double
+
+    func body(content: Content) -> some View {
+        if active, !reduceMotion {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                content.rotationEffect(.degrees(sin(t * 2 * .pi * 3.2 + phase) * 0.9))
+            }
+        } else {
+            content
         }
     }
 }

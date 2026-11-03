@@ -160,6 +160,10 @@ struct MijiaCoreTests {
             case .snapshotUpdated(let home):
                 receivedHome = home
                 break
+            case .sessionExpired:
+                break
+            case .sourceStatusesChanged:
+                break
             }
             if receivedHome != nil { break }
         }

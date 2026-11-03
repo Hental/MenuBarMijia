@@ -1,0 +1,46 @@
+{
+  "_fixture": {
+    "endpoint": "POST /app/v2/home/device_list_page",
+    "captured": "2026-11-03",
+    "sanitised": "dids, names, MAC addresses and IP addresses replaced with synthetic values; field shapes and value types preserved",
+    "shape": "decrypted response envelope {code, message, result}; result.list is one page"
+  },
+  "code": 0,
+  "message": "ok",
+  "result": {
+    "list": [
+      {
+        "did": "did-light-0001",
+        "name": "Contract Ceiling Light",
+        "model": "yeelink.light.ceiling22",
+        "isOnline": true,
+        "spec_type": "urn:miot-spec-v2:device:light:0000A001:yeelink-ceiling22:2",
+        "localip": "192.0.2.10",
+        "mac": "02:00:00:00:00:01",
+        "extra": {"fw_version": "2.1.7_0018"}
+      },
+      {
+        "did": "did-switch-0002.s2",
+        "name": "Contract Downlight",
+        "model": "lemesh.switch.sw2f12",
+        "isOnline": false,
+        "extra": {"split": {"parentId": "did-switch-0002", "moduleId": 2}}
+      },
+      {
+        "did": "did-camera-0003",
+        "name": "Contract Camera",
+        "model": "chuangmi.camera.81ac1",
+        "isOnline": true,
+        "localip": "192.0.2.11",
+        "mac": "02:00:00:00:00:03"
+      },
+      {
+        "did": "did-invalid-0004",
+        "name": "Record Without A Model",
+        "isOnline": true
+      }
+    ],
+    "has_more": false,
+    "next_start_did": ""
+  }
+}

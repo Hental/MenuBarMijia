@@ -41,6 +41,7 @@ const CATALOG: Readonly<Record<string, readonly [string, string]>> = {
   "这一类暂无设备": ["这一类暂无设备", "Nothing of this type"],
   "显示离线设备": ["显示离线设备", "Show Offline Devices"],
   "隐藏离线/未通电的设备": ["隐藏离线/未通电的设备", "Hide Offline / Unpowered Devices"],
+  "灯组内的单灯不重复显示": ["灯组内的单灯不重复显示", "Hide individual lights in light groups"],
   "立即同步最新设备状态": ["立即同步最新设备状态", "Sync device state now"],
   "连接设置与 AI 决策配置": ["连接设置与 AI 决策配置", "Connection and AI settings"],
   "打开设置": ["打开设置", "Open settings"],

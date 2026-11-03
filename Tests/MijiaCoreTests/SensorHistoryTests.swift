@@ -236,7 +236,7 @@ struct SensorHistoryTests {
         let storeSuite = "SensorHistoryTests.storeScope.\(UUID().uuidString)"
         let storeDefaults = try #require(UserDefaults(suiteName: storeSuite))
         defer { storeDefaults.removePersistentDomain(forName: storeSuite) }
-        MiSessionStore.save(sessionA, defaults: storeDefaults)
+        MiSessionStore.upsert(sessionA, defaults: storeDefaults)
         storeDefaults.set(HomeBackend.xiaomiCloud.rawValue, forKey: "home_backend")
         let store = HomeStore(provider: DemoHomeProvider(), defaultsSuiteName: storeSuite)
         #expect(store.sensorHistory.connectionScope == sessionA.historyScopeIdentifier)

@@ -90,7 +90,7 @@ public enum AssistantError: LocalizedError, Equatable, Sendable {
 
 /// LLM fallback for utterances the LocalIntentParser cannot resolve, via an OpenAI-compatible
 /// `/chat/completions` endpoint.
-public struct ModelIntentResolver: Sendable {
+public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     public let config: AssistantConfig
@@ -117,7 +117,8 @@ public struct ModelIntentResolver: Sendable {
         _ utterance: String,
         devices: [SmartDevice],
         scenes: [HomeScene],
-        context: AssistantContext = AssistantContext()
+        context: AssistantContext = AssistantContext(),
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) async throws -> IntentPlan {
         let catalog = IntentCatalog(devices: devices, scenes: scenes)
         if Self.isSystemOneModel(config.model) {
@@ -130,7 +131,13 @@ public struct ModelIntentResolver: Sendable {
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw AssistantError.httpStatus(http.statusCode)
             }
-            return try Self.planFromSystemOne(data: data, catalog: catalog, devices: devices, scenes: scenes)
+            return try Self.planFromSystemOne(
+                data: data,
+                catalog: catalog,
+                devices: devices,
+                scenes: scenes,
+                confirmation: confirmation
+            )
         }
         let request = try makeRequest(utterance: utterance, catalog: catalog, context: context)
         let (data, response) = try await transport(request)
@@ -138,7 +145,13 @@ public struct ModelIntentResolver: Sendable {
             throw AssistantError.httpStatus(http.statusCode)
         }
         let content = try Self.messageContent(from: data)
-        return try Self.plan(fromModelContent: content, catalog: catalog, devices: devices, scenes: scenes)
+        return try Self.plan(
+            fromModelContent: content,
+            catalog: catalog,
+            devices: devices,
+            scenes: scenes,
+            confirmation: confirmation
+        )
     }
 
     /// Proactive zero-input inference: evaluates current time, indoor sensor readings,
@@ -494,7 +507,8 @@ public struct ModelIntentResolver: Sendable {
         fromModelContent content: String,
         catalog: IntentCatalog,
         devices: [SmartDevice],
-        scenes: [HomeScene]
+        scenes: [HomeScene],
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) throws -> IntentPlan {
         guard let jsonText = firstJSONObject(in: content),
               let data = jsonText.data(using: .utf8),
@@ -514,15 +528,40 @@ public struct ModelIntentResolver: Sendable {
                 )
             }
         }
+        let rawSuggestions = object["suggestions"] as? [[String: Any]] ?? []
+        let modelReply = (object["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return plan(
+            chosenActions: chosen,
+            rawSuggestions: rawSuggestions,
+            modelReply: modelReply,
+            catalog: catalog,
+            devices: devices,
+            scenes: scenes,
+            confirmation: confirmation
+        )
+    }
+
+    /// The single policy boundary for both cloud JSON and Apple's on-device guided generation:
+    /// alias expansion already happened, so this applies `ModelActionPolicy`/`IntentValidator`,
+    /// merges follow-up suggestions, and picks the reply shown in the command bar.
+    static func plan(
+        chosenActions chosen: [ChosenAction],
+        rawSuggestions: [[String: Any]] = [],
+        modelReply: String,
+        catalog: IntentCatalog,
+        devices: [SmartDevice],
+        scenes: [HomeScene],
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
+    ) -> IntentPlan {
         let decision = ModelActionPolicy.decide(
             devices: devices,
             scenes: scenes,
-            payload: ModelDecisionPayload(actions: chosen)
+            payload: ModelDecisionPayload(actions: chosen),
+            policy: confirmation
         )
         let intents = decision.intents
         let confirmChips = decision.suggestions
         let primaryTargetIds = Set((intents + confirmChips.flatMap(\.intents)).map(\.targetId))
-        let rawSuggestions = object["suggestions"] as? [[String: Any]] ?? []
         let parsedSuggestions = parseChatSuggestionItems(
             rawSuggestions,
             catalog: catalog,
@@ -531,7 +570,6 @@ public struct ModelIntentResolver: Sendable {
         ).filter { suggestion in
             !suggestion.intents.contains(where: { primaryTargetIds.contains($0.targetId) })
         }
-        let modelReply = (object["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let reply: String
         if !confirmChips.isEmpty {
             // The model's own reply may claim the waiting actions already happened.
@@ -606,7 +644,8 @@ public struct ModelIntentResolver: Sendable {
         data: Data,
         catalog: IntentCatalog,
         devices: [SmartDevice],
-        scenes: [HomeScene]
+        scenes: [HomeScene],
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) throws -> IntentPlan {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let answers = root["answers"] as? [String: Any] else {
@@ -693,7 +732,8 @@ public struct ModelIntentResolver: Sendable {
         let decision = ModelActionPolicy.decide(
             devices: devices,
             scenes: scenes,
-            payload: ModelDecisionPayload(actions: actions)
+            payload: ModelDecisionPayload(actions: actions),
+            policy: confirmation
         )
         let taken = Set((decision.intents + decision.suggestions.flatMap(\.intents)).map(\.targetId))
         var seenTargetSets: Set<Set<String>> = []

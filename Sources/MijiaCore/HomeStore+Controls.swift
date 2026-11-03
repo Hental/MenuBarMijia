@@ -29,6 +29,18 @@ extension HomeStore {
         }
         guard let idx = devices.firstIndex(where: { $0.id == device.id }) else { return nil }
         let previous = devices[idx]
+        guard !rejectControlWhileLocked() else { return nil }
+        let operation: IntentOperation
+        switch previous.kind {
+        case .vacuum(let spec):
+            operation = .power(!spec.isCleaning)
+        case .plug(let spec) where spec.switchEntityId.hasPrefix("button."):
+            // A momentary plug button may toggle or trigger something; treat it as an activation.
+            operation = .power(true)
+        default:
+            operation = .power(!previous.isActiveOn)
+        }
+        guard allowManualControl(operation, for: previous) else { return nil }
         var updated = previous
         var command: DeviceCommand?
 
@@ -248,6 +260,7 @@ extension HomeStore {
     // MARK: - Detail Drawer Controls (Debounced & Optimistic)
 
     public func setLightBrightness(_ deviceId: String, percent: Int) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .light(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -267,6 +280,7 @@ extension HomeStore {
     }
 
     public func setLightColorTemp(_ deviceId: String, kelvin: Int) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .light(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -287,6 +301,7 @@ extension HomeStore {
     }
 
     public func setLightEffect(_ deviceId: String, effect: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .light(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -306,10 +321,12 @@ extension HomeStore {
     }
 
     public func stepClimateTemperature(_ deviceId: String, delta: Double) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .climate(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
         let nextTemp = max(s.minTemp, min(s.maxTemp, s.targetTemperature + delta))
+        guard allowManualControl(.targetTemperature(nextTemp), for: previous) else { return }
         s.targetTemperature = nextTemp
         devices[idx].kind = .climate(s)
         lockOptimistic(deviceId, duration: .seconds(2.5))
@@ -324,9 +341,11 @@ extension HomeStore {
     }
 
     public func setClimateMode(_ deviceId: String, mode: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .climate(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
+        guard allowManualControl(.hvacMode(mode), for: previous) else { return }
         s.hvacMode = mode
         s.isOn = (mode != "off")
         devices[idx].kind = .climate(s)
@@ -341,9 +360,11 @@ extension HomeStore {
     }
 
     public func setClimateFanMode(_ deviceId: String, fanMode: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .climate(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
+        guard allowManualControl(.fanSpeed(fanMode), for: previous) else { return }
         s.fanMode = fanMode
         devices[idx].kind = .climate(s)
         lockOptimistic(deviceId, duration: .seconds(2.2))
@@ -357,9 +378,11 @@ extension HomeStore {
     }
 
     public func setClimateSwingMode(_ deviceId: String, swingMode: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .climate(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
+        guard allowManualControl(.oscillation(swingMode.caseInsensitiveCompare("off") != .orderedSame), for: previous) else { return }
         s.swingMode = swingMode
         devices[idx].kind = .climate(s)
         lockOptimistic(deviceId, duration: .seconds(2.2))
@@ -372,6 +395,7 @@ extension HomeStore {
     }
 
     public func setFanPercentage(_ deviceId: String, percent: Int) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .fan(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -395,6 +419,7 @@ extension HomeStore {
     }
 
     public func setFanPresetMode(_ deviceId: String, preset: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .fan(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -412,6 +437,7 @@ extension HomeStore {
     }
 
     public func setPlugChildLock(_ deviceId: String, locked: Bool) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .plug(var s) = devices[idx].kind,
               let lockEid = s.childLockEntityId else { return }
@@ -428,6 +454,7 @@ extension HomeStore {
     }
 
     public func setFridgeMode(_ deviceId: String, mode: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .fridge(var s) = devices[idx].kind,
               let modeEid = s.modeEntityId else { return }
@@ -444,6 +471,7 @@ extension HomeStore {
     }
 
     public func stepFridgeTargetTemp(_ deviceId: String, isFreezer: Bool, delta: Double) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .fridge(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -476,9 +504,11 @@ extension HomeStore {
     }
 
     public func performVacuumAction(_ deviceId: String, action: VacuumAction) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .vacuum(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
+        guard allowManualControl(action == .start ? .power(true) : .power(false), for: previous) else { return }
         switch action {
         case .start: s.status = "cleaning"
         case .pause: s.status = "paused"
@@ -495,6 +525,7 @@ extension HomeStore {
     }
 
     public func setSpeakerVolume(_ deviceId: String, percent: Int) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         let previous = devices[idx]
         let clamped = max(0, min(100, percent))
@@ -523,6 +554,7 @@ extension HomeStore {
     }
 
     public func toggleSpeakerMute(_ deviceId: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .speaker(var s) = devices[idx].kind,
               let muteEid = s.muteSwitchEntityId else { return }
@@ -539,6 +571,7 @@ extension HomeStore {
     }
 
     public func toggleTVMute(_ deviceId: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .tv(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -555,6 +588,7 @@ extension HomeStore {
     }
 
     public func toggleTVScreenOff(_ deviceId: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .tv(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -573,6 +607,7 @@ extension HomeStore {
     }
 
     public func selectTVSource(_ deviceId: String, source: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .tv(var s) = devices[idx].kind else { return }
         let previous = devices[idx]
@@ -590,6 +625,7 @@ extension HomeStore {
     }
 
     public func sendSpeakerText(_ deviceId: String, text: String, asDirective: Bool) {
+        guard !rejectControlWhileLocked() else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let idx = devices.firstIndex(where: { $0.id == deviceId }),
@@ -616,6 +652,7 @@ extension HomeStore {
     }
 
     public func pressDeviceButton(_ buttonEntityId: String, label: String) {
+        guard !rejectControlWhileLocked() else { return }
         Task {
             do {
                 try await executeDeviceCommand(.pressButton(entityId: buttonEntityId))
@@ -629,6 +666,7 @@ extension HomeStore {
     // MARK: - Camera Controls & Live Stream Resolution (#97)
 
     public func setCameraMotionDetection(_ deviceId: String, enabled: Bool) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .camera(var s) = devices[idx].kind,
               let motionEid = s.motionDetectionEntityId else { return }
@@ -645,6 +683,7 @@ extension HomeStore {
     }
 
     public func setCameraNightShot(_ deviceId: String, mode: String) {
+        guard !rejectControlWhileLocked() else { return }
         guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
               case .camera(var s) = devices[idx].kind,
               s.availableNightShots.contains(mode) else { return }
@@ -743,15 +782,18 @@ extension HomeStore {
         command: DeviceCommand,
         habitIntents: [DeviceIntent] = []
     ) {
+        let expectedRevision = optimisticLockRevision[deviceId]
         Task {
             do {
                 try await executeDeviceCommand(command)
                 confirmManualControl(intents: habitIntents)
             } catch {
-                if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
-                    self.devices[idx] = fallback
+                if self.optimisticLockRevision[deviceId] == expectedRevision {
+                    if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
+                        self.devices[idx] = fallback
+                    }
+                    self.optimisticLockUntil.removeValue(forKey: deviceId)
                 }
-                self.optimisticLockUntil.removeValue(forKey: deviceId)
                 self.showToast(L10n.tr("\(fallback.name) 操作未生效", "\(fallback.name) action failed"), isError: true)
             }
         }
@@ -764,18 +806,21 @@ extension HomeStore {
         command: DeviceCommand,
         habitIntents: [DeviceIntent] = []
     ) {
+        let expectedRevision = optimisticLockRevision[deviceId]
         debounceTasks[key]?.cancel()
         debounceTasks[key] = Task { [weak self] in
             try? await Task.sleep(for: self?.controlDebounceInterval ?? .milliseconds(280))
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.optimisticLockRevision[deviceId] == expectedRevision else { return }
             do {
                 try await self.executeDeviceCommand(command)
                 self.confirmManualControl(intents: habitIntents)
             } catch {
-                if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
-                    self.devices[idx] = fallback
+                if self.optimisticLockRevision[deviceId] == expectedRevision {
+                    if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
+                        self.devices[idx] = fallback
+                    }
+                    self.optimisticLockUntil.removeValue(forKey: deviceId)
                 }
-                self.optimisticLockUntil.removeValue(forKey: deviceId)
                 self.showToast(L10n.tr("\(fallback.name) 调节未生效", "\(fallback.name) adjustment failed"), isError: true)
             }
         }

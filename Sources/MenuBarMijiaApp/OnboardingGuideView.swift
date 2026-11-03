@@ -2,6 +2,9 @@ import SwiftUI
 import AppKit
 import MijiaCore
 
+/// First launch teaches three things only (#180): connect an account, find a device with the
+/// global shortcut, and try All Off + Undo. Everything else — AI, GrokBall, cameras, automation,
+/// URL control — lives behind the collapsed "Advanced" disclosure.
 public struct OnboardingGuideView: View {
     @Environment(\.colorScheme) private var colorScheme
     public let store: HomeStore
@@ -12,6 +15,8 @@ public struct OnboardingGuideView: View {
     @State private var apiKeyDraft: String = ""
     @State private var voiceAuthorized: Bool = false
     @State private var isRequestingVoice: Bool = false
+    /// Advanced stays shut on first launch; the user opens it only when they need it.
+    @State private var isAdvancedExpanded: Bool = false
 
     public init(store: HomeStore) {
         self.store = store
@@ -19,6 +24,7 @@ public struct OnboardingGuideView: View {
 
     public var body: some View {
         let _ = store.effectiveLanguage
+        let checklist = store.onboardingChecklist
         VStack(alignment: .leading, spacing: 0) {
             headerBar
                 .padding(.horizontal, 14)
@@ -31,8 +37,9 @@ public struct OnboardingGuideView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 10) {
                     step1ConnectionCard
-                    step2JevModelCard
-                    step3VoiceAndShortcutsCard
+                    step2SearchCard(checklist: checklist)
+                    step3AllOffUndoCard(checklist: checklist)
+                    advancedDisclosure
                 }
                 .padding(.horizontal, 13)
                 .padding(.vertical, 11)
@@ -92,13 +99,16 @@ public struct OnboardingGuideView: View {
             }
 
             VStack(alignment: .leading, spacing: 1.5) {
-                Text(L10n.tr("欢迎使用 MenuBarMijia", "Welcome to MenuBarMijia"))
+                Text(L10n.tr("三步上手", "Three Steps to Start"))
                     .font(.system(size: 14, weight: .bold))
                     .tracking(-0.2)
 
-                Text(L10n.tr("30 秒完成配置 · 菜单栏一秒掌控米家", "30-second setup · Control Xiaomi Home from your menu bar"))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                Text(L10n.tr(
+                    "连接账号 · 按 \(hotkeyLabel) 搜设备 · 全关后还能撤销",
+                    "Connect an account · Search with \(hotkeyLabel) · Turn all off, then undo"
+                ))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -117,6 +127,7 @@ public struct OnboardingGuideView: View {
                 }
             }
             .buttonStyle(PillActionButtonStyle())
+            .help(L10n.tr("跳过引导，直接开始", "Skip the guide and start now"))
         }
     }
 
@@ -125,11 +136,11 @@ public struct OnboardingGuideView: View {
     private var step1ConnectionCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                stepBadge("1", isDone: isBackendConnected)
-                Text(L10n.tr("连接你的米家设备", "Connect Your Devices"))
+                stepBadge("1", isDone: store.hasConnectedHomeSource)
+                Text(L10n.tr("连接账号（米家扫码 / Home Assistant）", "Connect an Account (Mi QR / Home Assistant)"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                if isBackendConnected {
+                if store.hasConnectedHomeSource {
                     Label(L10n.tr("已连接", "Connected"), systemImage: "checkmark.circle.fill")
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(.green)
@@ -174,6 +185,14 @@ public struct OnboardingGuideView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .controlSize(.small)
+
+            Text(L10n.tr(
+                "Home Assistant 与米家云端可以同时配置；这里只切换当前填写的连接表单，已配置的另一端会继续连接。",
+                "Home Assistant and Xiaomi Cloud can be configured together. This only switches the form below; the other configured source keeps running."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             // #47: let people try the panel before signing any account in.
             if store.homeBackend == .demo {
@@ -288,22 +307,195 @@ public struct OnboardingGuideView: View {
             }
         }
         .padding(11)
-        .glassTile(isActive: isBackendConnected, cornerRadius: 12)
+        .glassTile(isActive: store.hasConnectedHomeSource, cornerRadius: 12)
     }
 
-    // MARK: - Step 2: AI Decision Model
+    // MARK: - Step 2: Search with the global shortcut
 
-    private var step2JevModelCard: some View {
+    private func step2SearchCard(checklist: OnboardingChecklist) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                stepBadge("2", isDone: checklist.isComplete(.searchDevice))
+                Text(L10n.tr("按 \(hotkeyLabel) 搜一个设备", "Press \(hotkeyLabel) to Find a Device"))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if checklist.isComplete(.searchDevice) {
+                    Label(L10n.tr("已试过", "Tried"), systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+            }
+
+            Text(L10n.tr(
+                "短按 \(hotkeyLabel) 打开面板，直接输入设备名或拼音首字母；↑↓ 选择，回车开关。长按 \(hotkeyLabel) 可以直接说话。",
+                "Tap \(hotkeyLabel) to open the panel, then type a device name or pinyin initials. ↑↓ chooses, Return toggles. Hold \(hotkeyLabel) to speak instead."
+            ))
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                shortcutTipRow(
+                    icon: "magnifyingglass",
+                    title: L10n.tr("打字就是搜索", "Typing Is the Search"),
+                    detail: L10n.tr(
+                        "「书房灯」和 sfd 都能找到，房间名也会匹配；隐藏的设备不会出现。",
+                        "\"Study light\" and sfd both match, room names work too, and hidden devices stay out."
+                    )
+                )
+                shortcutTipRow(
+                    icon: "arrow.up.arrow.down",
+                    title: L10n.tr("↑↓ 选中，回车开关", "↑↓ to Choose, Return to Toggle"),
+                    detail: L10n.tr(
+                        "搜索结果按最匹配排序；按 Esc 退出搜索，再按一次关闭面板。",
+                        "Results rank the best match first. Esc leaves search; a second Esc closes the panel."
+                    )
+                )
+            }
+        }
+        .padding(11)
+        .glassTile(isActive: false, cornerRadius: 12)
+    }
+
+    // MARK: - Step 3: All Off + Undo
+
+    private func step3AllOffUndoCard(checklist: OnboardingChecklist) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                stepBadge("3", isDone: checklist.isComplete(.allOffAndUndo))
+                Text(L10n.tr("试一次全关，再撤销", "Try All Off, Then Undo"))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if checklist.isComplete(.allOffAndUndo) {
+                    Label(L10n.tr("已试过", "Tried"), systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+            }
+
+            Text(L10n.tr(
+                "点面板底部的「全关」，10 秒内点撤销横幅就能恢复；3 台以上有 15 秒。",
+                "Tap All Off at the bottom of the panel, then tap the undo banner within 10 seconds (15 seconds for three or more devices)."
+            ))
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                shortcutTipRow(
+                    icon: "power",
+                    title: L10n.tr("全关只碰当前能关的设备", "All Off Only Touches What Is On"),
+                    detail: L10n.tr(
+                        "隐藏的设备、插座和扫地机默认不动，避免关掉路由器和还在工作的家电。",
+                        "Hidden devices, plugs and vacuums stay as they are, so a router or a working appliance is not switched off."
+                    )
+                )
+                shortcutTipRow(
+                    icon: "arrow.uturn.backward",
+                    title: L10n.tr("撤销是一次性的", "Undo Is One Shot"),
+                    detail: L10n.tr(
+                        "撤销后横幅消失，再想改回来就点设备卡片。",
+                        "The banner disappears after undo; toggle the device card if you change your mind again."
+                    )
+                )
+            }
+        }
+        .padding(11)
+        .glassTile(isActive: false, cornerRadius: 12)
+    }
+
+    // MARK: - Advanced (collapsed by default)
+
+    private var advancedDisclosure: some View {
+        DisclosureGroup(isExpanded: $isAdvancedExpanded) {
+            VStack(alignment: .leading, spacing: 9) {
+                Text(L10n.tr(
+                    "这些功能第一次用到时再打开也不迟；下面每一行都标了在哪里配置。",
+                    "You will not need these on day one. Each row says where it lives."
+                ))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                advancedAIModelCard
+
+                advancedPointerRow(
+                    icon: "sparkles",
+                    title: L10n.tr("GrokBall 情绪球", "GrokBall Sidecar"),
+                    detail: L10n.tr(
+                        "设置 → 通用 → 启用侧边情绪智能球，点一下看推荐、拖到顺手的位置。",
+                        "Settings → General → Enable Sidecar Grok Ball. Click for suggestions, drag it where it fits."
+                    ),
+                    actionTitle: L10n.tr("打开设置", "Open Settings")
+                ) {
+                    SettingsWindowOpener.shared.show(tab: .general)
+                }
+
+                advancedPointerRow(
+                    icon: "video",
+                    title: L10n.tr("摄像机直播", "Camera Live View"),
+                    detail: L10n.tr(
+                        "连上摄像头后，点设备卡片上的摄像机图标就能看直播，无需在此配置。",
+                        "Once a camera is connected, click the camera icon on its card for live view. Nothing to set up here."
+                    )
+                )
+
+                advancedPointerRow(
+                    icon: "gearshape.2",
+                    title: L10n.tr("自动化与 URL 直控", "Automation & URL Control"),
+                    detail: L10n.tr(
+                        "设置 → 连接 → 自动化；URL 直控默认每次先确认。",
+                        "Settings → Connections → Automation. URL control asks first by default."
+                    ),
+                    actionTitle: L10n.tr("打开设置", "Open Settings")
+                ) {
+                    SettingsWindowOpener.shared.show(tab: .connection)
+                }
+
+                advancedVoiceAndShortcutsCard
+            }
+            .padding(.top, 9)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.tr("进阶功能（用到再看）", "Advanced (Only When Needed)"))
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text(L10n.tr(
+                        "AI 指令、GrokBall、摄像机、自动化与 URL 直控",
+                        "AI commands, GrokBall, cameras, automation and URL control"
+                    ))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text(L10n.tr("默认收起", "Collapsed"))
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .tint(Color.accentColor)
+        .padding(11)
+        .glassTile(isActive: false, cornerRadius: 12)
+    }
+
+    // MARK: - Advanced: AI Decision Model
+
+    private var advancedAIModelCard: some View {
         let effectiveBase = selectedPreset.defaultBaseURL.isEmpty ? store.assistantConfig.baseURL : selectedPreset.defaultBaseURL
         let hasCustomKey = !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let importedSource = hasCustomKey ? AssistantConfig.importedKeySource(forBaseURL: effectiveBase) : nil
         let isLoopback = AssistantConfig(baseURL: effectiveBase, model: selectedPreset.defaultModel, apiKey: "").isLoopbackEndpoint
-        let isReady = hasCustomKey || isLoopback
 
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
-                stepBadge("2", isDone: isReady)
-                Text(L10n.tr("AI 决策模型（支持 Jev / DeepSeek / 自定义 Key）", "AI Decision Model (Jev / DeepSeek / Custom Key)"))
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 16, alignment: .center)
+                Text(L10n.tr("AI 决策模型（可选）", "AI Decision Model (Optional)"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
                 if let importedSource {
@@ -319,19 +511,19 @@ public struct OnboardingGuideView: View {
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(.green)
                 } else {
-                    Text(L10n.tr("不填也可用本机 0ms 规则", "0ms Local Rules Work Without Key"))
+                    Text(L10n.tr("不填也能用本机规则", "Local Rules Work Without It"))
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
             }
 
             Text(L10n.tr(
-                "常规指令本机 0ms 直接执行；支持 OpenRouter Jev、TypeSafe 原生 Jev、DeepSeek、通义千问、智谱 GLM 等，复杂场景口语一次统筹多台设备。",
-                "Standard commands run locally in 0ms. Configure OpenRouter Jev, Native Jev, DeepSeek, Qwen, GLM, or OpenAI to coordinate complex natural phrases."
+                "常规指令本机直接执行，不需要 AI。想要一次统筹多台设备或更口语的说法，再接 Jev、DeepSeek 等服务。",
+                "Simple commands run on this Mac without AI. Connect Jev, DeepSeek or another service only for multi-device phrasing."
             ))
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
                 Picker(
@@ -385,8 +577,8 @@ public struct OnboardingGuideView: View {
                 .foregroundStyle(Color.accentColor)
             }
         }
-        .padding(11)
-        .glassTile(isActive: false, cornerRadius: 12)
+        .padding(9)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func persistOnboardingAssistantDraft() {
@@ -399,14 +591,17 @@ public struct OnboardingGuideView: View {
         )
     }
 
-    // MARK: - Step 3: Hold-to-Talk & Shortcuts
+    // MARK: - Advanced: Voice & Shortcuts
 
-    private var step3VoiceAndShortcutsCard: some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private var advancedVoiceAndShortcutsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                stepBadge("3", isDone: voiceAuthorized)
-                Text(L10n.tr("解锁「按住菜单栏直接说话」", "Unlock Hold-to-Talk & Shortcuts"))
-                    .font(.system(size: 12, weight: .semibold))
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 16, alignment: .center)
+                Text(L10n.tr("语音与快捷键（可选）", "Voice & Shortcuts (Optional)"))
+                    .font(.system(size: 11.5, weight: .semibold))
                 Spacer()
                 if voiceAuthorized {
                     Label(L10n.tr("语音已授权", "Voice Authorized"), systemImage: "checkmark.circle.fill")
@@ -415,24 +610,13 @@ public struct OnboardingGuideView: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                shortcutTipRow(
-                    icon: "waveform.badge.mic",
-                    title: L10n.tr("长按顶部菜单栏温度/图标", "Long-Press Menu Bar Icon"),
-                    detail: L10n.tr(
-                        "按住直接说出指令（如「书房灯月光模式」「10分钟后关灯」），松手即执行",
-                        "Hold and speak a command (e.g. \"study light moonlight mode\", \"in 10 minutes turn off lights\"), release to run"
-                    )
-                )
-                shortcutTipRow(
-                    icon: "command",
-                    title: L10n.tr("全局快捷键 ⌥M 与数字键 1–9", "Global Hotkey ⌥M & Keys 1–9"),
-                    detail: L10n.tr(
-                        "短按 ⌥M 呼出面板，长按 ⌥M 直接说话，按 1–9 瞬间开关常用设备，说「撤销」可回退",
-                        "Tap ⌥M to toggle the dashboard, hold ⌥M to speak, 1–9 to toggle top devices, or say \"undo\" to revert"
-                    )
-                )
-            }
+            Text(L10n.tr(
+                "长按菜单栏图标或 \(hotkeyLabel) 直接说话，例如「书房灯月光模式」「10 分钟后关灯」，松手即执行。",
+                "Hold the menu bar icon or \(hotkeyLabel) and speak, e.g. \"study light moonlight mode\" or \"turn off the lights in 10 minutes\", then release."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             if !voiceAuthorized {
                 HStack {
@@ -457,7 +641,7 @@ public struct OnboardingGuideView: View {
                             Image(systemName: "mic.fill")
                             Text(isRequestingVoice
                                  ? L10n.tr("正在请求系统授权…", "Requesting Authorization…")
-                                 : L10n.tr("一键授权麦克风与语音", "Authorize Microphone & Speech"))
+                                 : L10n.tr("授权麦克风与语音", "Authorize Microphone & Speech"))
                         }
                     }
                     .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .orange))
@@ -466,15 +650,15 @@ public struct OnboardingGuideView: View {
                 .padding(.top, 2)
             }
         }
-        .padding(11)
-        .glassTile(isActive: false, cornerRadius: 12)
+        .padding(9)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     // MARK: - Footer
 
     private var bottomActionRow: some View {
         HStack {
-            Text(L10n.tr("随时可在「偏好设置 → 新手引导」重新打开", "Reopen anytime in Settings → Guide"))
+            Text(L10n.tr("随时可在「设置 → 通用 → 首次设置」重新打开", "Reopen anytime in Settings → General → Setup"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
 
@@ -502,11 +686,8 @@ public struct OnboardingGuideView: View {
 
     // MARK: - Subviews
 
-    private var isBackendConnected: Bool {
-        if store.homeBackend == .demo { return true }
-        if case .connected = store.connectionStatus { return true }
-        if store.homeBackend == .xiaomiCloud && store.miSessionMaskedUserId != nil { return true }
-        return false
+    private var hotkeyLabel: String {
+        HotkeySettingsState.shared.shortcut.displayString
     }
 
     private func stepBadge(_ number: String, isDone: Bool) -> some View {
@@ -541,6 +722,38 @@ public struct OnboardingGuideView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func advancedPointerRow(
+        icon: String,
+        title: String,
+        detail: String,
+        actionTitle: String? = nil,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 16, alignment: .center)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 6)
+
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(PillActionButtonStyle())
             }
         }
     }

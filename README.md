@@ -15,6 +15,9 @@ English | [简体中文](README.zh-CN.md)
 
 <h1 align="center">MenuBarMijia</h1>
 
+> [!IMPORTANT]
+> **Not affiliated with Xiaomi.** MenuBarMijia is an independent open-source project, not an official Xiaomi or Mijia product, and is not affiliated with, endorsed by, or sponsored by Xiaomi Corporation or its affiliates. "Xiaomi", "Mijia", "Mi Home", and "米家" are trademarks of Xiaomi Corporation and its affiliates. The project uses these names only to describe compatibility with Xiaomi / Mijia devices; no endorsement is implied.
+
 <p align="center">
   <b>Control your entire home right from your computer, without picking up your phone.</b><br>
   A native macOS menu-bar app for Xiaomi / Mijia smart home devices, with a companion Windows 11 tray build.<br>
@@ -31,7 +34,7 @@ English | [简体中文](README.zh-CN.md)
 </p>
 
 <p align="center">
-  <a href="https://jryang1997.github.io/menubarmijia-web/">Official website</a> ·
+  <a href="https://jryang1997.github.io/menubarmijia-web/">Project website</a> ·
   <a href="https://github.com/jryang1997/MenuBarMijia/releases/latest">Download latest</a> ·
   <a href="#quick-start">Install & Connect</a> ·
   <a href="#features--platform-matrix">Platform Comparison</a> ·
@@ -116,7 +119,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Global Activation Hotkey** | ✅ `⌥M` (Customizable) | ✅ `Alt+M` (Customizable) | Windows 1.1.4 adds custom key recording with collision detection |
 | **Voice Interaction** | ✅ Menu bar hold / Hotkey hold / Hands-free | ⚠️ Hands-free only | macOS supports native Speech frameworks; Windows uses WebView speech recognition |
 | **Local Command Parsing** | ✅ Supported | ✅ Supported | Power, brightness, temp, fan speeds, and timers are parsed locally |
-| **Optional AI Assistant** | ✅ Supported | ✅ Supported | Connect Jev, DeepSeek, Ollama, etc. Actions with <80% confidence require confirmation |
+| **Optional AI Assistant** | ✅ Supported | ✅ Supported | Connect Jev, DeepSeek, Ollama, etc. "Ask me when unsure" is on by default; the exact threshold lives in advanced settings |
 | **Proactive "For You" Suggestions** | ✅ Up to 4 chips | ✅ Up to 4 pills | Manual card actions train time-bucket and weekday/weekend habits with a 14-day decay half-life and next-action prediction (undo rolls them back; see [ADR-0009](docs/adr/0009-habit-ranking-algorithm.md)). Local picks appear immediately; a configured model refreshes the cache in the background. Homes with fewer executable actions show their actual count. |
 | **GrokBall & Side Suggestions** | ✅ Native Canvas | ✅ Bundled SVG engine | Click the ball for up to four reversible device actions; click again or press Esc to collapse. On macOS, neutral expressions use a black ball with white eyes, dragging repositions it, and a 0.5-second hold starts voice input. Suggestions follow its side of the panel and adapt their rows near screen edges. Windows retains the fixed side attachment. Eyes follow the pointer, and Reduce Motion uses static expressions. Based on [TyCoding/grok-ball](https://github.com/TyCoding/grok-ball) (MIT). |
 | **Quick Actions & Scenes Strip** | ✅ 3 actions | ✅ 4 actions | Toggle in Settings — "Show Quick Actions Strip" on macOS, "Show top quick actions bar" on Windows. macOS ships All Lights Off, Soft Night Light, and Sleep Climate Off; Windows ships All main lights on, Lights off for sleep, 25° cool, and Brighten lights. Home Assistant scenes are appended on both. On macOS, four or fewer pills stretch edge to edge and the rest scroll horizontally with a normal mouse wheel. |
@@ -172,7 +175,7 @@ Click the menu bar icon to reveal the panel, then open Settings `⚙️`:
 
 
 - **Option A: Mi Home Direct Cloud Connect (Recommended):**<br>
-  Select "Mi Cloud Connect" in Settings. A QR code appears on screen. Scan it with the official Mi Home app on your phone to link your account. All your homes, rooms, and supported devices sync instantly.
+  Select "Mi Cloud Connect" in Settings. A QR code appears on screen. Scan it with the official Mi Home app on your phone to link your account. All your homes, rooms, and supported devices sync instantly. On macOS, you can click "Add Account" in Settings to sign in to multiple Xiaomi accounts across regions at once and merge their devices and homes in one panel (Windows currently supports a single signed-in account). When Xiaomi's login response declares a cookie expiry (or the server rejects an expired token), the panel warns 3 days before expiry and switches the menu-bar icon to `house.slash` once expired, offering a one-click in-panel QR re-scan without guessing a lifetime for undated sessions.
 - **Option B: Home Assistant local connection:**<br>
   Select "Home Assistant" and enter your instance origin, such as `http://192.168.1.100:8123`, and Long-Lived Access Token. On Windows, save settings and approve the endpoint in the native dialog. The token stays in Windows Credential Manager. A rejected or failed connection never switches to demo. Windows supports the existing light, climate, fan, plug, fridge, vacuum, camera-control, and sensor card models, plus scenes and scripts. macOS-only device types and HA camera live streams are outside this Windows backend.<br>
   On macOS, connecting to a LAN address or `.local` host can be blocked by the system's local-network privacy gate. The panel says so explicitly ("Local network connection blocked by macOS") instead of showing a generic socket error. Grant MenuBarMijia permission under **System Settings → Privacy & Security → Local Network**; if it still fails, reinstall so the local app signature lines up.
@@ -214,13 +217,34 @@ These phrases are parsed locally **without any AI API key** or cloud model token
 
 MenuBarMijia is an independent open-source project, not an official Xiaomi app. Mi Home cloud control needs an internet connection. You can connect your own Home Assistant instance on macOS or Windows.
 
-Account credentials and AI keys are stored in the macOS Keychain or Windows Credential Manager. macOS may ask for Keychain permission after an update. When migrating credentials from an older version, the plaintext copy is removed after the Keychain accepts it.
+### Where credentials live
+
+| Secret | What is stored | Where |
+| :--- | :--- | :--- |
+| Xiaomi Home / Mijia | Every signed-in account's `userId`, `cUserId`, `ssecurity`, `serviceToken`, cloud region and declared expiry | macOS Keychain (one generic-password item) or Windows Credential Manager |
+| Home Assistant | The long-lived access token (the instance URL is not secret) | macOS Keychain or Windows Credential Manager |
+| AI assistants | The API key saved for each provider, plus the imported-key source label and remembered cloud-consent endpoints | API keys in macOS Keychain / Windows Credential Manager; the non-secret labels in app preferences |
+| LG webOS TV | The pairing client key issued by the TV | macOS Keychain |
+
+macOS encrypts these Keychain items at rest and protects them with the login Keychain; MenuBarMijia writes them with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so they are available after the first unlock but are never synced to iCloud or another Mac. The app does not store these secrets in plain `UserDefaults` or log files. macOS may ask for Keychain permission after an app update because the build signature changes; answering "Always Allow" covers later reads and writes.
+
+Versions up to 1.0.6 could mirror credentials into plain `UserDefaults`. On first launch after upgrading, each legacy plaintext value is written into the Keychain and the plaintext key is deleted only after that write succeeds. If the Keychain is unavailable, the old copy is left in place for the next attempt instead of silently pretending the migration succeeded.
+
+### High-risk controls, lock screen, and revocation
+
+Manual controls on high-risk devices ask for a second confirmation, not only AI-proposed actions: turning on a heater, switching a plug or camera, starting a vacuum, or turning a water heater on or hotter. Turning one of these off stays direct, so making the home safer never requires fighting a dialog. Door/window and gas-alarm sensors are read-only status cards in this app, so they cannot be actuated here at all. The confirmation table is shared with the AI policy and lives in `Sources/MijiaCore/ModelActionPolicy.swift`.
+
+Settings → 隐私 / Privacy has **锁屏时禁止控制设备 / Block device control while locked**, on by default. While the Mac screen is locked, card/detail controls, `menumijia://` links, App Intents/Shortcuts and assistant commands are refused with a toast; scheduled commands and Mac-event automation rules still run. The toggle is persisted locally and the lock state comes from the system's screen-lock notifications.
+
+The same Settings page has **退出并吊销令牌 / Sign Out & Revoke Tokens**, confirmed by a destructive dialog. It signs out every Xiaomi Home account, deletes the Home Assistant token and disconnects, and clears saved AI keys and cloud-consent records. Device names, room layout and local history stay. You can also revoke one thing at a time: 退出登录 in the Mi account section, replacing the HA token with an empty value, or the per-key 撤销 button in the AI settings.
 
 Everyday commands are handled by local rules. You can also connect an AI service of your choice for more complex requests. The request includes your command, device and environment information, and any habit summary you have enabled. Manual card actions also train local time-bucket habit memories (used only for the "For You" suggestions); the habit learning toggle turns this off, learned entries can be reviewed and cleared, and undoing a banner rolls the matching records back. Speech recognition uses system services; on-device-only recognition is available for supported languages.
 
-To help prevent mistakes, low-confidence AI suggestions and actions such as turning on a heater, switching a plug, or starting a vacuum wait for your confirmation. URL controls also ask first by default, with an option to enable direct control.
+To help prevent mistakes, actions the AI is unsure about ask first ("Ask me when unsure" is on by default), and risky actions such as turning on a heater, switching a plug, or starting a vacuum always wait for your confirmation. URL controls also ask first by default, with an option to enable direct control.
 
 The macOS app is not yet notarized by Apple, so you may need to allow it in System Settings the first time. Windows may show a SmartScreen prompt. macOS updates are verified with an Ed25519 public key; the signing key stays offline. See [ADR-0007](docs/adr/0007-lan-direct-deferred.md) for more on connection options.
+
+Each release also publishes GitHub build provenance attestations for the installers and SPDX SBOMs for both platforms. `gh attestation verify <installer> --repo jryang1997/MenuBarMijia` checks that the file was built by this repository's release workflow. See [verifying release artifacts](SECURITY.md#verifying-release-artifacts).
 
 To report a vulnerability in private, follow [Security policy](SECURITY.md).
 

@@ -418,9 +418,9 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         #else
         let arch = "x86_64"
         #endif
-        let backend = store?.homeBackend.rawValue ?? "unknown"
-        let region = store?.homeBackend == .xiaomiCloud ? (store?.miCloudRegion.rawValue ?? "cn") : "n/a"
         let dev = currentDevice
+        let backend = store.map { $0.deviceBackend(for: dev?.id ?? "").rawValue } ?? "unknown"
+        let region = backend == HomeBackend.xiaomiCloud.rawValue ? (store?.miCloudRegion.rawValue ?? "cn") : "n/a"
         let model = (dev?.model ?? "").isEmpty ? "unknown" : (dev?.model ?? "unknown")
         let hasStreamEntity: Bool
         let hasSnapshotPath: Bool
@@ -509,7 +509,7 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         var req = XiaomiCameraBridge.authorizedURLRequest(for: targetURL)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         if req.value(forHTTPHeaderField: "Authorization") == nil,
-           let store, store.homeBackend == .homeAssistant,
+           let store, store.deviceBackend(for: currentDevice?.id ?? "") == .homeAssistant,
            targetURL.query?.contains("token=") != true {
             let token = KeychainHelper.loadToken().trimmingCharacters(in: .whitespacesAndNewlines)
             if !token.isEmpty {
@@ -753,6 +753,9 @@ struct CameraLivePanelView: View {
         )
         .preferredColorScheme(.dark)
         .onChange(of: cameraSpec?.isOn) { _, _ in
+            controller.reloadStream()
+        }
+        .onChange(of: cameraSpec?.entityId) { _, _ in
             controller.reloadStream()
         }
     }
@@ -1096,7 +1099,7 @@ struct CameraLivePanelView: View {
                         .buttonStyle(PillActionButtonStyle(isSelected: !spec.isOn, tintColor: .cyan))
                     }
 
-                    if store.homeBackend == .xiaomiCloud,
+                    if store.deviceBackend(for: device?.id ?? "") == .xiaomiCloud,
                        (store.cameraCustomStreamURL(for: device?.id ?? "") ?? "").isEmpty,
                        let deviceId = device?.id {
                         ForEach(XiaomiCameraStreamQuality.allCases, id: \.self) { quality in

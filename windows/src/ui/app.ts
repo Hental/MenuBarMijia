@@ -157,7 +157,9 @@ import {
 import {
   KIND_CHIP,
   filterByListCut,
+  foldGroupedLights,
   kindChips,
+  memberGroupOwners,
   showsKindRow,
   type DeviceKindTag,
   type DeviceListCut,
@@ -232,6 +234,8 @@ interface PersistedSettings {
   hasCompletedOnboarding: boolean;
   isCompactGridMode: boolean;
   hideOfflineDevices: boolean;
+  /** Individual lights of a visible Mi light group fold into the group card (#214). */
+  hideGroupedLights: boolean;
   cachedXiaomiDevices: SmartDevice[];
   /** Version of the cached device shape; legacy caches are migrated once on load (#148). */
   cachedDevicesVersion: number;
@@ -640,6 +644,7 @@ function loadSettings(): LoadedSettings {
           hasCompletedOnboarding: parsed.hasCompletedOnboarding ?? Boolean(miSession),
           isCompactGridMode: parsed.isCompactGridMode ?? true,
           hideOfflineDevices: typeof parsed.hideOfflineDevices === "boolean" ? parsed.hideOfflineDevices : false,
+          hideGroupedLights: typeof parsed.hideGroupedLights === "boolean" ? parsed.hideGroupedLights : true,
           cachedXiaomiDevices: Array.isArray(parsed.cachedXiaomiDevices)
             ? upgradeCachedDevices(
                 parsed.cachedXiaomiDevices,
@@ -710,6 +715,7 @@ function loadSettings(): LoadedSettings {
       hasCompletedOnboarding: false,
       isCompactGridMode: true,
       hideOfflineDevices: false,
+      hideGroupedLights: true,
       cachedXiaomiDevices: [],
       cachedDevicesVersion: CACHED_DEVICES_VERSION,
       cachedHAHome: null,
@@ -886,6 +892,8 @@ export class MenuMijiaWindowsApp {
   private waitingDeviceIds = new Set<string>();
   /** A Xiaomi refresh failed after devices were already on screen. */
   private cloudValuesStale = false;
+  /** Member did → owning light-group did from the latest Xiaomi Cloud refresh (#214). */
+  private groupOwnerByMemberDid = new Map<string, string>();
   /** A command waiting for the user to allow sending it to a cloud AI service (#20). */
   private pendingCloudConsent: { utterance: string; endpoint: string } | null = null;
   /** AI guesses that wait for a tap instead of running by themselves (#21). */
@@ -1416,6 +1424,17 @@ export class MenuMijiaWindowsApp {
     return filterByListCut(this.devices, this.listCut, this.settings.hideOfflineDevices);
   }
 
+  /** Cards on screen: the list cut, plus folding member lights into a visible group card (#214). */
+  private get presentationDevices(): SmartDevice[] {
+    return this.foldGrouped(this.filteredDevices);
+  }
+
+  private foldGrouped(devices: readonly SmartDevice[]): SmartDevice[] {
+    return this.settings.hideGroupedLights
+      ? foldGroupedLights(devices, this.groupOwnerByMemberDid)
+      : [...devices];
+  }
+
   private get activeDeviceCount(): number {
     return this.devices.filter((d) => isDeviceActiveOn(d)).length;
   }
@@ -1516,6 +1535,10 @@ export class MenuMijiaWindowsApp {
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
       this.homes = applyOrder(this.homes.map((home) => home.id), nextHomes);
       const { devices: rawDevices, rooms } = this.filterBySelectedHome(allDevices, allRooms);
+      const groupDids = rawDevices.map((device) => device.did).filter((did) => did.startsWith("group."));
+      const membershipByGroup = groupDids.length > 0
+        ? client.lightGroupMembers(groupDids).catch(() => new Map<string, string[]>())
+        : Promise.resolve(new Map<string, string[]>());
 
       // Stage 1: Instant synthesis with cached/fallback specs so user sees their real devices immediately
       const stage1Specs = this.specResolver.exportCachedSpecs();
@@ -1556,9 +1579,11 @@ export class MenuMijiaWindowsApp {
       }
 
       const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
+      const membersByGroup = await membershipByGroup;
       // An old refresh must not clear or set freshness for the connection that replaced it.
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
       this.markCloudValuesFresh();
+      this.groupOwnerByMemberDid = memberGroupOwners(membersByGroup);
       // Cloud list order is not a layout preference. Keep known devices in their
       // displayed order, use fresh values, drop removed ids and append new ones.
       this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
@@ -1684,6 +1709,7 @@ export class MenuMijiaWindowsApp {
       devices: this.devices,
       scenes: this.scenes,
       environmentReadings: this.environmentReadings,
+      groupOwners: [...this.groupOwnerByMemberDid],
     });
   }
 
@@ -1706,6 +1732,7 @@ export class MenuMijiaWindowsApp {
       scenes: this.scenes,
       kindChips: kindChipsForPanel,
       kindRowVisible: showsKindRow(kindChipsForPanel, this.listCut),
+      groupOwners: [...this.groupOwnerByMemberDid],
       allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
       devices: this.devices.map((device) => {
         const kind = device.kind;
@@ -1749,7 +1776,7 @@ export class MenuMijiaWindowsApp {
     }
 
     const isAll = this.selectedRoom === "全部";
-    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.filteredDevices));
+    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.presentationDevices));
     const sections = pageSections(this.layout, ordered, isAll);
     const desiredHeaders = sections.filter((section) => section.title !== null);
     const domHeaders = Array.from(this.root.querySelectorAll<HTMLElement>(".cc-group-header"));
@@ -3021,6 +3048,7 @@ export class MenuMijiaWindowsApp {
       // Clear fake demo devices immediately upon real Xiaomi login
       this.devices = [];
       this.scenes = [];
+      this.groupOwnerByMemberDid = new Map();
       this.selectedRoom = "全部";
       this.activeSheet = "none";
       this.qrTicket = null;
@@ -3595,7 +3623,7 @@ export class MenuMijiaWindowsApp {
       `;
     }
 
-    if (this.devices.length > 0 && this.filteredDevices.length === 0 && (this.settings.hideOfflineDevices || this.listCut.kind === "deviceKind")) {
+    if (this.devices.length > 0 && this.presentationDevices.length === 0 && (this.settings.hideOfflineDevices || this.listCut.kind === "deviceKind")) {
       const title = this.listCut.kind === "deviceKind"
         ? (this.settings.hideOfflineDevices ? t("这一类暂无通电在线的设备") : t("这一类暂无设备"))
         : t("该房间暂无通电在线的设备");
@@ -3611,7 +3639,7 @@ export class MenuMijiaWindowsApp {
     }
 
     const isAll = this.selectedRoom === "全部";
-    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.filteredDevices));
+    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.presentationDevices));
     const sections = pageSections(this.layout, ordered, isAll);
     const bento = this.skin === "bento" && this.settings.isCompactGridMode;
     let index = 0;
@@ -5062,6 +5090,11 @@ export class MenuMijiaWindowsApp {
           </div>
 
           <div class="cc-field cc-field-row">
+            <label for="settings-hide-grouped-lights">${t("灯组内的单灯不重复显示")}</label>
+            <input id="settings-hide-grouped-lights" type="checkbox" ${this.settings.hideGroupedLights ? "checked" : ""} />
+          </div>
+
+          <div class="cc-field cc-field-row">
             <label for="settings-quick-actions">${t("显示顶部快捷场景栏")}</label>
             <input id="settings-quick-actions" type="checkbox" ${this.settings.showQuickActionsBar ? "checked" : ""} />
           </div>
@@ -5580,6 +5613,11 @@ export class MenuMijiaWindowsApp {
     });
     this.root.querySelector<HTMLInputElement>("#settings-hide-offline")?.addEventListener("change", (e) => {
       this.settings.hideOfflineDevices = (e.target as HTMLInputElement).checked;
+      this.saveSettings();
+      this.render();
+    });
+    this.root.querySelector<HTMLInputElement>("#settings-hide-grouped-lights")?.addEventListener("change", (e) => {
+      this.settings.hideGroupedLights = (e.target as HTMLInputElement).checked;
       this.saveSettings();
       this.render();
     });
@@ -6221,6 +6259,7 @@ export class MenuMijiaWindowsApp {
         this.invalidateSourceControl();
         this.environmentReadings = [];
         this.homes = [];
+        this.groupOwnerByMemberDid = new Map();
         this.replyBanner = null;
         this.settings.connectionMode = mode;
         if (mode !== "xiaomiCloud") this.cloudValuesStale = false;

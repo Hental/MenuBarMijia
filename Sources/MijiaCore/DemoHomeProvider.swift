@@ -81,6 +81,10 @@ public actor MockHomeProvider: HomeProvider {
         continuation?.yield(.snapshotUpdated(next))
     }
 
+    public func sendStatus(_ status: ConnectionStatus) {
+        continuation?.yield(.statusChanged(status))
+    }
+
     private var sensorHistoryByDevice: [String: [SensorHistorySample]] = [:]
 
     public func setSensorHistory(_ samples: [SensorHistorySample], forDevice deviceId: String) {

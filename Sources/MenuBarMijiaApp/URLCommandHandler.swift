@@ -68,6 +68,11 @@ final class URLCommandHandler {
             return
         }
 
+        if store.isControlBlockedByScreenLock {
+            finish(store.screenLockBlockedMessage, isError: true, store: store)
+            return
+        }
+
         if URLDirectControl.requiresConfirmation() {
             guard confirm(description(for: resolved)) else { return }
         }

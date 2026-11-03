@@ -2,7 +2,8 @@
 # 发布门禁（#32）：校验标签/版本/提交，以及两端发布附件是否完整。
 #
 # `tag` 在 GitHub Actions 中会把 version/tag/commit 写入 $GITHUB_OUTPUT。
-# `assets` 需要 openssl（Ed25519 校验）与 python3；发布工作流在 ubuntu-latest 上执行。
+# `assets` 需要 openssl（Ed25519 校验）与 python3；`draft-assets` 也需要 python3（校验 SBOM）。
+# 发布工作流在 ubuntu-latest 上执行。
 set -euo pipefail
 export LC_ALL=C
 
@@ -27,10 +28,10 @@ usage() {
   scripts/check_release.sh notes <输入.md> <输出.md> <version> <signed:true|false>
 
 tag 必须等于 VERSION 加 v 前缀（例如 VERSION=1.0.6 → v1.0.6），并且指向当前 HEAD。
-assets 只接受 6 个安装包和校验文件，再加上 MenuBarMijia-<version>.update.json
-与 MenuBarMijia-<version>.update.json.ed25519.sig，一共 8 个文件。
-draft-assets 只接受那 6 个待签附件，供 CI 产出草稿时自检；
-它不做签名校验，发布前仍必须跑 assets（严格 8 个，只验清单签名）。
+assets 只接受 6 个安装包和校验文件、两端 SPDX SBOM，再加上
+MenuBarMijia-<version>.update.json 与 MenuBarMijia-<version>.update.json.ed25519.sig，一共 10 个文件。
+draft-assets 只接受那 6 个待签附件与两端 SBOM，供 CI 产出草稿时自检；
+它不做签名校验，发布前仍必须跑 assets（严格 10 个，只验清单签名）。
 notes 按 Windows 签名状态增删“未签名”段落，重复执行结果一致。
 EOF
     exit 2
@@ -274,12 +275,43 @@ release_assets() {
         "MenuBarMijia-${version}-windows-x64-setup.exe" \
         "MenuBarMijia-${version}-windows-x64-setup.exe.sha256" \
         "MenuBarMijia-${version}-windows-x64.msi" \
-        "MenuBarMijia-${version}-windows-x64.msi.sha256"
+        "MenuBarMijia-${version}-windows-x64.msi.sha256" \
+        "MenuBarMijia-${version}-macos.spdx.json" \
+        "MenuBarMijia-${version}-windows-x64.spdx.json"
     if [ "$with_signature" = "1" ]; then
         printf '%s\n' \
             "MenuBarMijia-${version}.update.json" \
             "MenuBarMijia-${version}.update.json.ed25519.sig"
     fi
+}
+
+verify_sbom() {
+    # SBOM 由 release.yml 的 syft 步骤生成；这里只验证它确实是一份 SPDX 2.x JSON，
+    # 且记录了组件，避免把空文件或占位 JSON 当作“附了 SBOM”发布。
+    local dir="$1"
+    local name="$2"
+    python3 - "$dir/$name" <<'PY' || fail "SBOM 不合法：$(basename "$name")"
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError) as error:
+    raise SystemExit(f"不是合法 JSON：{error}")
+if not isinstance(data, dict):
+    raise SystemExit("顶层必须是 JSON 对象")
+version = data.get("spdxVersion")
+if not isinstance(version, str) or not version.startswith("SPDX-2."):
+    raise SystemExit(f"spdxVersion 不是 SPDX-2.x（当前：{version!r}）")
+packages = data.get("packages")
+if not isinstance(packages, list) or not packages:
+    raise SystemExit("packages 为空：SBOM 没有记录任何组件")
+if not any(isinstance(package, dict) and str(package.get("name") or "").strip() for package in packages):
+    raise SystemExit("packages 缺少组件名")
+PY
+    info "SBOM 校验通过：$name"
 }
 
 check_asset_set() {
@@ -311,7 +343,7 @@ check_asset_set() {
 }
 
 validate_assets() {
-    # draft-assets 只点名 6 个待签附件，不代替发布时的清单签名校验。
+    # draft-assets 只点名 6 个待签附件与两端 SBOM，不代替发布时的清单签名校验。
     local mode="$1"
     [ "$#" -eq 3 ] || usage
     local version="$2"
@@ -322,10 +354,10 @@ validate_assets() {
     [ "$version" = "$(version_file)" ] \
         || fail "附件版本 $version 与 VERSION=$(version_file) 不一致"
 
-    local with_signature=1 expect="8 个文件（DMG/EXE/MSI、SHA-256、更新清单与清单签名）"
+    local with_signature=1 expect="10 个文件（DMG/EXE/MSI、SHA-256、两端 SBOM、更新清单与清单签名）"
     if [ "$mode" = "draft-assets" ]; then
         with_signature=0
-        expect="6 个待签文件（DMG/EXE/MSI 与 SHA-256；Ed25519 签名由维护者离线补上）"
+        expect="8 个待签文件（DMG/EXE/MSI、SHA-256 与两端 SBOM；Ed25519 签名由维护者离线补上）"
     fi
 
     local -a required=()
@@ -338,6 +370,8 @@ validate_assets() {
     verify_checksum "$dir" "MenuBarMijia-${version}.dmg"
     verify_checksum "$dir" "MenuBarMijia-${version}-windows-x64-setup.exe"
     verify_checksum "$dir" "MenuBarMijia-${version}-windows-x64.msi"
+    verify_sbom "$dir" "MenuBarMijia-${version}-macos.spdx.json"
+    verify_sbom "$dir" "MenuBarMijia-${version}-windows-x64.spdx.json"
 
     if [ "$with_signature" -eq 1 ]; then
         verify_ed25519 "$dir" "$version"

@@ -49,9 +49,36 @@ public enum KeychainHelper {
         return readKeychainSecret(account: account) ?? defaultSeededToken
     }
 
-    public static func saveToken(_ token: String) {
-        guard writeKeychainSecret(token, account: account) else { return }
-        UserDefaults.standard.removeObject(forKey: legacyPlaintextTokenKey)
+    /// Saves (or, with an empty token, deletes) the Home Assistant token. Returns false when the
+    /// Keychain or vault refused the write, so sign-out can report an incomplete revocation.
+    @discardableResult
+    public static func saveToken(
+        _ token: String,
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault? = nil
+    ) -> Bool {
+        // An explicit vault is the revocation test seam; it must observe a failing Keychain even for
+        // a custom defaults suite, which otherwise keeps credentials in the suite (see below).
+        if let vault {
+            guard writeKeychainSecret(token, account: account, vault: vault) else { return false }
+            defaults.removeObject(forKey: secretFallbackKey(for: account))
+            return true
+        }
+        // A test suite keeps its token in the suite, never in the real login Keychain. This mirrors
+        // `loadToken(defaults:)`, so HomeStore tests can exercise sign-out and revocation.
+        guard defaults === UserDefaults.standard else {
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = secretFallbackKey(for: account)
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: key)
+            } else {
+                defaults.set(trimmed, forKey: key)
+            }
+            return true
+        }
+        guard writeKeychainSecret(token, account: account) else { return false }
+        defaults.removeObject(forKey: legacyPlaintextTokenKey)
+        return true
     }
 
     // MARK: - Keychain Primitives
@@ -121,7 +148,8 @@ public enum KeychainHelper {
         defaults: UserDefaults, account: String = MiSessionStore.keychainAccount, vault: CredentialVault = .shared
     ) {
         guard let legacy = defaults.data(forKey: MiSessionStore.fallbackDefaultsKey) else { return }
-        // Re-encoding through `MiSession` drops the `passToken` that ≤1.0.6 also persisted (#27, ADR-0004).
+        // Re-encoding through `MiSession` into a v2 envelope drops the `passToken` that ≤1.0.6 also persisted
+        // (#27, ADR-0004).
         if let data = MiSessionStore.migratedData(fromLegacyDefaults: legacy) {
             guard vault.insertIfMissing(data, for: account) else { return }
         }

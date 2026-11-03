@@ -3285,3 +3285,187 @@ describe("device kind filter", () => {
     assert.equal(JSON.stringify(stored).includes("deviceKind"), false);
   });
 });
+
+describe("light-group folding (#214)", () => {
+  const groupDid = "group.living";
+  const memberA = "470498069";
+  const memberB = "470498070";
+
+  interface GroupOptions {
+    readonly groupOnline?: boolean;
+    readonly groupRoom?: string;
+    readonly memberRoom?: string;
+    readonly membership?: Record<string, string>;
+    readonly hideOffline?: boolean;
+    readonly hideGrouped?: boolean;
+    readonly intents?: Parameters<typeof cloudFixture>[0];
+  }
+
+  function tileIds(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId ?? "").sort();
+  }
+
+  function roomNames(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-room]"), (node) => node.dataset.room ?? "");
+  }
+
+  function cachedLight(id: string, roomName: string): SmartDevice {
+    return {
+      id,
+      name: id,
+      roomId: roomName,
+      roomName,
+      model: "yeelink.light.ceiling22",
+      isOnline: true,
+      kind: {
+        kind: "light",
+        entityId: `miot:${id}:2`,
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [],
+      },
+    };
+  }
+
+  async function readyGroupApp(options: GroupOptions = {}): Promise<ReturnType<typeof cloudFixture>> {
+    const cloud = cloudFixture(options.intents ?? []);
+    const model = cloud.deviceRecords[0]!.model;
+    const specType = cloud.deviceRecords[0]!.spec_type;
+    const record = (did: string, name: string, isOnline = true) => ({ did, name, model, isOnline, spec_type: specType });
+    const groupRoom = options.groupRoom ?? "客厅";
+    const memberRoom = options.memberRoom ?? "客厅";
+    cloud.deviceRecords.push(
+      record(groupDid, "客厅灯组", options.groupOnline ?? true),
+      record(memberA, "客厅主灯"),
+      record(memberB, "客厅射灯"),
+    );
+    for (const roomName of new Set([groupRoom, memberRoom])) {
+      cloud.roomRecords.push({
+        id: `room-${roomName}`,
+        name: roomName,
+        dids: [
+          ...(groupRoom === roomName ? [groupDid] : []),
+          ...(memberRoom === roomName ? [memberA, memberB] : []),
+        ],
+      });
+    }
+    cloud.groupMembers.set(groupDid, options.membership ?? { [memberA]: "1", [memberB]: "1" });
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as Record<string, unknown>;
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      ...stored,
+      hideOfflineDevices: options.hideOffline ?? false,
+      hideGroupedLights: options.hideGrouped ?? true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    for (let i = 0; i < 3; i++) await setImmediate();
+    await waitFor(() => !document.querySelector("#btn-refresh")?.classList.contains("is-spinning"));
+    await setImmediate();
+    return cloud;
+  }
+
+  it("folds grouped lights by default while all-off and voice keep the full collection", async () => {
+    const cloud = await readyGroupApp({
+      intents: [{ targetId: memberA, operation: { kind: "power", isOn: false } }],
+    });
+    assert.deepEqual(tileIds(), ["fixture-light", groupDid].sort());
+    assert.match(element("#btn-all-off").textContent ?? "", /全关 \(4\)/);
+
+    await click("#btn-settings");
+    const box = document.querySelector<HTMLInputElement>("#settings-hide-grouped-lights");
+    assert.ok(box);
+    assert.equal(box.checked, true);
+    assert.equal(element("label[for='settings-hide-grouped-lights']").textContent, "灯组内的单灯不重复显示");
+    await click("#btn-close-settings");
+
+    await command("部分失败");
+    await waitFor(() => cloud.writes.some((write) => write.did === memberA && write.piid === 1 && write.value === false));
+  });
+
+  it("restores every individual light when the preference is turned off and saves it", async () => {
+    await readyGroupApp();
+    await click("#btn-settings");
+    const box = document.querySelector<HTMLInputElement>("#settings-hide-grouped-lights");
+    assert.ok(box);
+    box.checked = false;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await setImmediate();
+    assert.deepEqual(tileIds(), [memberA, memberB, "fixture-light", groupDid].sort());
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      hideGroupedLights?: boolean;
+    };
+    assert.equal(stored.hideGroupedLights, false);
+
+    const folded = document.querySelector<HTMLInputElement>("#settings-hide-grouped-lights");
+    assert.ok(folded);
+    folded.checked = true;
+    folded.dispatchEvent(new Event("change", { bubbles: true }));
+    await setImmediate();
+    assert.deepEqual(tileIds(), ["fixture-light", groupDid].sort());
+    assert.equal(
+      (JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideGroupedLights?: boolean })
+        .hideGroupedLights,
+      true,
+    );
+  });
+
+  it("restores the saved preference on the next launch", async () => {
+    await readyGroupApp({ hideGrouped: false });
+    assert.deepEqual(tileIds(), [memberA, memberB, "fixture-light", groupDid].sort());
+    await click("#btn-settings");
+    assert.equal(document.querySelector<HTMLInputElement>("#settings-hide-grouped-lights")?.checked, false);
+  });
+
+  it("keeps members visible when the group card is offline-hidden", async () => {
+    await readyGroupApp({ groupOnline: false, hideOffline: true });
+    assert.deepEqual(tileIds(), [memberA, memberB, "fixture-light"].sort());
+    await click("#btn-toggle-hide-offline");
+    assert.deepEqual(tileIds(), ["fixture-light", groupDid].sort());
+  });
+
+  it("keeps room navigation on rooms whose group card is filtered out", async () => {
+    await readyGroupApp({ groupRoom: "客厅", memberRoom: "书房" });
+    assert.deepEqual(tileIds(), ["fixture-light", groupDid].sort());
+    assert.ok(roomNames().includes("书房"));
+    await click('[data-room="书房"]');
+    assert.deepEqual(tileIds(), [memberA, memberB].sort());
+    for (const room of roomNames()) {
+      await click(`[data-room="${room}"]`);
+      assert.ok(tileIds().length > 0, `${room} pointed at an empty page`);
+    }
+  });
+
+  it("reconciles membership on refresh instead of keeping stale fold mappings", async () => {
+    const cloud = await readyGroupApp();
+    assert.ok(!tileIds().includes(memberB));
+    cloud.groupMembers.set(groupDid, { [memberA]: "1" });
+    await click("#btn-refresh");
+    await waitFor(() => tileIds().includes(memberB));
+  });
+
+  it("shows every member when the membership request is unavailable", async () => {
+    const cloud = await readyGroupApp();
+    assert.ok(!tileIds().includes(memberB));
+    cloud.failNextGroupStatus();
+    await click("#btn-refresh");
+    await waitFor(() => tileIds().includes(memberB));
+  });
+
+  it("restores an existing device cache without hiding unknown members", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [
+        cachedLight(groupDid, "客厅"),
+        cachedLight(memberA, "客厅"),
+        cachedLight(memberB, "客厅"),
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+    assert.deepEqual(tileIds(), [groupDid, memberA, memberB].sort());
+  });
+});

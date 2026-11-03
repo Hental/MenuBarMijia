@@ -259,6 +259,20 @@ public struct AssistantConfig: Equatable, Sendable {
         AssistantEndpoint(baseURL)?.allowsSendingSecrets ?? false
     }
 
+    /// Whether the user chose an AI endpoint. `load` reports the shipped OpenRouter default even when
+    /// nothing was saved, so presence alone cannot tell "configured" apart; compare with the defaults.
+    /// A non-default model, a saved key, or a local endpoint (Ollama/custom) all count as a choice.
+    public var hasConfiguredProvider: Bool {
+        if hasAPIKey || isLoopbackEndpoint { return true }
+        let base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let defaultBase = AssistantConfig.defaultBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return base.caseInsensitiveCompare(defaultBase) != .orderedSame
+            || model.caseInsensitiveCompare(AssistantConfig.defaultModel) != .orderedSame
+    }
+
     /// Ambient keys (CodexBar / environment variables) are never used implicitly; the user imports them explicitly (#20).
     public static func load(from defaults: UserDefaults, includeAmbientKey: Bool = false) -> AssistantConfig {
         let nonEmpty = { (key: String) -> String? in
@@ -331,8 +345,21 @@ public struct AssistantConfig: Equatable, Sendable {
         }
     }
 
-    private static func clearSecret(for preset: AssistantProviderPreset, defaults: UserDefaults) {
-        saveSecret("", for: preset, defaults: defaults)
+    @discardableResult
+    private static func clearSecret(for preset: AssistantProviderPreset, defaults: UserDefaults) -> Bool {
+        var complete = KeychainHelper.saveSecret(
+            "",
+            account: KeychainHelper.assistantProviderAPIKeyAccount(for: preset),
+            defaults: defaults
+        )
+        if preset == .openRouterJev {
+            complete = KeychainHelper.saveSecret(
+                "",
+                account: KeychainHelper.assistantAPIKeyAccount,
+                defaults: defaults
+            ) && complete
+        }
+        return complete
     }
 
     /// Returns only the user's explicitly saved Keychain API key for the given endpoint (excluding ambient CodexBar/env keys).
@@ -408,6 +435,45 @@ public struct AssistantConfig: Equatable, Sendable {
             defaults.removeObject(forKey: customKeyEndpointKey)
         }
         defaults.removeObject(forKey: importedKeySourceKey(for: preset))
+    }
+
+    /// Forgets every saved assistant key and import label, for the single sign-out-and-revoke action
+    /// (#143). Returns false when at least one Keychain/vault delete was refused, so Settings can say
+    /// the revocation was incomplete instead of claiming success. An explicit `vault` is the failing
+    /// revocation seam and is used even for a custom defaults suite.
+    @discardableResult
+    public static func removeAllStoredAPIKeys(
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault? = nil
+    ) -> Bool {
+        var complete = true
+        if let vault {
+            for account in KeychainHelper.assistantSecretAccounts {
+                if !KeychainHelper.writeKeychainData(nil, account: account, vault: vault) {
+                    complete = false
+                }
+                defaults.removeObject(forKey: KeychainHelper.secretFallbackKey(for: account))
+            }
+        } else {
+            for preset in AssistantProviderPreset.allCases {
+                if !clearSecret(for: preset, defaults: defaults) {
+                    complete = false
+                }
+            }
+            // Pre-v1.0.4 builds read the OpenRouter key from this generic slot.
+            if !KeychainHelper.saveSecret(
+                "",
+                account: KeychainHelper.assistantAPIKeyAccount,
+                defaults: defaults
+            ) {
+                complete = false
+            }
+        }
+        for preset in AssistantProviderPreset.allCases {
+            defaults.removeObject(forKey: importedKeySourceKey(for: preset))
+        }
+        defaults.removeObject(forKey: customKeyEndpointKey)
+        return complete
     }
 
     /// Reads an ambient API key from environment variables or `~/.config/codexbar/config.json` matching the provider for `baseURL`.

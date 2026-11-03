@@ -131,6 +131,7 @@ fi
 if command -v python3 >/dev/null 2>&1; then
     python3 scripts/check_design_tokens.py
     python3 - <<'PY'
+import base64
 import re
 import sys
 
@@ -149,8 +150,51 @@ for path, pat in files.items():
     keys[path] = m.group(1)
 if len(set(keys.values())) != 1:
     sys.exit(f"❌ 双端 Ed25519 更新公钥不一致：{keys}")
+
+overlap_files = {
+    "Sources/MijiaCore/UpdateChecker.swift": r'updateSigningOverlapPublicKeyBase64\s*=\s*"([^"]*)"',
+    "windows/src-tauri/src/main.rs": r'UPDATE_SIGNING_OVERLAP_PUBLIC_KEY_BASE64:\s*&str\s*=\s*"([^"]*)"',
+}
+overlaps = {}
+for path, pat in overlap_files.items():
+    with open(path, encoding="utf-8") as f:
+        m = re.search(pat, f.read())
+    if not m:
+        sys.exit(f"❌ 无法从 {path} 读取 Ed25519 过渡公开钥常量")
+    overlaps[path] = m.group(1)
+if len(set(overlaps.values())) != 1:
+    sys.exit(f"❌ 双端 Ed25519 过渡公开钥不一致：{overlaps}")
+overlap = next(iter(overlaps.values()))
+if overlap:
+    try:
+        decoded = base64.b64decode(overlap, validate=True)
+    except Exception as error:
+        sys.exit(f"❌ Ed25519 过渡公开钥不是合法 base64：{error}")
+    if len(decoded) != 32:
+        sys.exit(f"❌ Ed25519 过渡公开钥长度为 {len(decoded)} 字节，预期 32")
+    if overlap in keys.values():
+        sys.exit("❌ Ed25519 过渡公开钥不能与当前签名公钥相同")
 PY
     python3 scripts/update_manifest.py self-test
+    # 发布附件集合（含两端 SBOM）是发版硬门槛，用 fixture 验证严格清单不会悄悄放宽。
+    bash scripts/test_check_release.sh
+fi
+
+large_files=""
+for dir in Sources Tests windows/src windows/src-tauri/src; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' file; do
+        lines=$(wc -l < "$file" | tr -d '[:space:]')
+        if [ "$lines" -gt 1500 ]; then
+            large_files="${large_files}  ${lines}  ${file}"$'\n'
+        fi
+    done < <(find "$dir" -type f \( -name '*.swift' -o -name '*.ts' -o -name '*.rs' \) -print0)
+done
+if [ -n "$large_files" ]; then
+    echo "⚠️  单文件行数告警（> 1500 行；新代码优先拆分，见 #184）："
+    printf '%s' "$large_files"
+else
+    echo "✅ 没有超过 1500 行的源文件。"
 fi
 
 if [ "$LINT_ONLY" = "1" ]; then

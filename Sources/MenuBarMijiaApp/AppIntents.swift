@@ -194,6 +194,7 @@ struct ToggleDeviceIntent: AppIntent {
     @MainActor
     func execute(in store: HomeStore) async throws -> String {
         try await store.waitForInitialSnapshot()
+        if store.isControlBlockedByScreenLock { return store.screenLockBlockedMessage }
         guard let current = store.controllableDevices.first(where: { $0.id == device.id }) else {
             return L10n.format(
                 "找不到可控设备「%@」",
@@ -236,6 +237,7 @@ struct RunSceneIntent: AppIntent {
     @MainActor
     func execute(in store: HomeStore) async throws -> String {
         try await store.waitForInitialSnapshot()
+        if store.isControlBlockedByScreenLock { return store.screenLockBlockedMessage }
         guard let current = store.scenes.first(where: { $0.id == scene.id }) else {
             return L10n.format(
                 "找不到场景「%@」",
@@ -269,6 +271,14 @@ struct AskAssistantIntent: AppIntent {
         }
 
         try await HomeStore.shared.waitForInitialSnapshot()
+        let blockedMessage = await MainActor.run { () -> String? in
+            let store = HomeStore.shared
+            return store.isControlBlockedByScreenLock ? store.screenLockBlockedMessage : nil
+        }
+        if let message = blockedMessage {
+            await notifyExternalAction(message)
+            return .result(dialog: intentDialog(message))
+        }
         let message = await askAssistant(utterance)
         await notifyExternalAction(message)
         return .result(dialog: intentDialog(message))

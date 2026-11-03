@@ -1478,6 +1478,28 @@ struct GoldenCorpusTests {
     }
     private struct ConfirmationCorpus: Decodable {
         let rows: [ConfirmationRow]
+        let decisionRows: [ConfirmationDecisionRow]
+
+        private enum CodingKeys: String, CodingKey {
+            case rows, decisionRows
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            rows = try container.decode([ConfirmationRow].self, forKey: .rows)
+            decisionRows = try container.decodeIfPresent([ConfirmationDecisionRow].self, forKey: .decisionRows) ?? []
+        }
+    }
+
+    /// A row for `ModelActionPolicy.decide`, so the plain-language confirmation policy is asserted
+    /// from the same fixture on both platforms (Windows accepts the same `askWhenUnsure` flag).
+    private struct ConfirmationDecisionRow: Decodable {
+        let id: String
+        let device: ConfirmationDevice?
+        let operation: ConfirmationOperation
+        let confidence: Double
+        let askWhenUnsure: Bool
+        let expectAutoRun: Bool
     }
 
     private struct ConfirmationRow: Decodable {
@@ -1702,6 +1724,8 @@ struct GoldenCorpusTests {
         let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/confirmation_golden.json")
         let corpus = try JSONDecoder().decode(ConfirmationCorpus.self, from: Data(contentsOf: fixtureURL))
         #expect(corpus.rows.count == 50)
+        #expect(corpus.decisionRows.count == 3)
+        #expect(Set(corpus.decisionRows.map(\.id)).count == corpus.decisionRows.count)
         #expect(Set(corpus.rows.map(\.id)).count == corpus.rows.count)
         for row in corpus.rows {
             if let device = row.device {
@@ -1712,6 +1736,25 @@ struct GoldenCorpusTests {
             #expect(ModelActionPolicy.needsConfirmation(intent, devices: devices) == row.confirm, "\(row.id)")
             if let device = row.device, case .sensor = device.kind {
                 #expect(IntentValidator.sanitize([intent], devices: devices, scenes: []).isEmpty, "\(row.id)")
+            }
+        }
+
+        // #180: the plain-language "ask me when unsure" switch changes only the confidence gate;
+        // hazard rules (heater on, plug, camera, vacuum start) still wait for a tap.
+        for row in corpus.decisionRows {
+            let devices = row.device.map { [$0.toSmartDevice()] } ?? []
+            let intent = DeviceIntent(targetId: row.device?.id ?? "missing", operation: row.operation.intentOperation)
+            let decision = ModelActionPolicy.decide(
+                devices: devices,
+                scenes: [],
+                payload: ModelDecisionPayload(actions: [
+                    ChosenAction(intent: intent, confidence: row.confidence, primaryChoice: true)
+                ]),
+                policy: ModelActionPolicy.ConfirmationPolicy(askWhenUnsure: row.askWhenUnsure)
+            )
+            #expect((decision.intents == [intent]) == row.expectAutoRun, "\(row.id)")
+            if !row.expectAutoRun {
+                #expect(decision.suggestions.count == 1, "\(row.id)")
             }
         }
     }

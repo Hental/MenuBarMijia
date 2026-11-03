@@ -769,5 +769,56 @@
       },
       "confirm": false
     }
+  ],
+  "decisionRows": [
+    {
+      "id": "unsure-light-asks-by-default",
+      "device": {
+        "id": "unsure-light-asks-by-default",
+        "name": "书房吸顶灯",
+        "model": "yeelink.light.ceiling20",
+        "kind": "light"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confidence": 0.5,
+      "askWhenUnsure": true,
+      "expectAutoRun": false
+    },
+    {
+      "id": "unsure-light-runs-when-ask-off",
+      "device": {
+        "id": "unsure-light-runs-when-ask-off",
+        "name": "书房吸顶灯",
+        "model": "yeelink.light.ceiling20",
+        "kind": "light"
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confidence": 0.5,
+      "askWhenUnsure": false,
+      "expectAutoRun": true
+    },
+    {
+      "id": "confident-heater-asks-when-ask-off",
+      "device": {
+        "id": "confident-heater-asks-when-ask-off",
+        "name": "次卧取暖器",
+        "model": "zhimi.heater.za2",
+        "kind": "climate",
+        "targetTemperature": 20
+      },
+      "operation": {
+        "kind": "power",
+        "isOn": true
+      },
+      "confidence": 0.99,
+      "askWhenUnsure": false,
+      "expectAutoRun": false
+    }
   ]
 }

@@ -12,6 +12,7 @@ struct MenuBarMijiaApp: App {
         // Creating the store reads the Keychain; explain the post-upgrade prompt before macOS shows it (#16).
         KeychainUpgradeNotice.presentIfNeeded()
         let sharedStore = HomeStore.shared
+        sharedStore.manualControlConfirmationHandler = ManualControlConfirmationPresenter.present
         KeychainUpgradeNotice.recordIfLoaded()
         // The menu-bar item, its label, tooltip, long press and panel all live in the AppKit
         // controller now (#56), so there is no `MenuBarExtra` scene left to host.
@@ -27,6 +28,24 @@ struct MenuBarMijiaApp: App {
         Settings {
             SettingsWindowView(store: HomeStore.shared)
         }
+    }
+}
+
+// MARK: - Manual High-Risk Confirmation (#143)
+
+/// App-modal second confirmation for manual controls on high-risk devices. Cancel is the default
+/// button, so a stray Return cannot approve a heater or plug action.
+@MainActor
+enum ManualControlConfirmationPresenter {
+    static func present(_ prompt: ManualControlConfirmation) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: prompt.cancelTitle)
+        alert.addButton(withTitle: prompt.confirmTitle)
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 
@@ -61,20 +80,35 @@ enum MenuBarStatusSummary {
             }
         }
 
-        switch store.connectionStatus {
-        case .connected:
-            switch store.homeBackend {
-            case .xiaomiCloud:
-                parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
-            case .homeAssistant:
-                parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
-            case .demo:
-                parts.append(L10n.tr("演示模式", "Demo mode"))
+        if store.miSessionShowsExpired {
+            parts.append(L10n.tr("米家登录已过期，点击扫码重新登录", "Xiaomi Home session expired; click to scan again"))
+        } else if let expiresAt = store.miSessionExpiringSoonDate {
+            let dateText = expiresAt.formatted(date: .abbreviated, time: .omitted)
+            parts.append(L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
+        } else {
+            switch store.connectionStatus {
+            case .connected:
+                if store.connectedBackends.contains(.homeAssistant) && store.connectedBackends.contains(.xiaomiCloud) {
+                    parts.append(L10n.tr("Home Assistant + 米家云已连接", "Home Assistant + Xiaomi Cloud connected"))
+                } else if store.connectedBackends.contains(.xiaomiCloud) {
+                    parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
+                } else if store.connectedBackends.contains(.homeAssistant) {
+                    parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
+                } else {
+                    switch store.homeBackend {
+                    case .xiaomiCloud:
+                        parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
+                    case .homeAssistant:
+                        parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
+                    case .demo:
+                        parts.append(L10n.tr("演示模式", "Demo mode"))
+                    }
+                }
+            case .connecting:
+                parts.append(L10n.tr("正在连接…", "Connecting…"))
+            case .disconnected(let reason):
+                parts.append(L10n.tr("未连接：\(reason)", "Disconnected: \(reason)"))
             }
-        case .connecting:
-            parts.append(L10n.tr("正在连接…", "Connecting…"))
-        case .disconnected(let reason):
-            parts.append(L10n.tr("未连接：\(reason)", "Disconnected: \(reason)"))
         }
 
         return parts.joined(separator: " · ")

@@ -20,6 +20,10 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
     public let manufacturer: String?
     public let model: String?
     public let disabled_by: String?
+    public let identifiers: [[String]]?
+    public let connections: [[String]]?
+    public let serial_number: String?
+    public let configuration_url: String?
 
     public init(
         id: String,
@@ -28,7 +32,11 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
         name_by_user: String? = nil,
         manufacturer: String? = nil,
         model: String? = nil,
-        disabled_by: String? = nil
+        disabled_by: String? = nil,
+        identifiers: [[String]]? = nil,
+        connections: [[String]]? = nil,
+        serial_number: String? = nil,
+        configuration_url: String? = nil
     ) {
         self.id = id
         self.area_id = area_id
@@ -37,6 +45,10 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
         self.manufacturer = manufacturer
         self.model = model
         self.disabled_by = disabled_by
+        self.identifiers = identifiers
+        self.connections = connections
+        self.serial_number = serial_number
+        self.configuration_url = configuration_url
     }
 }
 
@@ -50,6 +62,7 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
     public let entity_category: String?
     public let disabled_by: String?
     public let hidden_by: String?
+    public let unique_id: String?
 
     public init(
         entity_id: String,
@@ -60,7 +73,8 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
         platform: String? = nil,
         entity_category: String? = nil,
         disabled_by: String? = nil,
-        hidden_by: String? = nil
+        hidden_by: String? = nil,
+        unique_id: String? = nil
     ) {
         self.entity_id = entity_id
         self.device_id = device_id
@@ -71,6 +85,7 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
         self.entity_category = entity_category
         self.disabled_by = disabled_by
         self.hidden_by = hidden_by
+        self.unique_id = unique_id
     }
 }
 
@@ -150,8 +165,9 @@ public enum JSONValue: Codable, Equatable, Sendable {
     }
 
     public var intValue: Int? {
-        if let d = doubleValue { return Int(d.rounded()) }
-        return nil
+        guard let d = doubleValue else { return nil }
+        // JSON numbers and numeric strings can exceed Int; `Int(_:)` traps on overflow.
+        return Int(exactly: d.rounded())
     }
 
     public var boolValue: Bool? {
@@ -172,11 +188,16 @@ public struct HomeOption: Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var deviceCount: Int
+    /// Set when the home belongs to one of several signed-in Mi accounts.
+    public var accountId: String?
+    public var accountLabel: String?
 
-    public init(id: String, name: String, deviceCount: Int) {
+    public init(id: String, name: String, deviceCount: Int, accountId: String? = nil, accountLabel: String? = nil) {
         self.id = id
         self.name = name
         self.deviceCount = deviceCount
+        self.accountId = accountId
+        self.accountLabel = accountLabel
     }
 }
 
@@ -187,9 +208,21 @@ public struct SynthesizedHome: Equatable, Sendable {
     public var scenes: [HomeScene]
     /// Homes on the account (empty for backends without the concept).
     public var homes: [HomeOption] = []
+    /// Per-account connection status when merged across several Mi accounts.
+    public var accountStatuses: [String: ConnectionStatus] = [:]
     /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
     /// close the away gap, because the door may have opened while polling was paused.
     public var closesAwayGap: Bool = true
+    /// Pairing evidence captured before `SmartDevice` dropped the did / MAC / HA unique id.
+    public var deviceIdentities: [String: DeviceSourceIdentity] = [:]
+    /// Which provider currently drives each merged card; empty on single-source snapshots.
+    public var deviceBackends: [String: HomeBackend] = [:]
+    /// Cards that matched one physical device in both sources; only these offer a source pin.
+    public var pairedDeviceIDs: Set<String> = []
+    /// Sources that contributed this merged snapshot.
+    public var activeBackends: Set<HomeBackend> = []
+    /// Per-source connection state for the bottom dual-source summary. Empty on single-source.
+    public var sourceStatuses: [HomeBackend: ConnectionStatus] = [:]
 
     public init(
         rooms: [RoomArea] = [],
@@ -227,6 +260,7 @@ public enum DeviceSynthesizer {
 
         var smartDevices: [SmartDevice] = []
         var envReadings: [EnvironmentReading] = []
+        var identities: [String: DeviceSourceIdentity] = [:]
 
         for dev in devices {
             guard dev.disabled_by == nil else { continue }
@@ -265,6 +299,7 @@ public enum DeviceSynthesizer {
                 states: states
             ) {
                 smartDevices.append(built)
+                identities[built.id] = sourceIdentity(device: built, registry: dev, entities: devEntities)
             }
         }
 
@@ -310,6 +345,7 @@ public enum DeviceSynthesizer {
                 states: states
             ) {
                 smartDevices.append(built)
+                identities[built.id] = sourceIdentity(device: built, registry: nil, entities: orphanEntities)
             }
         }
 
@@ -351,11 +387,46 @@ public enum DeviceSynthesizer {
         }
         synthesizedScenes.sort { $0.name < $1.name }
 
-        return assembleHome(
+        var home = assembleHome(
             devices: smartDevices,
             readings: envReadings,
             scenes: synthesizedScenes,
             roomNameOrder: roomNameOrder(from: areas.map(\.name))
+        )
+        home.deviceIdentities = identities
+        return home
+    }
+
+    private static func sourceIdentity(
+        device: SmartDevice,
+        registry: HADeviceEntry?,
+        entities: [HAEntityEntry]
+    ) -> DeviceSourceIdentity {
+        var rawDidValues: [String] = []
+        var rawMacValues: [String] = []
+        if let registry {
+            for pair in registry.identifiers ?? [] where pair.count >= 2 {
+                let domain = pair[0].lowercased()
+                if domain.contains("xiaomi") || domain == "miio" || domain == "miot" {
+                    rawDidValues.append(pair[1])
+                } else if domain == "mac" {
+                    rawMacValues.append(pair[1])
+                }
+            }
+            for pair in registry.connections ?? [] where pair.count >= 2 && pair[0].lowercased() == "mac" {
+                rawMacValues.append(pair[1])
+            }
+        }
+        let uniqueIds = entities.compactMap(\.unique_id)
+        rawDidValues.append(contentsOf: uniqueIds)
+        return DeviceSourceIdentity(
+            dids: DeviceIdentityNormalizer.didCandidates(from: rawDidValues),
+            macAddresses: rawMacValues.compactMap { DeviceIdentityNormalizer.macAddress(from: $0) },
+            uniqueIds: uniqueIds,
+            model: device.model,
+            name: device.name,
+            roomName: device.roomName,
+            kindTag: device.kind.tag
         )
     }
 
@@ -570,7 +641,7 @@ public enum DeviceSynthesizer {
            let st = states[lightEnt.entity_id] {
             let isOn = (st.state == "on")
             let rawBri = st.attributes["brightness"]?.doubleValue
-            let briPct = rawBri.map { max(1, min(100, Int(($0 / 255.0 * 100.0).rounded()))) }
+            let briPct = rawBri.flatMap { Self.roundedInt($0 / 255.0 * 100.0).map { max(1, min(100, $0)) } }
             let kelvin = st.attributes["color_temp_kelvin"]?.intValue
             let minK = st.attributes["min_color_temp_kelvin"]?.intValue ?? 2700
             let maxK = st.attributes["max_color_temp_kelvin"]?.intValue ?? 6500
@@ -630,7 +701,7 @@ public enum DeviceSynthesizer {
             }
             let filterId = eids.first { $0.hasPrefix("sensor.") && $0.contains("filter_life") }
 
-            let pm25 = pm25Id.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }.map { Int($0.rounded()) }
+            let pm25 = pm25Id.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state).flatMap(Self.roundedInt) : nil }
                 ?? st.attributes["pm25"]?.intValue
             let aq = aqId.flatMap { states[$0] }.flatMap { $0.isAvailable ? $0.state : nil }
                 ?? st.attributes["air_quality"]?.stringValue
@@ -638,7 +709,7 @@ public enum DeviceSynthesizer {
                 ?? st.attributes["temperature"]?.doubleValue
             let hum = fanHumId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }
                 ?? st.attributes["humidity"]?.doubleValue
-            let filterLife = filterId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }.map { Int($0.rounded()) }
+            let filterLife = filterId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state).flatMap(Self.roundedInt) : nil }
                 ?? st.attributes["filter_life_remaining"]?.intValue
 
             return SmartDevice(
@@ -670,7 +741,7 @@ public enum DeviceSynthesizer {
         if let vacId = eids.first(where: { $0.hasPrefix("vacuum.") }),
            let st = states[vacId] {
             let batId = eids.first(where: { $0.hasPrefix("sensor.") && $0.contains("battery_level") })
-            let bat = batId.flatMap { states[$0]?.state }.flatMap { Int(Double($0) ?? -1) }
+            let bat = batId.flatMap { states[$0]?.state }.flatMap { Self.roundedInt(Double($0) ?? -1) ?? -1 }
             let modeId = eids.first(where: { $0.hasPrefix("select.") && $0.contains("mode") })
             let modeState = modeId.flatMap { states[$0] }
             let currentMode = (modeState?.isAvailable == true) ? modeState?.state : nil
@@ -838,7 +909,7 @@ public enum DeviceSynthesizer {
             let lockId = eids.first(where: { $0.hasPrefix("lock.") })
             let lockSt = lockId.flatMap { states[$0] }
             let batSt = batId.flatMap { states[$0] }
-            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
+            let bVal = batSt.flatMap { Double($0.state).flatMap(Self.roundedInt) }
             let online = (lockSt?.isAvailable == true) || (batSt?.isAvailable == true)
             return SmartDevice(
                 id: deviceId,
@@ -895,7 +966,7 @@ public enum DeviceSynthesizer {
         if let mediaId = eids.first(where: { $0.hasPrefix("media_player.") }),
            let st = states[mediaId] {
             let volDouble = st.attributes["volume_level"]?.doubleValue ?? 0.2
-            let volPct = Int((volDouble * 100.0).rounded())
+            let volPct = Self.roundedInt(volDouble * 100.0) ?? 20
             let devClass = st.attributes["device_class"]?.stringValue ?? ""
 
             if devClass == "tv" || model.contains("tv") {
@@ -966,7 +1037,7 @@ public enum DeviceSynthesizer {
 
             let tVal = tempSt.flatMap { Double($0.state) }
             let hVal = humSt.flatMap { Double($0.state) }
-            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
+            let bVal = batSt.flatMap { Double($0.state).flatMap(Self.roundedInt) }
             let online = (tempSt?.isAvailable == true) || (humSt?.isAvailable == true)
 
             return SmartDevice(
@@ -1083,6 +1154,13 @@ public enum DeviceSynthesizer {
     }
 
     // MARK: - Naming & Normalization Helpers
+
+    /// External numbers (HA attributes, sensor states) can be non-finite or exceed `Int`;
+    /// converting them directly traps, so an unusable number degrades to "no reading".
+    static func roundedInt(_ value: Double) -> Int? {
+        guard value.isFinite else { return nil }
+        return Int(exactly: value.rounded())
+    }
 
     public static func normalizeRoomName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

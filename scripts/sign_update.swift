@@ -8,7 +8,8 @@ import Foundation
 //
 // 私钥只应保存在离线介质或发布机的 secret 里，绝不提交到仓库。生成一对新密钥可用：
 //   swift -e 'import CryptoKit; let k = Curve25519.Signing.PrivateKey(); print("private:", k.rawRepresentation.base64EncodedString()); print("public:", k.publicKey.rawRepresentation.base64EncodedString())'
-// 轮换密钥时同步修改 UpdateChecker.updateSigningPublicKeyBase64 和本文档。
+// 轮换与吊销流程见 docs/security/update-signing-key-rotation.md：本脚本签名时使用的私钥
+// 必须对应 UpdateChecker.updateSigningPublicKeyBase64（当前签名密钥），过渡公钥只用于验签。
 
 // 与 Sources/MijiaCore/UpdateChecker.swift 的 updateSigningPublicKeyBase64 保持一致；
 // 轮换密钥时两处一起改，否则这里会拒绝签名。

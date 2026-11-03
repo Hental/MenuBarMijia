@@ -208,7 +208,7 @@ final class MenuBarPanelController: NSObject {
         if symbol != labelSymbol || hazard != labelShowsHazard {
             labelSymbol = symbol
             labelShowsHazard = hazard
-            if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+            if let image = Self.statusBarImage(symbolName: symbol) {
                 if hazard {
                     image.isTemplate = false
                     let red = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
@@ -231,6 +231,14 @@ final class MenuBarPanelController: NSObject {
             button.setAccessibilityLabel(summary)
             button.setAccessibilityHelp(summary)
         }
+    }
+
+    /// Resolves the status-bar SF Symbol image with a safe fallback so an unavailable symbol name
+    /// never leaves the menu-bar button blank or stuck on the previous icon.
+    static func statusBarImage(symbolName: String) -> NSImage? {
+        NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "house", accessibilityDescription: nil)
     }
 
     /// Last ten characters of the live transcript, or "聆听中…" before the first words arrive.
@@ -281,8 +289,17 @@ final class MenuBarPanelController: NSObject {
 
     func togglePanel() {
         if isPanelVisible {
+            // An expired session keeps the panel open for the QR overlay; a second click on the
+            // icon only closes the panel once that overlay is already the active view.
+            if let store, store.miSessionShowsExpired, !store.isShowingMiReauth {
+                withAnimation(AppleMotion.snappySpring) { store.presentMiReauth() }
+                return
+            }
             hidePanel()
         } else {
+            if let store, store.miSessionShowsExpired {
+                withAnimation(AppleMotion.snappySpring) { store.presentMiReauth() }
+            }
             showPanel()
         }
     }

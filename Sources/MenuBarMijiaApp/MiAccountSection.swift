@@ -18,9 +18,18 @@ public struct MiAccountSection: View {
 
     @State private var phase: ScanPhase
     @State private var loginTask: Task<Void, Never>?
+    private let autoStartsQRLogin: Bool
+    private let showsRegionPicker: Bool
 
-    public init(store: HomeStore, previewTicket: QRLoginTicket? = nil) {
+    public init(
+        store: HomeStore,
+        previewTicket: QRLoginTicket? = nil,
+        autoStartsQRLogin: Bool = false,
+        showsRegionPicker: Bool = true
+    ) {
         self.store = store
+        self.autoStartsQRLogin = autoStartsQRLogin
+        self.showsRegionPicker = showsRegionPicker
         if let previewTicket {
             self._phase = State(initialValue: .waitingForScan(ticket: previewTicket, expiresAt: Date().addingTimeInterval(previewTicket.timeout)))
         } else {
@@ -31,29 +40,33 @@ public struct MiAccountSection: View {
     public var body: some View {
         let _ = store.effectiveLanguage
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text(L10n.tr("云端服务器地区", "Cloud Region"))
-                    .font(.system(size: DesignTokens.TypeSize.body))
-                Spacer()
-                Picker(
-                    L10n.tr("云端服务器地区", "Cloud Region"),
-                    selection: Binding(
-                        get: { store.miCloudRegion },
-                        set: { store.miCloudRegion = $0 }
-                    )
-                ) {
-                    ForEach(MiCloudRegion.allCases) { region in
-                        Text(region.label).tag(region)
+            if showsRegionPicker {
+                HStack {
+                    Text(L10n.tr("云端服务器地区", "Cloud Region"))
+                        .font(.system(size: DesignTokens.TypeSize.body))
+                    Spacer()
+                    Picker(
+                        L10n.tr("云端服务器地区", "Cloud Region"),
+                        selection: Binding(
+                            get: { store.miCloudRegion },
+                            set: { store.miCloudRegion = $0 }
+                        )
+                    ) {
+                        ForEach(MiCloudRegion.allCases) { region in
+                            Text(region.label).tag(region)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: DesignTokens.Settings.fieldWidth)
+                    .controlSize(.regular)
                 }
-                .labelsHidden()
-                .frame(width: DesignTokens.Settings.fieldWidth)
-                .controlSize(.regular)
             }
 
             switch phase {
             case .idle:
-                if let masked = store.miSessionMaskedUserId {
+                if store.miAccounts.count > 1 {
+                    multiAccountView
+                } else if let masked = store.miSessionMaskedUserId {
                     loggedInView(maskedUserId: masked)
                 } else {
                     loggedOutView
@@ -103,6 +116,10 @@ public struct MiAccountSection: View {
                 }
             }
         }
+        .task {
+            guard autoStartsQRLogin, case .idle = phase else { return }
+            startQRLogin()
+        }
         .onDisappear {
             cancelLogin()
         }
@@ -137,9 +154,87 @@ public struct MiAccountSection: View {
                 }
                 .buttonStyle(PillActionButtonStyle())
 
+                Button(L10n.tr("添加账号", "Add Account")) {
+                    startQRLogin()
+                }
+                .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+
                 Spacer()
 
                 Button(L10n.tr("退出登录", "Sign Out")) {
+                    store.logoutMiAccount()
+                }
+                .buttonStyle(PillActionButtonStyle())
+            }
+        }
+    }
+
+    /// Several accounts merged into one panel: one removable row each, plus the actions that apply to
+    /// all of them.
+    private var multiAccountView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(store.miAccounts) { account in
+                let expiryState = account.session.expiryState()
+                let disconnectReason: String? = {
+                    if case .disconnected(let reason) = store.miAccountStatuses[account.id], !reason.isEmpty {
+                        return reason
+                    }
+                    if expiryState == .expired {
+                        return MiCloudError.sessionExpired.localizedDescription
+                    }
+                    return nil
+                }()
+                let needsRescan = disconnectReason != nil || expiryState != .valid
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: needsRescan
+                            ? "exclamationmark.triangle.fill"
+                            : "person.crop.circle.badge.checkmark")
+                            .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                            .foregroundStyle(needsRescan ? .orange : .green)
+                        Text(account.displayName)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        Spacer()
+                        if needsRescan {
+                            Button(L10n.tr("重新扫码", "Rescan QR")) {
+                                store.miCloudRegion = account.region
+                                startQRLogin()
+                            }
+                            .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+                        }
+                        Button(L10n.tr("移除", "Remove")) {
+                            store.logoutMiAccount(id: account.id)
+                        }
+                        .buttonStyle(PillActionButtonStyle())
+                    }
+                    if let reason = disconnectReason {
+                        Text(reason)
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.orange)
+                    } else if case .expiringSoon(let date) = expiryState {
+                        let dateText = date.formatted(date: .abbreviated, time: .omitted)
+                        Text(L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                Button(L10n.tr("同步设备", "Sync Devices")) {
+                    store.refreshNow()
+                    store.showToast(L10n.tr("正在同步米家云端设备…", "Syncing Xiaomi Cloud devices…"))
+                }
+                .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+
+                Button(L10n.tr("添加账号", "Add Account")) {
+                    startQRLogin()
+                }
+                .buttonStyle(PillActionButtonStyle())
+
+                Spacer()
+
+                Button(L10n.tr("全部退出", "Sign Out of All")) {
                     store.logoutMiAccount()
                 }
                 .buttonStyle(PillActionButtonStyle())

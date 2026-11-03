@@ -323,11 +323,17 @@ public struct FragmentedMP4Demuxer: Sendable {
                     trackID = Self.readUInt32(moof, p + 4)
                     defaults = trackDefaults[trackID] ?? TrackDefaults()
                     var o = p + 8
+                    let payloadEnd = box.payload.upperBound
+                    func readField() throws -> UInt32 {
+                        guard o + 4 <= payloadEnd else { throw FMP4DemuxError.malformedBox("tfhd") }
+                        defer { o += 4 }
+                        return Self.readUInt32(moof, o)
+                    }
                     if flags & 0x01 != 0 { o += 8 } // base-data-offset (we assume moof-relative offsets)
                     if flags & 0x02 != 0 { o += 4 } // sample-description-index
-                    if flags & 0x08 != 0 { defaults.duration = Self.readUInt32(moof, o); o += 4 }
-                    if flags & 0x10 != 0 { defaults.size = Self.readUInt32(moof, o); o += 4 }
-                    if flags & 0x20 != 0 { defaults.flags = Self.readUInt32(moof, o); o += 4 }
+                    if flags & 0x08 != 0 { defaults.duration = try readField() }
+                    if flags & 0x10 != 0 { defaults.size = try readField() }
+                    if flags & 0x20 != 0 { defaults.flags = try readField() }
                 case "tfdt":
                     guard box.payload.count >= 8 else { throw FMP4DemuxError.malformedBox("tfdt") }
                     baseDecodeTime = moof[p] == 1 && box.payload.count >= 12
@@ -354,17 +360,19 @@ public struct FragmentedMP4Demuxer: Sendable {
                 var o = p + 8
                 var dataOffset = nextDataOffset
                 if flags & 0x01 != 0 {
+                    guard o + 4 <= run.upperBound else { throw FMP4DemuxError.malformedBox("trun") }
                     dataOffset = Int(Int32(bitPattern: Self.readUInt32(moof, o)))
                     o += 4
                 }
                 var firstFlags: UInt32?
                 if flags & 0x04 != 0 {
+                    guard o + 4 <= run.upperBound else { throw FMP4DemuxError.malformedBox("trun") }
                     firstFlags = Self.readUInt32(moof, o)
                     o += 4
                 }
                 let perSample = (flags & 0x100 != 0 ? 4 : 0) + (flags & 0x200 != 0 ? 4 : 0)
                     + (flags & 0x400 != 0 ? 4 : 0) + (flags & 0x800 != 0 ? 4 : 0)
-                guard count >= 0, o + perSample * count <= run.upperBound else {
+                guard o + perSample * count <= run.upperBound else {
                     throw FMP4DemuxError.malformedBox("trun")
                 }
 

@@ -114,6 +114,9 @@ struct AppIntentExecutionTests {
             defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
             let provider = ControlledIntentProvider()
             let store = HomeStore(provider: provider, defaultsSuiteName: suite)
+            // A momentary plug button is a hazard category, so the app-issued confirmation must be
+            // approved for this Shortcuts-path test (#143).
+            store.manualControlConfirmationHandler = { _ in true }
             await provider.sendSnapshot(SynthesizedHome(devices: [wolDevice]))
             let intent = ToggleDeviceIntent()
             intent.device = DeviceEntity(device: wolDevice)

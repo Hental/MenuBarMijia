@@ -249,8 +249,17 @@ public struct UpdateChecker: Sendable {
     public static let latestReleaseURL = URL(string: "https://api.github.com/repos/jryang1997/MenuBarMijia/releases/latest")!
     public static let releasesPage = URL(string: "https://github.com/jryang1997/MenuBarMijia/releases")!
 
-    /// Ed25519 public key (32-byte raw, base64) that the release manifest must be signed with.
+    /// Ed25519 public key (32-byte raw, base64) that release tooling signs with.
     public static let updateSigningPublicKeyBase64 = "rLwWXuP0sOZvgd/KusLTTmBXN9DAZ9EzPBNhFSn9yUo="
+
+    /// Optional second Ed25519 public key trusted during a key rotation. Empty when no rotation is in flight.
+    /// See `docs/security/update-signing-key-rotation.md`; `key_id` in the manifest selects one trusted key.
+    public static let updateSigningOverlapPublicKeyBase64 = ""
+
+    /// Every key the release manifest may be signed with. The first entry is the signing key.
+    public static var updateSigningPublicKeysBase64: [String] {
+        [updateSigningPublicKeyBase64, updateSigningOverlapPublicKeyBase64].filter { !$0.isEmpty }
+    }
 
     public let currentVersion: String
     private let transport: Transport
@@ -779,20 +788,20 @@ public struct AppUpdater: Sendable {
     private let driver: UpdateSystemDriver
     private let targetBundleURL: URL
     private let stagingBaseDirectory: URL
-    private let updateSigningPublicKeyBase64: String
+    private let updateSigningPublicKeysBase64: [String]
 
     public init(
         currentVersion: String = UpdateChecker.bundleVersion,
         targetBundleURL: URL = Bundle.main.bundleURL,
         stagingBaseDirectory: URL = FileManager.default.temporaryDirectory,
-        updateSigningPublicKeyBase64: String = UpdateChecker.updateSigningPublicKeyBase64,
+        updateSigningPublicKeysBase64: [String] = UpdateChecker.updateSigningPublicKeysBase64,
         driver: UpdateSystemDriver = .live
     ) {
         self.checker = UpdateChecker(currentVersion: currentVersion, transport: driver.fetchData)
         self.driver = driver
         self.targetBundleURL = targetBundleURL
         self.stagingBaseDirectory = stagingBaseDirectory
-        self.updateSigningPublicKeyBase64 = updateSigningPublicKeyBase64
+        self.updateSigningPublicKeysBase64 = updateSigningPublicKeysBase64
     }
 
     public func checkLatestRelease() async throws -> AppRelease? {
@@ -862,7 +871,7 @@ public struct AppUpdater: Sendable {
         let decision = UpdateManifest.accept(
             manifestBytes: manifestBytes,
             signatureText: signatureText,
-            publicKeyBase64: updateSigningPublicKeyBase64,
+            trustedPublicKeysBase64: updateSigningPublicKeysBase64,
             releaseVersion: release.version,
             runningVersion: checker.currentVersion,
             packageName: asset.name,

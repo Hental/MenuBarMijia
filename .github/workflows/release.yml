@@ -88,6 +88,11 @@ jobs:
     needs: verify-tag
     runs-on: macos-26
     timeout-minutes: 90
+    # 来源证明（#170）只需要 OIDC 与 attestations 写权限；构建仍然只读仓库。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -201,7 +206,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
-          # 只有 DMG 与 .sha256：Ed25519 私钥不进 CI，签名必须由维护者在可信机器离线完成。
+          # 只有 DMG、.sha256 与 SBOM：Ed25519 私钥不进 CI，签名必须由维护者在可信机器离线完成。
           for file in \
             "dist/MenuBarMijia-${version}.dmg" \
             "dist/MenuBarMijia-${version}.dmg.sha256"
@@ -222,12 +227,30 @@ jobs:
           fi
           echo "ℹ️ 本次构建未签名更新清单；发布前需在可信机器上执行 scripts/sign_update.swift --min-from <x.y.z>。"
 
+      - name: Generate macOS SBOM (SPDX 2.3)
+        # 扫描 DMG 里实际安装的 .app（含内置 go2rtc），产出随 release 一起附带的 SBOM（#170）。
+        # 附件统一由 stage-draft 挂到草稿：这里关掉 action 自己的 artifact/release 上传，
+        # 避免草稿还没创建时它去找 release（或额外多出一份 workflow artifact）。
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: MenuBarMijia.app
+          format: spdx-json
+          output-file: dist/MenuBarMijia-${{ needs.verify-tag.outputs.version }}-macos.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest DMG build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/MenuBarMijia-${{ needs.verify-tag.outputs.version }}.dmg
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-dmg
           path: |
             dist/MenuBarMijia-*.dmg
             dist/MenuBarMijia-*.dmg.sha256
+            dist/MenuBarMijia-*.spdx.json
           if-no-files-found: error
 
   windows-release:
@@ -245,6 +268,11 @@ jobs:
     needs: [verify-tag, camera-bin]
     runs-on: windows-latest
     timeout-minutes: 60
+    # 只给 Windows 构建 job 加来源证明所需权限（#170）。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       signed: ${{ steps.authenticode.outputs.signed }}
     defaults:
@@ -399,6 +427,37 @@ jobs:
           if ($failed) { exit 1 }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value "### Windows Authenticode：$(if ($env:SIGNING_CONFIGURED -eq 'true') { '已签名并校验通过' } else { '未签名（明确标注，不声称已签名）' })"
 
+      - name: Stage Windows dependency manifests for the SBOM
+        # 直接扫源码树会把 node_modules 整个读一遍；只把依赖清单与安装包放进临时目录，
+        # 让 SBOM 同时覆盖 npm / Cargo 依赖图和最终安装包。
+        run: |
+          set -euo pipefail
+          staging="$RUNNER_TEMP/sbom-input"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          cp package.json package-lock.json "$staging/"
+          cp src-tauri/Cargo.toml src-tauri/Cargo.lock "$staging/"
+          cp ../dist-windows/MenuBarMijia-*-windows-x64-setup.exe \
+            ../dist-windows/MenuBarMijia-*-windows-x64.msi "$staging/"
+          ls -l "$staging"
+
+      - name: Generate Windows SBOM (SPDX 2.3)
+        # 与 macOS 一致：产物统一由 stage-draft 挂到草稿（#170）。
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: ${{ runner.temp }}/sbom-input
+          format: spdx-json
+          output-file: dist-windows/MenuBarMijia-${{ needs.verify-tag.outputs.version }}-windows-x64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest Windows installer build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist-windows/MenuBarMijia-${{ needs.verify-tag.outputs.version }}-windows-x64-setup.exe
+            dist-windows/MenuBarMijia-${{ needs.verify-tag.outputs.version }}-windows-x64.msi
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installers
@@ -444,7 +503,7 @@ jobs:
           name: windows-installers
           path: dist
 
-      - name: Validate the 6 unsigned-draft assets
+      - name: Validate the 8 unsigned-draft assets
         run: bash scripts/check_release.sh draft-assets "${RELEASE_VERSION}" dist
 
       - name: Verify the remote tag still points at the built commit
@@ -482,7 +541,7 @@ jobs:
             exit 1
           fi
 
-          mapfile -t expected < <(cd dist && ls -1 | sort)
+          mapfile -t expected < <(cd dist && printf '%s\n' * | sort)
           mapfile -t actual < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort)
           for name in "${actual[@]:-}"; do
             [ -n "$name" ] || continue
@@ -505,9 +564,9 @@ jobs:
           done
 
           echo "draft_exists=true" >> "$GITHUB_OUTPUT"
-          echo "✅ 复用已存在的草稿 ${RELEASE_TAG}（只重传 6 个构建附件，不动清单和清单签名）"
+          echo "✅ 复用已存在的草稿 ${RELEASE_TAG}（只重传 8 个构建附件，不动清单和清单签名）"
 
-      - name: Create draft release with the 6 build assets
+      - name: Create draft release with the 8 build assets
         if: steps.existing.outputs.draft_exists == 'false'
         run: |
           set -euo pipefail
@@ -523,7 +582,7 @@ jobs:
         if: steps.existing.outputs.draft_exists == 'true'
         run: |
           set -euo pipefail
-          # 只重传这 6 个构建附件。清单和清单签名不在 dist/ 里，不会被覆盖，也不会被删除。
+          # 只重传这 8 个构建附件（含两端 SBOM）。清单和清单签名不在 dist/ 里，不会被覆盖，也不会被删除。
           had_sig=false
           if gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | grep -qF "MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"; then
             had_sig=true
@@ -541,7 +600,7 @@ jobs:
       - name: Verify draft assets and server-side digests
         run: |
           set -euo pipefail
-          expected="$(cd dist && ls -1 | sort)"
+          expected="$(cd dist && printf '%s\n' * | sort)"
           actual="$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort | grep -vE '\.ed25519\.sig$' | grep -vFx "MenuBarMijia-${RELEASE_VERSION}.update.json" || true)"
           if [ "$actual" != "$expected" ]; then
             echo "❌ 草稿附件与本地构建产物不一致" >&2
@@ -599,7 +658,7 @@ jobs:
           {
             echo "### ⏳ ${RELEASE_TAG} 草稿已就绪，等待离线 Ed25519 签名"
             echo "- 提交：${RELEASE_COMMIT}"
-            echo "- 草稿附件：DMG / EXE / MSI + 各自 .sha256（共 6 个）"
+            echo "- 草稿附件：DMG / EXE / MSI + 各自 .sha256 + 两端 SPDX SBOM（共 8 个）"
             if [ "${WINDOWS_SIGNED}" = "true" ]; then
               echo "- Windows Authenticode：已签名并校验通过"
             else

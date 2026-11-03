@@ -1,0 +1,685 @@
+{
+  "rules": [
+    {
+      "id": "light",
+      "modelAny": [
+        "light",
+        "lamp",
+        "bulb"
+      ],
+      "nameAny": [
+        "灯"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:light:0000A001:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:light:00007802:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:brightness:0000000D:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  1,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 3,
+                "type": "urn:miot-spec-v2:property:color-temperature:0000000F:fallback:1",
+                "format": "uint32",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  2700,
+                  6500,
+                  100
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "air-conditioner",
+      "modelAny": [
+        "aircondition",
+        "acpartner",
+        "heater"
+      ],
+      "nameAny": [
+        "空调",
+        "取暖",
+        "地暖"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:air-conditioner:0000A004:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:air-conditioner:0000780F:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 2,
+                    "description": "Cool"
+                  },
+                  {
+                    "value": 5,
+                    "description": "Heat"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Dry"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Fan"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Auto"
+                  }
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  16,
+                  30,
+                  0.5
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fan",
+      "modelAny": [
+        ".fan."
+      ],
+      "modelSuffix": [
+        ".fan"
+      ],
+      "nameAny": [
+        "风扇",
+        "循环扇"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:fan:0000A005:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:fan:00007808:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:fan-level:00000016:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 1,
+                    "description": "Level 1"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Level 2"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Level 3"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Level 4"
+                  }
+                ]
+              },
+              {
+                "iid": 3,
+                "type": "urn:miot-spec-v2:property:horizontal-swing:00000017:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "air-purifier",
+      "modelAny": [
+        "airp",
+        "airpurifier",
+        "airfresh",
+        "humidifier"
+      ],
+      "nameAny": [
+        "净化器",
+        "空净",
+        "新风",
+        "加湿"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:air-purifier:0000A007:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 0,
+                    "description": "Auto"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Sleep"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Favorite"
+                  }
+                ]
+              }
+            ],
+            "actions": []
+          },
+          {
+            "iid": 3,
+            "type": "urn:miot-spec-v2:service:environment:0000780A:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  0,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1",
+                "format": "uint16",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  0,
+                  1000,
+                  1
+                ]
+              },
+              {
+                "iid": 7,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  -30,
+                  100,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          },
+          {
+            "iid": 4,
+            "type": "urn:miot-spec-v2:service:filter:0000780B:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  0,
+                  100,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "vacuum",
+      "modelAny": [
+        "vacuum"
+      ],
+      "nameAny": [
+        "扫地",
+        "扫拖"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:vacuum:0000A006:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:vacuum:00007810:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:status:00000007:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 1,
+                    "description": "Idle"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Sweeping"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Charging"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Paused"
+                  },
+                  {
+                    "value": 5,
+                    "description": "Go Charging"
+                  }
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "camera",
+      "modelAny": [
+        "camera",
+        "cateye",
+        "doorbell"
+      ],
+      "nameAny": [
+        "摄像",
+        "监控",
+        "猫眼"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:camera:0000A01C:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:camera-control:0000782F:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 3,
+                "type": "urn:miot-spec-v2:property:night-shot:00000057:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 0,
+                    "description": "Off"
+                  },
+                  {
+                    "value": 1,
+                    "description": "On"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Auto"
+                  }
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "temperature-humidity-sensor",
+      "modelAny": [
+        "sensor_ht",
+        "temphum",
+        "weather"
+      ],
+      "nameAny": [
+        "温湿度",
+        "温度计"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:temperature-humidity-sensor:0000A00A:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:temperature-humidity-sensor:00007814:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "kettle",
+      "modelAny": [
+        ".kettle.",
+        ".waterdispenser."
+      ],
+      "nameAny": [
+        "水壶",
+        "饮水"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:kettle:0000A009:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:kettle:00007813:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:status:00000007:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "valueList": [
+                  {
+                    "value": 1,
+                    "description": "Idle"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Heating"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Keep Warm"
+                  }
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "motion-sensor",
+      "modelAny": [
+        "sensor_motion"
+      ],
+      "nameAny": [
+        "人体"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:motion-sensor:0000A014:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:motion-sensor:00007825:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:motion-state:0000007D:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "lock",
+      "modelAny": [
+        ".lock."
+      ],
+      "nameAny": [
+        "门锁"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:lock:0000A038:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:lock:00007855:fallback:1",
+            "properties": [],
+            "actions": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "fridge",
+      "modelAny": [
+        ".fridge."
+      ],
+      "nameAny": [
+        "冰箱"
+      ],
+      "spec": {
+        "type": "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
+            "properties": [],
+            "actions": []
+          },
+          {
+            "iid": 3,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  -30,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  2,
+                  8,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          },
+          {
+            "iid": 4,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  -50,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "valueRange": [
+                  -24,
+                  -15,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      }
+    }
+  ],
+  "fallback": {
+    "id": "outlet",
+    "spec": {
+      "type": "urn:miot-spec-v2:device:outlet:0000A002:fallback:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:switch:0000780C:fallback:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+              "format": "bool",
+              "access": [
+                "read"
+              ]
+            }
+          ],
+          "actions": []
+        }
+      ]
+    }
+  }
+}

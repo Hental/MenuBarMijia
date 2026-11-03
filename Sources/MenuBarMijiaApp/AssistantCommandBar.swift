@@ -656,7 +656,7 @@ struct AssistantCommandBar: View {
                     .buttonStyle(.plain)
                     .help(
                         suggestion.confidencePercent != nil
-                            ? L10n.tr("AI 置信度推演建议（点击立即执行）", "AI confidence-ranked suggestion (click to execute)")
+                            ? L10n.tr("AI 不太确定，点一下才执行", "The AI is not sure; click to run it")
                             : L10n.tr("你在当前时间段的常用习惯（点击立即执行）", "Your frequent habit in this time slot (click to execute)")
                     )
                 }

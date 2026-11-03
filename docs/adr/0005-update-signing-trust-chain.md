@@ -34,19 +34,25 @@
 
    - **阶段一（`release.yml`，push tag `v*` 或 workflow_dispatch 输入 `tag`）**：`verify-tag` → `macos-release` / `windows-release` → `stage-draft`。构建 job 只上传 artifact；`stage-draft` 校验 6 个未签名附件（DMG、`.dmg.sha256`、EXE、`.exe.sha256`、MSI、`.msi.sha256`）、拒绝改动已发布的 release、创建或刷新**草稿**，并在缺清单签名时以“⏳ 等待离线签名”成功结束。草稿里如果还留着旧的 `<安装包>.ed25519.sig`，工作流拒绝继续，并且不会删除 GitHub 附件。`release.yml` 全文件没有 `--draft=false`，构建阶段无法发布。
    - **阶段二（维护者本机）**：下载草稿里的 DMG/EXE/MSI，用离线私钥执行 `scripts/sign_update.swift --min-from <x.y.z>` 生成清单和 `MenuBarMijia-<version>.update.json.ed25519.sig`（脚本要求私钥对应的公钥等于内置值），再把这两个文件上传回同一草稿。
-   - **阶段三（`finalize.yml`，仅手动 workflow_dispatch，输入 `tag`）**：校验 tag == `v$(VERSION)`、四处版本号一致、远程 tag 仍指向检出提交、目标必须是未发布草稿；下载**恰好 8 个**附件，逐个比对下载字节与草稿的服务端 `sha256:` digest 与大小，并用 `scripts/check_release.sh assets` 就地解析 `UpdateChecker.updateSigningPublicKeyBase64` 对清单验签，再 `check-fields` 把清单和三个安装包对上（没有可配置公钥，换密钥必须改源码并发新版）；最后只执行 `gh release edit --draft=false`，**不重编译、不上传、不 `--clobber`**。
+   - **阶段三（`finalize.yml`，仅手动 workflow_dispatch，输入 `tag`）**：校验 tag == `v$(VERSION)`、四处版本号一致、远程 tag 仍指向检出提交、目标必须是未发布草稿；下载**恰好 8 个**附件，逐个比对下载字节与草稿的服务端 `sha256:` digest 与大小，并用 `scripts/check_release.sh assets` 就地解析 `UpdateChecker.updateSigningPublicKeyBase64` 对清单验签，再 `check-fields` 把清单和三个安装包对上（公钥仍是编译期常量；轮换流程见 [docs/security/update-signing-key-rotation.md](../security/update-signing-key-rotation.md)）；最后只执行 `gh release edit --draft=false`，**不重编译、不上传、不 `--clobber`**。
 
    缺签名时 `stage-draft` 只留草稿；`finalize.yml` 发现草稿里缺少清单或清单签名会输出完整离线命令并以非零退出，验签失败（包括安装包重建后仍挂旧清单）同样硬失败。`draft-assets` 严格 6 个、`assets` 严格 8 个，多一个少一个都失败，因此“少签名”不会悄悄降级为不带签名的发布。私钥格式支持 32 字节 raw seed 的 base64 或 PKCS#8 PEM。
 
 ## 后果
 
 - 私钥只在本机：GitHub 账号、release、CI 任一被攻破都无法产出能通过校验的更新包；攻击者最多造成“更新失败”或“发布被拖延”，而不是“装上恶意版本”。
-- 发布流程固定多一步人工离线签名 + 手动触发 Finalize，换取更新链路的独立性。轮换密钥需要同时改 `UpdateChecker.updateSigningPublicKeyBase64` 并发布新版本；轮换代码签名证书同理，旧版本会因钉住旧证书而拒绝新包，需要先用旧证书发一个过渡版本。
+- 发布流程固定多一步人工离线签名 + 手动触发 Finalize，换取更新链路的独立性。更新签名密钥支持“当前 + 过渡”两把：正常轮换先用旧密钥发一版带过渡公钥的 provisioning 版本，再用新密钥切主；具体步骤、回滚与吊销见 [docs/security/update-signing-key-rotation.md](../security/update-signing-key-rotation.md)。轮换代码签名证书仍是另一条链路，旧版本会因钉住旧证书而拒绝新包，需要先用旧证书发一个过渡版本。
 - 残余风险：升级到本实现之前发布的旧版本仍按旧信任链检查更新，因此“第一次升级到带签名校验的版本”这一步无法由新机制保护；之后的所有更新才受 Ed25519 约束。
 - 残余风险：早于这次改动的客户端仍然寻找 `<安装包>.ed25519.sig`。它们认不出清单签名，不能自动安装这一版，需要一次手动安装。装上这一版之后，后续更新才按清单签名校验。
 - 残余风险：草稿里如果还留着旧的 `<安装包>.ed25519.sig`，`release.yml` 会拒绝继续，并且不会从 GitHub 删除这些附件。维护者需要先手动去掉旧签名，再上传清单和清单签名。
 - CI secret 里的 p12 / Authenticode 证书能签出同证书的 App 与安装包，但不能伪造更新签名；私钥泄露才是灾难性事件。
 - 自签名构建仍会去隔离；这是“没有 Apple 公证”这一前提下的可用性取舍，而不是对 Gatekeeper 的普遍绕过。
+
+## 修订（2026-11-03，#164）
+
+- 信任集从一把公钥扩展为“当前签名公钥 + 可选过渡公钥”：macOS `UpdateChecker.updateSigningOverlapPublicKeyBase64`，Windows `UPDATE_SIGNING_OVERLAP_PUBLIC_KEY_BASE64`。`UpdateManifest.accept` 与 `accept_update_manifest` 接受任一受信密钥的签名，并要求 `key_id` 等于实际验签的那把。
+- 轮换与吊销操作手册见 [docs/security/update-signing-key-rotation.md](../security/update-signing-key-rotation.md)。
+- 公钥仍是编译期常量：轮换必须先发一个由当前受信密钥签名的 provisioning 版本，让客户端先信任新公钥，再用新公钥发下一版。
 
 ## 相关
 

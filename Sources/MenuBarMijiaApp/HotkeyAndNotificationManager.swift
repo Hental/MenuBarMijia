@@ -316,6 +316,16 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
             return true
         }
 
+        // #181: the re-auth QR modal overlay owns keyboard focus while open; Esc dismisses it and
+        // other panel navigation / search keys do not fire underneath the modal.
+        if store.isShowingMiReauth,
+           MenuBarPanelController.shared.isPanelWindow(NSApp.keyWindow) {
+            if code == kVK_Escape {
+                store.dismissMiReauth()
+            }
+            return true
+        }
+
         // Esc collapses the side attachment first; the dashboard retains its other shortcuts.
         if code == kVK_Escape, store.isGrokBallStageExpanded,
            MenuBarPanelController.shared.isPanelWindow(NSApp.keyWindow) {
@@ -390,7 +400,12 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
             return true
         case kVK_Tab:
             let delta = event.modifierFlags.contains(.shift) ? -1 : 1
-            store.cycleRoom(delta: delta)
+            // #146: follow the same order the room strip shows, not the provider order.
+            let order = RoomPrefs.displayIds(
+                order: RoomPrefs.storedOrder(),
+                rooms: store.rooms
+            )
+            store.cycleRoom(delta: delta, order: order)
             return true
         case kVK_Escape:
             if store.isShowingAssistantBar {

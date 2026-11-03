@@ -140,7 +140,8 @@ def self_test() -> None:
         public_key(),
         ("a" * 64, "b" * 64, "c" * 64),
     )
-    golden = GOLDEN.read_bytes()
+    # Git for Windows checks text out with CRLF; the canonical golden is LF.
+    golden = GOLDEN.read_bytes().replace(b"\r\n", b"\n")
     if golden_body != golden or len(golden) != 526:
         raise SystemExit(
             f"canonical_bytes 与黄金清单不一致：生成 {len(golden_body)} 字节，文件 {len(golden)} 字节"

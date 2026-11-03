@@ -182,4 +182,58 @@ struct ModelActionPolicyTests {
         #expect(!plan.reply.contains("电暖器"))
         #expect(plan.reply.hasSuffix("；下面的建议要点一下才执行"))
     }
+
+    @Test("Turning the unsure switch off lets low confidence run, but risky devices still ask")
+    func unsureSwitchKeepsHazardRules() {
+        let uncertain = ChosenAction(
+            intent: DeviceIntent(targetId: "dev_study_ceiling", operation: .power(true)),
+            confidence: 0.5,
+            primaryChoice: true
+        )
+        let asking = ModelActionPolicy.decide(
+            devices: Self.devices,
+            scenes: [],
+            payload: ModelDecisionPayload(actions: [uncertain])
+        )
+        #expect(asking.intents.isEmpty)
+        #expect(asking.suggestions.map(\.id) == ["confirm:primary"])
+
+        let bold = ModelActionPolicy.decide(
+            devices: Self.devices,
+            scenes: [],
+            payload: ModelDecisionPayload(actions: [uncertain]),
+            policy: ModelActionPolicy.ConfirmationPolicy(askWhenUnsure: false)
+        )
+        #expect(bold.intents == [DeviceIntent(targetId: "dev_study_ceiling", operation: .power(true))])
+        #expect(bold.suggestions.isEmpty)
+
+        let heater = ChosenAction(
+            intent: DeviceIntent(targetId: "dev_guest_heater", operation: .power(true)),
+            confidence: 0.99,
+            primaryChoice: true
+        )
+        let hazard = ModelActionPolicy.decide(
+            devices: Self.devices,
+            scenes: [],
+            payload: ModelDecisionPayload(actions: [heater]),
+            policy: ModelActionPolicy.ConfirmationPolicy(askWhenUnsure: false)
+        )
+        #expect(hazard.intents.isEmpty)
+        #expect(hazard.suggestions.map(\.id) == ["confirm:primary"])
+
+        // The threshold stays the shipped number unless a caller passes one explicitly.
+        let strict = ModelActionPolicy.decide(
+            devices: Self.devices,
+            scenes: [],
+            payload: ModelDecisionPayload(actions: [
+                ChosenAction(
+                    intent: DeviceIntent(targetId: "dev_study_desk", operation: .power(true)),
+                    confidence: 0.75,
+                    primaryChoice: true
+                )
+            ]),
+            policy: ModelActionPolicy.ConfirmationPolicy(threshold: 0.7)
+        )
+        #expect(strict.intents.map(\.targetId) == ["dev_study_desk"])
+    }
 }

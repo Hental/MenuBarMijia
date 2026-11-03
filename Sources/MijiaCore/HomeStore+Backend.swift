@@ -9,16 +9,33 @@ extension HomeStore {
         if homeBackend == .demo {
             return L10n.tr("演示模式（虚拟设备）", "Demo Mode (Virtual Devices)")
         }
+        let haHost = URL(string: serverURLString)?.host()
+            ?? serverURLString
+                .replacingOccurrences(of: "http://", with: "")
+                .replacingOccurrences(of: "https://", with: "")
+        let miSummary: String = if miAccounts.count > 1 {
+            L10n.tr(
+                "米家云端 (\(miAccounts.count) 个账号)",
+                "Xiaomi Cloud (\(miAccounts.count) accounts)"
+            )
+        } else if let masked = miSessionMaskedUserId {
+            L10n.tr("米家云端 (\(masked))", "Xiaomi Cloud (\(masked))")
+        } else {
+            L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+        }
+        if hasHASource && hasMiSource {
+            return "Home Assistant (\(haHost)) + \(miSummary)"
+        }
+        if hasMiSource {
+            return miSummary
+        }
+        if hasHASource {
+            return haHost
+        }
         if homeBackend == .xiaomiCloud {
-            return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
-                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+            return miSummary
         }
-        if let url = URL(string: serverURLString), let host = url.host() {
-            return host
-        }
-        return serverURLString
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "https://", with: "")
+        return haHost
     }
 
     // MARK: - LG TV & Provider Events
@@ -58,6 +75,10 @@ extension HomeStore {
             devices.removeAll { $0.id == dev.id }
             return
         }
+        var dev = dev
+        if let matchedRoom = rooms.first(where: { $0.id == dev.roomId || $0.name == dev.roomName }) {
+            dev.roomId = matchedRoom.id
+        }
         latestLGDevice = dev
         rawDeviceNames[dev.id] = dev.name
         let now = ContinuousClock.now
@@ -81,6 +102,8 @@ extension HomeStore {
 
     public func startListening() {
         hasReceivedInitialSnapshot = false
+        connectedBackends = []
+        deviceBackends = [:]
         eventTask?.cancel()
         let stream = provider.events()
         eventTask = Task { [weak self] in
@@ -155,14 +178,47 @@ extension HomeStore {
         switch event {
         case .statusChanged(let status):
             if connectionStatus != status { connectionStatus = status }
+            if case .disconnected = status {
+                connectedBackends = []
+            } else if case .connected = status, connectedBackends.isEmpty {
+                connectedBackends = homeBackend == .demo ? [.demo] : [homeBackend]
+            }
+
+        case .sourceStatusesChanged(let statuses):
+            if sourceStatuses != statuses { sourceStatuses = statuses }
+
+        case .sessionExpired(let rejected):
+            if let updated = MiSessionStore.markRejected(rejected, defaults: userDefaults) {
+                if let idx = miAccounts.firstIndex(where: {
+                    $0.session.userId == updated.userId && $0.session.serviceToken == updated.serviceToken
+                }) {
+                    miAccounts[idx].session = updated
+                }
+                miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+            }
 
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
+            if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
+                miAccountStatuses = snapshot.accountStatuses
+            }
+            let previousBackends = deviceBackends
+            let nextConnected: Set<HomeBackend> = snapshot.activeBackends.isEmpty
+                ? [homeBackend]
+                : snapshot.activeBackends
+            if connectedBackends != nextConnected { connectedBackends = nextConnected }
+            if deviceBackends != snapshot.deviceBackends { deviceBackends = snapshot.deviceBackends }
+            if pairedDeviceIDs != snapshot.pairedDeviceIDs { pairedDeviceIDs = snapshot.pairedDeviceIDs }
+            if sourceStatuses != snapshot.sourceStatuses { sourceStatuses = snapshot.sourceStatuses }
             var nextRooms = snapshot.rooms
-            if let lgDev = latestLGDevice, lgConfig.isEnabled,
-               !nextRooms.contains(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
-                nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+            if var lgDev = latestLGDevice, lgConfig.isEnabled {
+                if let matchedRoom = nextRooms.first(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
+                    lgDev.roomId = matchedRoom.id
+                    latestLGDevice = lgDev
+                } else {
+                    nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+                }
             }
             if rooms != nextRooms { rooms = nextRooms }
             if homes != snapshot.homes { homes = snapshot.homes }
@@ -183,6 +239,16 @@ extension HomeStore {
 
             for incoming in snapshot.devices {
                 rawDeviceNames[incoming.id] = incoming.name
+                let backendChanged = previousBackends[incoming.id] != nil
+                    && previousBackends[incoming.id] != snapshot.deviceBackends[incoming.id]
+                if backendChanged {
+                    optimisticLockUntil.removeValue(forKey: incoming.id)
+                    optimisticLockRevision[incoming.id, default: 0] &+= 1
+                    let prefix = "\(incoming.id)."
+                    for key in debounceTasks.keys where key == incoming.id || key.hasPrefix(prefix) {
+                        debounceTasks.removeValue(forKey: key)?.cancel()
+                    }
+                }
                 // A primary toggle is waiting for this read-back, so the lock from an older
                 // command must not hide the device's own property snapshot.
                 if let lockTime = optimisticLockUntil[incoming.id], now < lockTime,
@@ -249,14 +315,23 @@ extension HomeStore {
     /// Xiaomi Cloud accounts, or Demo mode never share or overwrite each other's time series.
     func syncSensorHistoryScope() {
         let scope: String
-        switch homeBackend {
-        case .demo:
+        if homeBackend == .demo {
             scope = "demo"
-        case .homeAssistant:
+        } else if hasHASource {
             let normalized = HAWebSocketProvider.canonicalHistoryScopeURL(serverURLString)
             scope = "ha:\(normalized)"
-        case .xiaomiCloud:
+        } else if hasMiSource {
             scope = miSessionScopeIdentifier ?? "mi:signed-out"
+        } else {
+            switch homeBackend {
+            case .demo:
+                scope = "demo"
+            case .homeAssistant:
+                let normalized = HAWebSocketProvider.canonicalHistoryScopeURL(serverURLString)
+                scope = "ha:\(normalized)"
+            case .xiaomiCloud:
+                scope = miSessionScopeIdentifier ?? "mi:signed-out"
+            }
         }
         sensorHistory.setConnectionScope(scope)
     }
@@ -338,6 +413,47 @@ extension HomeStore {
         )
     }
 
+    func makeLiveProvider() -> any HomeProvider {
+        let token = KeychainHelper.loadToken(defaults: userDefaults)
+        let ha: (any HomeProvider)? = (hasHASource || (!hasMiSource && homeBackend == .homeAssistant))
+            ? makeHAProvider(baseURLString: serverURLString, token: token)
+            : nil
+        let mi: (any HomeProvider)? = (hasMiSource || (!hasHASource && homeBackend == .xiaomiCloud))
+            ? makeMiAccountsProvider()
+            : nil
+        return Self.makeComposite(homeAssistant: ha, xiaomiCloud: mi, defaults: userDefaults)
+    }
+
+    static func makeComposite(
+        homeAssistant: (any HomeProvider)?,
+        xiaomiCloud: (any HomeProvider)?,
+        defaults: UserDefaults
+    ) -> DualSourceHomeProvider {
+        let box = UncheckedUserDefaults(defaults)
+        let stored = defaults.dictionary(forKey: ViewPreferenceKeys.canonicalDeviceIds) as? [String: String] ?? [:]
+        return DualSourceHomeProvider(
+            homeAssistant: homeAssistant,
+            xiaomiCloud: xiaomiCloud,
+            initialCanonicalIDs: stored,
+            knownPreferenceIDs: {
+                DevicePreferenceIndex.referencedIDs(defaults: box.defaults)
+            },
+            pinnedBackends: {
+                DeviceSourcePinStorage.load(defaults: box.defaults)
+            },
+            persistCanonicalIDs: { assignments in
+                box.defaults.set(assignments, forKey: ViewPreferenceKeys.canonicalDeviceIds)
+            }
+        )
+    }
+
+    private func rebuildLiveProvider() {
+        eventTask?.cancel()
+        shutdownCurrentProvider()
+        self.provider = makeLiveProvider()
+        startListening()
+    }
+
     /// Shows a found address as a question instead of switching to it (#18). An address whose instance id
     /// differs from the Home Assistant the user chose before is ignored.
     public func offerHAAddress(_ instance: HADiscoveredInstance) {
@@ -377,26 +493,15 @@ extension HomeStore {
     }
 
     public func switchBackend(_ backend: HomeBackend) {
-        let matches: Bool = switch backend {
-        case .homeAssistant: provider is HAWebSocketProvider
-        case .xiaomiCloud: provider is MiCloudProvider
-        case .demo: provider is DemoHomeProvider
-        }
-        guard homeBackend != backend || !matches else { return }
+        if backend == .demo, homeBackend == .demo, provider is DemoHomeProvider { return }
+        if backend != .demo, homeBackend == backend, provider is DualSourceHomeProvider { return }
         invalidateUndoContext()
 
         let previousBackend = homeBackend
         self.homeBackend = backend
-        eventTask?.cancel()
-        shutdownCurrentProvider()
-
-        switch backend {
-        case .homeAssistant:
-            self.provider = makeHAProvider(baseURLString: serverURLString, token: KeychainHelper.loadToken(defaults: userDefaults))
-        case .xiaomiCloud:
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
-        case .demo:
+        if backend == .demo {
+            eventTask?.cancel()
+            shutdownCurrentProvider()
             // Strictly offline: stop any LAN TV and update work started by the previous backend (#47).
             if let lgClient = lgWebOSClient {
                 Task { await lgClient.stop() }
@@ -410,54 +515,171 @@ extension HomeStore {
             }
             updateState = .idle
             self.provider = DemoHomeProvider()
-        }
-        startListening()
-        // Leaving demo mode resumes the LAN TV link that demo stopped; `start()` no-ops when the
-        // config is disabled or has no host.
-        if previousBackend == .demo, backend != .demo, let lgClient = lgWebOSClient {
-            Task { await lgClient.start() }
+            startListening()
+        } else {
+            if previousBackend == .demo {
+                self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            }
+            rebuildLiveProvider()
+            // Leaving demo mode resumes the LAN TV link that demo stopped; `start()` no-ops when the
+            // config is disabled or has no host.
+            if previousBackend == .demo, let lgClient = lgWebOSClient {
+                Task { await lgClient.start() }
+            }
         }
     }
 
     public func completeMiLogin(_ session: MiSession) {
+        guard MiSessionStore.upsert(session, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法写入钥匙串，请授权钥匙串访问后重试", "Could not save to Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
         invalidateUndoContext()
-        MiSessionStore.save(session, defaults: userDefaults)
-        self.miSessionMaskedUserId = session.maskedUserId
-        self.miSessionScopeIdentifier = session.historyScopeIdentifier
+        // The primary (first) account drives the summary and the history scope, so signing in a
+        // second account must not relabel the panel with the newcomer.
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+        self.isShowingMiReauth = false
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
+        self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
         self.homeBackend = .xiaomiCloud
         self.completeOnboarding()
-        eventTask?.cancel()
-        shutdownCurrentProvider()
-        nonisolated(unsafe) let ud = userDefaults
-        self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
-        startListening()
+        rebuildLiveProvider()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
 
-    public func logoutMiAccount() {
-        MiSessionStore.clear(defaults: userDefaults)
+    /// Returns false when the Keychain/vault refused to delete the stored Mi session; the in-memory
+    /// account is still signed out so the UI does not keep showing it.
+    @discardableResult
+    public func logoutMiAccount() -> Bool {
+        let cleared = MiSessionStore.clear(defaults: userDefaults, vault: credentialVault)
+        miAccounts = []
+        miAccountStatuses = [:]
         self.miSessionMaskedUserId = nil
+        self.miSessionExpiresAt = nil
+        self.isShowingMiReauth = false
         self.miSessionScopeIdentifier = nil
-        if homeBackend == .xiaomiCloud {
+        self.homes = []
+        self.selectedMiHomeId = nil
+        userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
+        if homeBackend == .xiaomiCloud || provider is DualSourceHomeProvider {
             invalidateUndoContext()
             self.devices = []
             self.rooms = []
             self.environmentReadings = []
             self.scenes = []
-            eventTask?.cancel()
-            shutdownCurrentProvider()
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
-            startListening()
+            selectRoom(nil)
+            if hasHASource { self.homeBackend = .homeAssistant }
+            rebuildLiveProvider()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
+        return cleared
+    }
+
+    /// The single destructive entry point behind Settings → 隐私 → 退出并吊销令牌 (#143): signs out
+    /// every Mi account, deletes the Home Assistant token and drops that connection, forgets saved AI
+    /// keys and cloud-consent records. Local preferences, aliases and history stay untouched.
+    /// Returns false and shows an error when any credential survived the deletion.
+    @discardableResult
+    public func signOutAndRevokeAll() -> Bool {
+        invalidateUndoContext()
+        var complete = true
+        if !logoutMiAccount() { complete = false }
+        if !disconnectHomeAssistant() { complete = false }
+        if !AssistantConfig.removeAllStoredAPIKeys(defaults: userDefaults, vault: credentialVault) {
+            complete = false
+        }
+        revokeCloudConsent()
+        if complete {
+            showToast(L10n.tr("已退出并吊销本地保存的令牌", "Signed out and removed saved tokens"))
+        } else {
+            showToast(
+                L10n.tr(
+                    "部分凭据未能删除，请在钥匙串授权后重试",
+                    "Some credentials could not be removed. Allow Keychain access and try again."
+                ),
+                isError: true
+            )
+        }
+        return complete
+    }
+
+    /// Deletes the Home Assistant long-lived token and closes the live connection, keeping the saved
+    /// instance URL so the user can reconnect by entering only a new token. A remaining Mi source
+    /// keeps serving the panel after the composite provider is rebuilt. Returns false when the token
+    /// could not be deleted, leaving the current connection untouched.
+    @discardableResult
+    public func disconnectHomeAssistant() -> Bool {
+        guard KeychainHelper.saveToken("", defaults: userDefaults, vault: credentialVault) else {
+            return false
+        }
+        hasHASource = false
+        pendingHAAddressSuggestion = nil
+        guard homeBackend != .demo,
+              (provider is DualSourceHomeProvider || provider is HAWebSocketProvider) else { return true }
+        invalidateUndoContext()
+        rebuildLiveProvider()
+        return true
+    }
+
+    /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel
+    /// right away instead of waiting for the next merged snapshot.
+    public func logoutMiAccount(id: String) {
+        guard MiSessionStore.remove(accountID: id, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法更新钥匙串，请授权钥匙串访问后重试", "Could not update Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
+        invalidateUndoContext()
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        miAccountStatuses.removeValue(forKey: id)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
+        if selectedMiHomeId?.hasPrefix(id + "/") == true {
+            selectedMiHomeId = nil
+            userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
+        }
+        if homeBackend == .xiaomiCloud || provider is DualSourceHomeProvider {
+            let removedDeviceIds = Set(devices.filter { $0.accountId == id }.map(\.id))
+            devices.removeAll { $0.accountId == id }
+            environmentReadings.removeAll { removedDeviceIds.contains($0.id) }
+            rooms.removeAll { $0.id.hasPrefix(id + "/") }
+            // Its homes leave too, so the home menu cannot offer a home nobody owns any more.
+            homes.removeAll { $0.accountId == id }
+            // A room pill pointing at the removed account would show an empty panel.
+            if let roomId = selectedRoomId, roomId.hasPrefix(id + "/") {
+                selectRoom(nil)
+            }
+            if miAccounts.isEmpty, hasHASource {
+                self.homeBackend = .homeAssistant
+            }
+            rebuildLiveProvider()
+        }
+        showToast(miAccounts.isEmpty
+            ? L10n.tr("已退出米家账号", "Signed out of Xiaomi Home")
+            : L10n.tr("已移除米家账号", "Removed Xiaomi account"))
     }
 
     private func shutdownCurrentProvider() {
-        if let old = provider as? MiCloudProvider {
+        if let old = provider as? DualSourceHomeProvider {
+            Task { await old.shutdown() }
+        } else if let old = provider as? MiAccountsProvider {
+            Task { await old.shutdown() }
+        } else if let old = provider as? MiCloudProvider {
             Task { await old.shutdown() }
         } else if let old = provider as? HAWebSocketProvider {
             Task { await old.shutdown() }
@@ -472,17 +694,13 @@ extension HomeStore {
         }
         pendingHAAddressSuggestion = nil
         self.serverURLString = normalized
-        KeychainHelper.saveToken(token)
+        KeychainHelper.saveToken(token, defaults: userDefaults)
+        self.hasHASource = !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.homeBackend = preferredLiveBackend
         if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.completeOnboarding()
         }
-        if homeBackend != .homeAssistant || !(provider is HAWebSocketProvider) {
-            switchBackend(.homeAssistant)
-        } else if let haProvider = provider as? HAWebSocketProvider {
-            Task {
-                await haProvider.updateCredentials(baseURLString: normalized, token: token)
-            }
-        }
+        rebuildLiveProvider()
         showToast(L10n.tr("已保存并重新连接 Home Assistant", "Saved and reconnecting to Home Assistant"))
     }
 
@@ -503,10 +721,14 @@ extension HomeStore {
         guard normalizedCurrent != instance.baseURL else { return }
         invalidateUndoContext()
         self.serverURLString = instance.baseURL
-        if reconnectProvider, let haProvider = provider as? HAWebSocketProvider {
-            let token = KeychainHelper.loadToken(defaults: userDefaults)
-            Task {
-                await haProvider.updateCredentials(baseURLString: instance.baseURL, token: token)
+        if reconnectProvider {
+            if let haProvider = provider as? HAWebSocketProvider {
+                let token = KeychainHelper.loadToken(defaults: userDefaults)
+                Task {
+                    await haProvider.updateCredentials(baseURLString: instance.baseURL, token: token)
+                }
+            } else if provider is DualSourceHomeProvider {
+                rebuildLiveProvider()
             }
         }
     }
@@ -648,5 +870,66 @@ extension HomeStore {
                 await lgClient.start()
             }
         }
+    }
+}
+
+// MARK: - Mi Session Expiry (#181)
+
+extension HomeStore {
+    public var miSessionExpiryState: MiSessionExpiryState {
+        let _ = miSessionExpiryRevision
+        return MiSessionExpiryPolicy.state(expiresAt: miSessionExpiresAt, now: Date())
+    }
+
+    /// Schedules a one-shot wake at the next boundary (`expiresAt - warningLeadTime` or `expiresAt`)
+    /// so `@Observable` views update when a live session crosses into `.expiringSoon` or `.expired`.
+    func scheduleMiSessionExpiryTransition(now: Date = Date()) {
+        miSessionExpiryTimerTask?.cancel()
+        miSessionExpiryTimerTask = nil
+        guard let expiresAt = miSessionExpiresAt else { return }
+        let warnAt = expiresAt.addingTimeInterval(-MiSessionExpiryPolicy.warningLeadTime)
+        let nextBoundary: Date? = if now < warnAt {
+            warnAt
+        } else if now < expiresAt {
+            expiresAt
+        } else {
+            nil
+        }
+        guard let nextBoundary else { return }
+        let delay = max(0.05, nextBoundary.timeIntervalSince(now) + 0.05)
+        miSessionExpiryTimerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.miSessionExpiryRevision &+= 1
+            self.scheduleMiSessionExpiryTransition()
+        }
+    }
+
+    /// Any active Xiaomi Cloud source (pure or dual-source) can name a session end; HA-only and demo never show this warning.
+    private var usesMiSessionLifecycle: Bool {
+        homeBackend != .demo && (homeBackend == .xiaomiCloud || hasMiSource)
+    }
+
+    public var miSessionShowsExpired: Bool {
+        usesMiSessionLifecycle && miSessionExpiryState == .expired
+    }
+
+    public var miSessionExpiringSoonDate: Date? {
+        guard usesMiSessionLifecycle,
+              case .expiringSoon(let expiresAt) = miSessionExpiryState else { return nil }
+        return expiresAt
+    }
+
+    public func presentMiReauth() {
+        guard usesMiSessionLifecycle,
+              miSessionMaskedUserId != nil || !miAccounts.isEmpty else { return }
+        if let target = miAccounts.first(where: { $0.session.expiresAt == miSessionExpiresAt }) ?? miAccounts.first {
+            miCloudRegion = target.region
+        }
+        isShowingMiReauth = true
+    }
+
+    public func dismissMiReauth() {
+        isShowingMiReauth = false
     }
 }

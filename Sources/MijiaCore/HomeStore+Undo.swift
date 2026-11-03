@@ -29,7 +29,8 @@ extension HomeStore {
 
     @discardableResult
     public func triggerScene(_ scene: HomeScene) -> Task<Bool, Never> {
-        Task {
+        guard !rejectControlWhileLocked() else { return Task { false } }
+        return Task {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
                 confirmManualControl(intents: [.init(targetId: scene.id, operation: .activateScene)])
@@ -45,8 +46,10 @@ extension HomeStore {
     public func executeQuickAction(
         _ action: QuickAction,
         undoBannerDuration: TimeInterval? = nil,
-        recordsHabits: Bool = true
+        recordsHabits: Bool = true,
+        respectScreenLock: Bool = true
     ) {
+        if respectScreenLock, rejectControlWhileLocked() { return }
         let previousSnapshot = devices
         var commands: [(deviceId: String, command: DeviceCommand)] = []
         var restoreCommands: [DeviceCommand] = []
@@ -256,11 +259,13 @@ extension HomeStore {
     }
 
     public func turnAllOff() {
+        guard !rejectControlWhileLocked() else { return }
         let targetIds = Set(allOffTargets.map(\.id))
         guard !targetIds.isEmpty else {
             showToast(L10n.tr("当前没有开启的设备", "No active devices are currently on"))
             return
         }
+        recordOnboardingMilestone(.turnedAllOff)
 
         let previousSnapshot = devices
         var offCommands: [(deviceId: String, command: DeviceCommand)] = []
@@ -285,7 +290,8 @@ extension HomeStore {
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: targetIds.count,
-            habitReceipt: nil
+            habitReceipt: nil,
+            isAllOff: true
         )
         guard let bannerId = undoBanner?.id else { return }
 
@@ -319,14 +325,16 @@ extension HomeStore {
         previousDevices: [SmartDevice],
         deviceCount: Int,
         habitReceipt: UserHabitMemory.RecordingReceipt? = nil,
-        duration: TimeInterval? = nil
+        duration: TimeInterval? = nil,
+        isAllOff: Bool = false
     ) {
         let banner = UndoBanner(
             title: title,
             restoreCommands: restoreCommands,
             previousDevices: previousDevices,
             habitReceipt: habitReceipt,
-            duration: duration
+            duration: duration,
+            isAllOff: isAllOff
         )
         self.undoBanner = banner
         undoTimerTask?.cancel()
@@ -350,7 +358,12 @@ extension HomeStore {
         self.undoBanner = nil
         let undoRevision = undoStateRevision
         let preUndoById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        let applicable = applyUndoCommands(banner.restoreCommands)
+        let applicable = applyUndoCommands(banner.restoreCommands, previousDevices: banner.previousDevices)
+        if applicable.isEmpty, !banner.restoreCommands.isEmpty {
+            showToast(L10n.tr("设备状态已变化，无法撤销", "Device state changed; cannot undo"), isError: true)
+            return nil
+        }
+        if !applicable.isEmpty, banner.isAllOff { recordOnboardingMilestone(.undidAllOff) }
 
         let context = controlContextID
         return Task {
@@ -404,7 +417,8 @@ extension HomeStore {
                     previousDevices: banner.previousDevices,
                     deviceCount: failedDeviceIds.count,
                     habitReceipt: remainingReceipt,
-                    duration: banner.duration
+                    duration: banner.duration,
+                    isAllOff: banner.isAllOff
                 )
             }
             let sep = L10n.isEnglish ? ", " : "、"
@@ -426,11 +440,14 @@ extension HomeStore {
         let lockRevision: UInt64
     }
 
-    func applyUndoCommands(_ commands: [DeviceCommand]) -> [UndoApplicableCommand] {
+    func applyUndoCommands(
+        _ commands: [DeviceCommand],
+        previousDevices: [SmartDevice] = []
+    ) -> [UndoApplicableCommand] {
         var applicable: [UndoApplicableCommand] = []
         for command in commands {
-            for idx in devices.indices {
-                guard let restored = Self.undoEffect(of: command, on: devices[idx]) else { continue }
+            if let idx = devices.indices.first(where: { Self.undoEffect(of: command, on: devices[$0]) != nil }),
+               let restored = Self.undoEffect(of: command, on: devices[idx]) {
                 let name = devices[idx].name
                 devices[idx] = restored
                 let rev = lockOptimistic(restored.id, duration: .seconds(3.0))
@@ -442,8 +459,25 @@ extension HomeStore {
                         lockRevision: rev
                     )
                 )
-                break
+                continue
             }
+
+            guard let prev = previousDevices.first(where: { Self.undoEffect(of: command, on: $0) != nil }),
+                  let idx = devices.indices.first(where: { devices[$0].id == prev.id && devices[$0].isOnline }),
+                  let retargeted = Self.retargetedUndoEffect(of: command, on: devices[idx]) else {
+                continue
+            }
+            let name = devices[idx].name
+            devices[idx] = retargeted.updated
+            let rev = lockOptimistic(retargeted.updated.id, duration: .seconds(3.0))
+            applicable.append(
+                UndoApplicableCommand(
+                    command: retargeted.command,
+                    deviceId: retargeted.updated.id,
+                    deviceName: name,
+                    lockRevision: rev
+                )
+            )
         }
         return applicable
     }
