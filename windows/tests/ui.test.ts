@@ -427,6 +427,42 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
   });
 
+  it("shows a collapsed group again when its only device comes online", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
+      sensor.isOnline = false;
+      fixture.deviceRecords.push(sensor);
+      const stored = localStorage.getItem("menumijia.windows.settings.v2");
+      assert.ok(stored);
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+        ...JSON.parse(stored),
+        hideOfflineDevices: true,
+        layout: {
+          groups: [{ id: "g-sensors", name: "传感器" }],
+          groupMap: { "sensor-bedroom": "g-sensors" },
+          collapsed: ["all|g-sensors"],
+        },
+      }));
+    });
+    assert.equal(document.querySelector('[data-collapse="g-sensors"]'), null);
+    assert.ok(document.querySelector('[data-tile-id="fixture-light"]'));
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = true;
+    const held = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(held.started, "Polling did not request properties");
+    held.release();
+    await withTimeout(held.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-collapse="g-sensors"]') !== null);
+    const header = element('[data-collapse="g-sensors"]');
+    assert.match(header.textContent ?? "", /传感器/);
+    assert.equal(header.querySelector(".cc-group-count")?.textContent, "1");
+    assert.equal(document.querySelector('[data-tile-id="sensor-bedroom"]'), null);
+    await click('[data-collapse="g-sensors"]');
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+  });
+
   it("appends new devices, removes missing devices and retains a partial custom order", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const light = fixture.deviceRecords[0];

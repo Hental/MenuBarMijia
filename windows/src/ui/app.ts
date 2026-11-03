@@ -1603,6 +1603,14 @@ export class MenuMijiaWindowsApp {
     const isAll = this.selectedRoom === "全部";
     const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.filteredDevices));
     const sections = pageSections(this.layout, ordered, isAll);
+    const desiredHeaders = sections.filter((section) => section.title !== null);
+    const domHeaders = Array.from(this.root.querySelectorAll<HTMLElement>(".cc-group-header"));
+    if (domHeaders.length !== desiredHeaders.length) return false;
+    for (const section of desiredHeaders) {
+      const header = domHeaders.find((element) => element.dataset.collapse === section.id);
+      const count = header?.querySelector(".cc-group-count")?.textContent ?? "";
+      if (!header || count !== String(section.devices.length)) return false;
+    }
     const bento = this.skin === "bento" && this.settings.isCompactGridMode;
     const tilePatches: Array<{ current: HTMLElement; desired: Element }> = [];
     const unmatchedTileIds = new Set(
