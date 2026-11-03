@@ -183,6 +183,34 @@ struct AssistantLocalModelTests {
         #expect(!prompt.contains("书房台灯100"))
     }
 
+    @Test("A mentioned room's group row survives before its individual lights")
+    func promptReservesMentionedRoomGroup() throws {
+        let lamps = (1...100).map { index in
+            SmartDevice(
+                id: "dev_lamp_\(index)",
+                name: "书房灯\(index)",
+                roomId: "shu_fang",
+                roomName: "书房",
+                model: "yeelink.light.lamp4",
+                isOnline: true,
+                kind: .light(LightSpec(entityId: "light.lamp_\(index)", isOn: false))
+            )
+        }
+        let catalog = IntentCatalog(devices: lamps, scenes: [])
+        let prompt = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: AssistantContext(),
+            mention: "书房灯光太刺眼了，柔和一些"
+        )
+
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
+        let groupAlias = try #require(
+            catalog.criteriaByAlias.keys.first { $0.hasPrefix("room_lights:") }
+        )
+        #expect(prompt.contains("\"id\":\"\(groupAlias)\""))
+        #expect(catalog.realIds(forTargetChoice: groupAlias).count == 100)
+    }
+
     @Test("Favorites and active devices win the remaining budget")
     func promptPrefersFavorites() {
         let catalog = Self.largeCatalog()

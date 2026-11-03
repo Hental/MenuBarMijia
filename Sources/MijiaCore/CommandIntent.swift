@@ -562,9 +562,9 @@ public struct IntentCatalog: Sendable {
 
     public var text: String { catalogText }
 
-    /// Serializes the catalog under an approximate token budget. Entries matching `mention`
-    /// (device/room/scene names) or `preferredDeviceIds` (favorites and active devices) are kept
-    /// first; the rest fill the remaining budget in catalog order, so truncation is deterministic.
+    /// Serializes the catalog under an approximate token budget. Explicit device/scene names come
+    /// first, then a mentioned room's group row, then that room's members, then favorites/active
+    /// devices; the rest fill the remaining budget in catalog order, so truncation is deterministic.
     public func text(
         fitting maxEstimatedTokens: Int,
         mention: String = "",
@@ -611,11 +611,11 @@ public struct IntentCatalog: Sendable {
             if deviceNameMatchedAliases.contains(entry.alias) {
                 priority = 0
             } else if roomMatchedAliases.contains(entry.alias) {
-                priority = 1
-            } else if preferredAliases.contains(entry.alias) {
                 priority = 2
-            } else {
+            } else if preferredAliases.contains(entry.alias) {
                 priority = 3
+            } else {
+                priority = 4
             }
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
@@ -623,21 +623,23 @@ public struct IntentCatalog: Sendable {
         for entry in groupEntries {
             let mentionsRoom = !entry.roomName.isEmpty && roomMatch.names.contains(entry.roomName)
             let containsNamed = entry.memberAliases.contains(where: deviceNameMatchedAliases.contains)
-            let containsRoomMatched = entry.memberAliases.contains(where: roomMatchedAliases.contains)
             let containsPreferred = entry.memberDeviceIds.contains(where: preferredDeviceIds.contains)
             let priority: Int
-            if mentionsRoom || containsNamed || containsRoomMatched {
+            if mentionsRoom {
+                // An explicitly requested room group must survive before its individual members.
                 priority = 1
-            } else if containsPreferred {
+            } else if containsNamed {
                 priority = 2
-            } else {
+            } else if containsPreferred {
                 priority = 3
+            } else {
+                priority = 4
             }
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
         }
         for entry in sceneEntries {
-            let priority = sceneNameMatchedAliases.contains(entry.alias) ? 0 : 3
+            let priority = sceneNameMatchedAliases.contains(entry.alias) ? 0 : 4
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
         }
