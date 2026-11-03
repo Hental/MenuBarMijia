@@ -221,6 +221,8 @@ struct LayoutEditable: ViewModifier {
     var onBeginResize: () -> Void = {}
     var onResizeDrag: (CGSize) -> Void = { _ in }
     var onEndResize: (CGSize, [TileResizeGestureMath.ResizeSample]) -> Void = { _, _ in }
+    /// #145: edit mode shows a pencil badge that opens the shared device rename prompt.
+    var onRename: (() -> Void)? = nil
 
     /// Gesture-scoped state lives here so per-pointermove updates never re-render the whole
     /// panel (#115, QuotaKeeper-style "only the active card needs layout"). The card itself
@@ -285,6 +287,23 @@ struct LayoutEditable: ViewModifier {
                     .transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if editing, !isDragging, let onRename {
+                Button(action: onRename) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: DesignTokens.TypeSize.micro, weight: .semibold))
+                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.88) : Color.primary.opacity(0.72))
+                        .frame(width: 22, height: 22)
+                        .adaptiveGlass(in: Circle(), interactive: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(L10n.tr("重命名设备", "Rename Device")))
+                .accessibilityHint(Text(L10n.tr("打开重命名输入框", "Opens the rename prompt")))
+                .panelHelp(L10n.tr("重命名设备（仅在编辑状态显示）", "Rename device (shown while editing)"))
+                .padding(6)
+                .transition(.scale(scale: 0.86).combined(with: .opacity))
+            }
+        }
         .offset(dragOffset)
         .zIndex(isDragging ? 10 : 0)
     }
@@ -318,6 +337,14 @@ struct ActiveTileResize {
 
 /// Card frames in the tile coordinate space, used to find which card the pointer is over.
 struct TileFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// Room pill frames in the room strip coordinate space, used to hit-test drag reordering (#146).
+struct RoomFramesKey: PreferenceKey {
     static let defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue()) { _, new in new }
@@ -428,6 +455,97 @@ public enum GroupPrefs {
     }
 }
 
+// MARK: - Room Display Preferences (#146)
+
+/// Persisted room display preferences: `[roomId: alias]` plus a custom room order.
+///
+/// Both are JSON strings so the panel can observe them through `@AppStorage`. Preferences are
+/// keyed by room id and never pruned: a room that disappears from a snapshot keeps its alias and
+/// slot, and unknown ids are simply ignored when the order is applied.
+public enum RoomPrefs {
+    public static let aliasesKey = "room_aliases"
+    public static let orderKey = "room_custom_order"
+
+    public static func decodeAliases(_ raw: String) -> [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: Data(raw.utf8))) ?? [:]
+    }
+
+    public static func encodeAliases(_ aliases: [String: String]) -> String {
+        let cleaned = aliases.filter { !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        return (try? String(data: JSONEncoder().encode(cleaned), encoding: .utf8)) ?? "{}"
+    }
+
+    public static func decodeOrder(_ raw: String) -> [String] {
+        (try? JSONDecoder().decode([String].self, from: Data(raw.utf8))) ?? []
+    }
+
+    public static func encodeOrder(_ ids: [String]) -> String {
+        var seen = Set<String>()
+        let unique = ids.filter { seen.insert($0).inserted }
+        return (try? String(data: JSONEncoder().encode(unique), encoding: .utf8)) ?? "[]"
+    }
+
+    /// The user's alias for `roomId`, or `nil` when it is unset or blank.
+    public static func alias(for roomId: String, in aliases: [String: String]) -> String? {
+        guard let alias = aliases[roomId]?.trimmingCharacters(in: .whitespaces), !alias.isEmpty else { return nil }
+        return alias
+    }
+
+    /// Sorts rooms by the saved order; rooms not in it keep their incoming order after the known
+    /// ones, and ids that no longer match a room are ignored.
+    public static func apply(order: [String], to rooms: [RoomArea]) -> [RoomArea] {
+        guard !order.isEmpty else { return rooms }
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return rooms.enumerated().sorted { lhs, rhs in
+            let left = rank[lhs.element.id] ?? (order.count + lhs.offset)
+            let right = rank[rhs.element.id] ?? (order.count + rhs.offset)
+            return left < right
+        }.map(\.element)
+    }
+
+    /// Saved order seeded with every currently visible room, so a move never drops an id that
+    /// belongs to a room which is temporarily missing from the snapshot.
+    public static func seededOrder(_ order: [String], rooms: [RoomArea]) -> [String] {
+        var result = order
+        let known = Set(result)
+        for room in rooms where !known.contains(room.id) {
+            result.append(room.id)
+        }
+        return result
+    }
+
+    /// Moves `id` next to `target` (drag reorder). Unknown ids are a no-op.
+    public static func move(_ order: [String], id: String, relativeTo target: String, after: Bool) -> [String] {
+        guard id != target, order.contains(id), order.contains(target) else { return order }
+        var result = order
+        result.removeAll { $0 == id }
+        guard let index = result.firstIndex(of: target) else { return order }
+        result.insert(id, at: after ? index + 1 : index)
+        return result
+    }
+
+    /// Moves `id` by one visible slot left (`delta < 0`) or right (`delta > 0`). Hidden ids keep
+    /// their stored slot and are skipped while walking to the neighbouring visible room; shifting
+    /// a hidden id is a no-op.
+    public static func shift(_ order: [String], id: String, by delta: Int, visible: Set<String>) -> [String] {
+        guard delta != 0, visible.contains(id), let from = order.firstIndex(of: id) else { return order }
+        let step = delta > 0 ? 1 : -1
+        var to = from + step
+        while order.indices.contains(to), !visible.contains(order[to]) {
+            to += step
+        }
+        guard order.indices.contains(to) else { return order }
+        var result = order
+        result.swapAt(from, to)
+        return result
+    }
+
+    /// Raw defaults values for the "reset room names and order" action.
+    public static func reset() -> (aliases: String, order: String) {
+        (encodeAliases([:]), encodeOrder([]))
+    }
+}
+
 /// Panel-wide UI requests raised from deep inside cards (context menus cannot host text input).
 @MainActor
 @Observable
@@ -439,6 +557,8 @@ final class LayoutUIState {
     var renamingGroupId: String?
     /// Non-nil while renaming that device (local display name only).
     var renamingDeviceId: String?
+    /// Non-nil while renaming that room (local display name only).
+    var renamingRoomId: String?
     /// Raised from a card's context menu, so entering edit mode no longer requires the 0.6 s
     /// long-press the audit flagged as inaccessible (#41).
     var isEditingLayoutRequested = false
