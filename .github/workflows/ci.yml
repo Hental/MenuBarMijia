@@ -205,7 +205,7 @@ jobs:
           fetch-depth: 0
       - name: Toolchain info
         run: xcodebuild -version && swift --version
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
           # v3 discards caches built while merge commits were not stamped.
@@ -245,7 +245,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .derived
           key: appintents-v1-${{ runner.os }}-${{ github.sha }}
@@ -280,7 +280,7 @@ jobs:
           fetch-depth: 0
       - name: Toolchain info
         run: xcodebuild -version && swift --version
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build
           key: spm-release-v2-${{ runner.os }}-${{ github.sha }}
