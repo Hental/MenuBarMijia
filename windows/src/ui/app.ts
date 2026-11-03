@@ -87,11 +87,8 @@ import {
   type SmartDevice,
   allOffTargets,
   cloudRefreshDue,
-  deviceCanTogglePower,
   deviceEnvironmentReading,
-  deviceReadout,
   readMiotPower,
-  deviceStatusSummary,
   environmentReadingPriority,
   isDeviceActiveOn,
   joinsAllOff,
@@ -151,7 +148,6 @@ import {
   type TemperatureUnitPreference,
   applyTemperatureUnit,
   displayStep,
-  formatTemperature,
   formatTemperatureValue,
   getTemperatureUnit,
   stepCelsius,
@@ -175,7 +171,7 @@ import { demoDevices, demoScenes, quickActions } from "./demo.js";
 import { createTransport, invokeTauriVoid } from "./transport.js";
 import { loadSettings, stripCredentialFieldsFromStoredCopies, upgradeCachedDevices, writeSettingsForStorage } from "./settings.js";
 import { CameraLiveController } from "./cameraLive.js";
-import { renderClimateStrip, renderDeviceDrawer, renderSensorCard } from "./deviceViews.js";
+import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as renderEnvironmentStripView } from "./deviceViews.js";
 import { renderSettingsModal } from "./settingsViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
@@ -2898,38 +2894,12 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderEnvironmentStrip(): string {
-    if (this.valuesAreStale) {
-      return `<div class="cc-env-strip"><div class="cc-env-chip"><span class="cc-env-label">${t("可能过期")}</span></div></div>`;
-    }
-    const envChips = this.computedEnvironmentReadings;
-    const watts = this.totalPowerWatts;
-    if (envChips.length === 0 && watts < 1) return "";
-    return `
-      <div class="cc-env-strip">
-        ${envChips
-          .map(
-            (env) => `
-          <div class="cc-env-chip">
-            <span class="cc-env-icon">${SF_ICONS.sensorFill}</span>
-            <span class="cc-env-label">${this.escapeHtml(env.label)}</span>
-            ${env.temperature !== null ? `<strong class="cc-env-val">${formatTemperature(env.temperature, undefined, 1)}</strong>` : ""}
-            ${env.humidity !== null ? `<span class="cc-env-hum">· ${Math.round(env.humidity)}%</span>` : ""}
-          </div>
-        `,
-          )
-          .join("")}
-        ${
-          watts >= 1
-            ? `
-          <div class="cc-env-chip is-power">
-            <span class="cc-env-icon">${SF_ICONS.boltFill}</span>
-            <strong class="cc-env-val">${Math.round(watts)}W</strong>
-          </div>
-        `
-            : ""
-        }
-      </div>
-    `;
+    return renderEnvironmentStripView({
+      readings: this.computedEnvironmentReadings,
+      watts: this.totalPowerWatts,
+      valuesAreStale: this.valuesAreStale,
+      escapeHtml: (v) => this.escapeHtml(v),
+    });
   }
 
   private renderDeviceGrid(): string {
@@ -3000,152 +2970,24 @@ export class MenuMijiaWindowsApp {
       .join("");
   }
 
-  private devicePaletteClass(dev: SmartDevice): string {
-    switch (dev.kind.kind) {
-      case "light":
-        return "palette-amber";
-      case "climate":
-      case "fridge":
-        return "palette-blue";
-      case "fan":
-        return "palette-mint";
-      case "plug":
-        return "palette-green";
-      case "vacuum":
-        return "palette-indigo";
-      case "camera":
-        return "palette-blue";
-      case "sensor":
-        return "palette-teal";
-    }
-  }
-
-  private deviceSvgIcon(dev: SmartDevice): string {
-    switch (dev.kind.kind) {
-      case "light":
-        return SF_ICONS.lightbulbFill;
-      case "climate":
-      case "fridge":
-        return SF_ICONS.snowflake;
-      case "fan":
-        return SF_ICONS.fanbladesFill;
-      case "plug":
-        return SF_ICONS.powerplugFill;
-      case "vacuum":
-        return SF_ICONS.sparkles;
-      case "camera":
-        return SF_ICONS.videoFill;
-      case "sensor":
-        return SF_ICONS.sensorFill;
-    }
-  }
-
   private renderDeviceTile(dev: SmartDevice, span: number, index: number): string {
-    const size = this.tileSize(dev);
-    const attrs = `data-tile-id="${this.escapeHtml(dev.id)}" style="grid-column: span ${span}; --i: ${Math.min(index, 12)}; --jd: -${Math.round((performance.now() + (index * 137) % 560) % 560)}ms"`;
-    const motion = `${this.animateEntrance && this.skin !== "classic" ? "is-entering" : ""} ${this.poppedDeviceId === dev.id ? "is-popped" : ""} ${this.draggingId === dev.id ? "is-dragging" : ""}`;
-    const sizeTitle = TILE_SIZES.find((item) => item.id === size)?.title ?? "";
-    const badge = this.isEditingLayout
-      ? `<button class="cc-resize-handle" data-resize-handle="${this.escapeHtml(dev.id)}" data-cycle-size="${this.escapeHtml(dev.id)}" data-tile-size="${size}" title="${t("切换卡片大小")}：${sizeTitle}" aria-label="${t("切换卡片大小")}，${sizeTitle}"><svg class="cc-resize-arc" viewBox="0 0 28 28" aria-hidden="true"><path d="M 22 10 A 12 12 0 0 1 10 22" /></svg></button>`
-      : "";
-    if (dev.kind.kind === "sensor" && (dev.kind.temperature !== null || dev.kind.humidity !== null) && !(this.skin === "bento" && span < 6)) {
-      return renderSensorCard(dev, dev.kind, span < 6, attrs, motion, badge, this.selectedRoom, this.valuesAreStale, (v) => this.escapeHtml(v));
-    }
-    if (dev.kind.kind === "climate" && size !== "half") {
-      return renderClimateStrip(dev, dev.kind, size === "panel", attrs, motion, badge, this.expandedDeviceId, this.selectedRoom, this.valuesAreStale, this.waitingDeviceIds, (v) => this.escapeHtml(v));
-    }
-    const isExpanded = this.expandedDeviceId === dev.id || size === "panel";
-    const readout = deviceReadout(this.waitingDeviceIds.has(dev.id), this.valuesAreStale);
-    const isOn = readout === "possiblyStale" ? false : isDeviceActiveOn(dev);
-    const kind = dev.kind.kind;
-    const palette = this.devicePaletteClass(dev);
-    const svg = this.deviceSvgIcon(dev);
-    const writable = deviceCanTogglePower(dev);
-    const fanReadings =
-      dev.kind.kind === "fan" &&
-      (dev.kind.pm25Density != null ||
-        dev.kind.airQuality != null ||
-        dev.kind.temperature != null ||
-        dev.kind.humidity != null ||
-        dev.kind.filterLifePercent != null);
-    const hasDrawer =
-      kind === "fridge" ||
-      (dev.kind.kind === "light" &&
-        (dev.kind.brightnessWritable !== false || dev.kind.colorWritable !== false || dev.kind.availableEffects.length > 0)) ||
-      (dev.kind.kind === "climate" &&
-        (dev.kind.temperatureWritable !== false || dev.kind.availableModes.length > 0 || dev.kind.availableFanModes.length > 0)) ||
-      (dev.kind.kind === "fan" &&
-        (fanReadings ||
-          dev.kind.availablePresetModes.length > 0 ||
-          (dev.kind.speedWritable !== false && dev.kind.percentage !== null) ||
-          (dev.kind.swingWritable !== false && dev.kind.isOscillating !== null))) ||
-      (dev.kind.kind === "camera" &&
-        (writable || dev.kind.availableNightShots.length > 0 || dev.kind.motionDetectionEntityId !== null)) ||
-      (dev.kind.kind === "vacuum" && dev.kind.actionsWritable !== false);
-    const subtitle =
-      this.selectedRoom === "全部"
-        ? `${dev.roomName} · ${deviceStatusSummary(dev)}`
-        : deviceStatusSummary(dev);
-
-    const dim = this.dimPreview?.id === dev.id ? this.dimPreview.percent : null;
-    const fill = kind === "light" && this.skin !== "classic" && !isExpanded
-      ? dim ?? (isOn && dev.kind.kind === "light" ? dev.kind.brightnessPercent ?? 100 : 0)
-      : 0;
-    const shownSubtitle = readout === "waiting"
-      ? t("等待中")
-      : readout === "possiblyStale"
-        ? t("可能过期")
-        : dim !== null
-          ? t("亮度 {percent}%", { percent: dim })
-          : subtitle;
-    const staleClass = readout === "possiblyStale" ? "is-stale" : "";
-    return `
-      <div class="cc-tile ${palette} ${isOn ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""} ${dev.isOnline ? "" : "is-offline"} ${staleClass} ${kind === "light" ? "is-light" : ""} ${this.skin === "bento" && span < 6 ? "is-bento-tile" : ""} ${motion}" ${attrs}>
-        ${fill > 0 ? `<span class="cc-tile-fill" style="width:${fill}%"></span>` : ""}
-        ${badge}
-        <div class="cc-tile-header">
-          ${
-            writable
-              ? `<button
-            class="cc-tile-orb"
-            data-toggle-device="${this.escapeHtml(dev.id)}"
-            title="${kind === "sensor" ? dev.name : t("点击直接切换开关")}"
-            aria-label="${this.escapeHtml(t("{name} 开关", { name: dev.name }))}"
-            aria-pressed="${isOn}"
-          >
-            ${svg}
-          </button>`
-              : `<span class="cc-tile-orb" title="${this.escapeHtml(dev.name)}" aria-hidden="true">${svg}</span>`
-          }
-
-          <button
-            class="cc-tile-body"
-            data-body-device="${this.escapeHtml(dev.id)}"
-            title="${kind === "camera" ? t("点击放大打开摄像机实时画面") : hasDrawer ? t("点击展开精细调节") : t("点击切换开关")}"
-            aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(shownSubtitle)}"
-            aria-pressed="${isOn}"
-          >
-            <div class="cc-tile-name">${this.escapeHtml(dev.name)}</div>
-            <div class="cc-tile-status">${this.escapeHtml(shownSubtitle)}</div>
-          </button>
-
-          ${
-            hasDrawer && size !== "panel" && (this.skin === "classic" || !this.settings.isCompactGridMode || isExpanded)
-              ? `<button
-                  class="cc-tile-chevron ${isExpanded ? "is-open" : ""}"
-                  data-expand-device="${this.escapeHtml(dev.id)}"
-                  title="${isExpanded ? t("收起详细控制") : t("展开详细控制")}"
-                  aria-label="${isExpanded ? t("收起") : t("展开")} ${this.escapeHtml(t("{name} 详细控制", { name: dev.name }))}"
-                  aria-expanded="${isExpanded}"
-                >
-                  ${SF_ICONS.chevronRight}
-                </button>`
-              : ""
-          }
-        </div>
-        ${isExpanded && hasDrawer ? renderDeviceDrawer(dev, (v) => this.escapeHtml(v)) : ""}
-      </div>
-    `;
+    return renderDeviceTileView(dev, {
+      span,
+      index,
+      size: this.tileSize(dev),
+      skin: this.skin,
+      animateEntrance: this.animateEntrance,
+      poppedDeviceId: this.poppedDeviceId,
+      draggingId: this.draggingId,
+      isEditingLayout: this.isEditingLayout,
+      selectedRoom: this.selectedRoom,
+      valuesAreStale: this.valuesAreStale,
+      expandedDeviceId: this.expandedDeviceId,
+      waitingDeviceIds: this.waitingDeviceIds,
+      compactGrid: this.settings.isCompactGridMode,
+      dimPreview: this.dimPreview,
+      escapeHtml: (v) => this.escapeHtml(v),
+    });
   }
 
   private renderHomeMenu(): string {
