@@ -179,8 +179,10 @@ extension HomeStore {
     /// tap so a newer toggle, such as the next keyboard press, is not discarded.
     private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64) async -> ReadBackConfirm {
         if case .tv(let spec) = requested.kind, LGWebOSProtocol.isLGEntity(spec.mediaEntityId) {
-            // The LAN client confirms TV writes; the cloud has no row for this device.
+            // The LAN client confirms TV writes; the cloud has no row for this device, and a
+            // stale provider snapshot must not revert the accepted power.
             applyConfirmedPower(from: requested, deviceId: deviceId)
+            lockOptimistic(deviceId, duration: .seconds(2.0))
             return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
         }
         let before = snapshotGeneration
