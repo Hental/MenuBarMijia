@@ -7,7 +7,9 @@ import {
   KIND_CHIP,
   KIND_RANK,
   filterByListCut,
+  foldGroupedLights,
   kindChips,
+  memberGroupOwners,
   showsKindRow,
   type DeviceKindTag,
   type DeviceListCut,
@@ -167,5 +169,50 @@ describe("device list cut", () => {
       assert.ok(catalogEntry(chip.title), chip.title);
       if (chip.hint !== undefined) assert.ok(catalogEntry(chip.hint), chip.hint);
     }
+  });
+});
+
+describe("light-group folding (#214)", () => {
+  it("maps every member did to its first owning group", () => {
+    const owners = memberGroupOwners(
+      new Map([
+        ["group.living", ["dev.a", "dev.b"]],
+        ["group.bedroom", ["dev.b", "dev.c"]],
+      ]),
+    );
+    assert.deepEqual([...owners], [
+      ["dev.a", "group.living"],
+      ["dev.b", "group.living"],
+      ["dev.c", "group.bedroom"],
+    ]);
+  });
+
+  it("folds members into a listed group card and leaves unknown devices alone", () => {
+    const group = light("group.living", "客厅");
+    const memberA = light("dev.a", "客厅");
+    const memberB = light("dev.b", "客厅");
+    const unrelated = light("dev.other", "客厅");
+    const devices = [group, memberA, memberB, unrelated];
+    const owners = new Map<string, string>([
+      ["dev.a", "group.living"],
+      ["dev.b", "group.living"],
+      ["dev.outside", "group.living"],
+    ]);
+    const folded = foldGroupedLights(devices, owners);
+    assert.notEqual(folded, devices);
+    assert.deepEqual(folded.map((device) => device.id), ["group.living", "dev.other"]);
+  });
+
+  it("keeps members visible when their group card is filtered out", () => {
+    const member = light("dev.a", "书房");
+    const folded = foldGroupedLights([member], new Map([["dev.a", "group.away"]]));
+    assert.deepEqual(folded.map((device) => device.id), ["dev.a"]);
+  });
+
+  it("copies the list unchanged when no owners are known", () => {
+    const devices = [light("dev.a", "客厅"), light("dev.b", "书房")];
+    const folded = foldGroupedLights(devices, new Map<string, string>());
+    assert.notEqual(folded, devices);
+    assert.deepEqual(folded, devices);
   });
 });

@@ -489,6 +489,28 @@ export class MiCloudClient {
     return rooms;
   }
 
+  static parseLightGroupMembers(result: unknown): Map<string, string[]> {
+    const groups = new Map<string, string[]>();
+    if (!Array.isArray(result)) return groups;
+    for (const item of result) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as Record<string, unknown>;
+      const groupDid = asIdString(record["group_did"]);
+      if (!groupDid) continue;
+      const raw = [record["member_ship"], record["membership"]].find(
+        (value): value is Record<string, unknown> =>
+          value !== null && typeof value === "object" && !Array.isArray(value),
+      );
+      if (!raw) continue;
+      const members = groups.get(groupDid) ?? [];
+      for (const memberDid of Object.keys(raw)) {
+        if (memberDid.length > 0 && !members.includes(memberDid)) members.push(memberDid);
+      }
+      groups.set(groupDid, members);
+    }
+    return groups;
+  }
+
   /**
    * `v2/home/device_list_page` also returns the split keys of multi-key Mesh panels, which
    * `home/device_list` omits even with `get_split_device`; fall back to the latter on failure.
@@ -565,6 +587,25 @@ export class MiCloudClient {
       });
       return MiCloudClient.parseRooms(fallback);
     }
+  }
+
+  /** Maps each Xiaomi light group among `groupDids` to its member device dids, in first-seen order. */
+  async lightGroupMembers(groupDids: readonly string[]): Promise<Map<string, string[]>> {
+    const unique = [...new Set(groupDids)].filter((did) => did.startsWith("group."));
+    const members = new Map<string, string[]>();
+    for (let start = 0; start < unique.length; start += 100) {
+      const result = await this.request("v2/groupv2/query_status", {
+        group_did: unique.slice(start, start + 100),
+      });
+      for (const [groupDid, memberDids] of MiCloudClient.parseLightGroupMembers(result)) {
+        const merged = members.get(groupDid) ?? [];
+        for (const memberDid of memberDids) {
+          if (!merged.includes(memberDid)) merged.push(memberDid);
+        }
+        members.set(groupDid, merged);
+      }
+    }
+    return members;
   }
 
   async getProps(keys: readonly MiotPropKey[]): Promise<Map<string, unknown>> {

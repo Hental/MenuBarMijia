@@ -48,6 +48,34 @@ export function filterByListCut(
   });
 }
 
+export function memberGroupOwners(
+  membersByGroup: ReadonlyMap<string, readonly string[]>,
+): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const [groupDid, memberDids] of membersByGroup) {
+    for (const did of memberDids) {
+      if (!owners.has(did)) owners.set(did, groupDid);
+    }
+  }
+  return owners;
+}
+
+/**
+ * Hides member lights only while their owning group card is itself on screen;
+ * a group filtered out by room/kind/offline leaves its members visible.
+ */
+export function foldGroupedLights(
+  devices: readonly SmartDevice[],
+  owners: ReadonlyMap<string, string>,
+): SmartDevice[] {
+  if (owners.size === 0) return [...devices];
+  const listed = new Set(devices.map((device) => device.id));
+  return devices.filter((device) => {
+    const owner = owners.get(device.id);
+    return owner === undefined || !listed.has(owner);
+  });
+}
+
 export function kindChips(
   devices: readonly SmartDevice[],
   cut: DeviceListCut,
