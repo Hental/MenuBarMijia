@@ -9,6 +9,22 @@ extension HomeStore {
         if homeBackend == .demo {
             return L10n.tr("演示模式（虚拟设备）", "Demo Mode (Virtual Devices)")
         }
+        let haHost = URL(string: serverURLString)?.host()
+            ?? serverURLString
+                .replacingOccurrences(of: "http://", with: "")
+                .replacingOccurrences(of: "https://", with: "")
+        if hasHASource && hasMiSource {
+            let mi = miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
+                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+            return "Home Assistant (\(haHost)) + \(mi)"
+        }
+        if hasMiSource {
+            return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
+                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+        }
+        if hasHASource {
+            return haHost
+        }
         if homeBackend == .xiaomiCloud {
             if miAccounts.count > 1 {
                 return L10n.tr(
@@ -19,12 +35,7 @@ extension HomeStore {
             return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
                 ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
         }
-        if let url = URL(string: serverURLString), let host = url.host() {
-            return host
-        }
-        return serverURLString
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "https://", with: "")
+        return haHost
     }
 
     // MARK: - LG TV & Provider Events
@@ -91,6 +102,8 @@ extension HomeStore {
 
     public func startListening() {
         hasReceivedInitialSnapshot = false
+        connectedBackends = []
+        deviceBackends = [:]
         eventTask?.cancel()
         let stream = provider.events()
         eventTask = Task { [weak self] in
@@ -165,6 +178,11 @@ extension HomeStore {
         switch event {
         case .statusChanged(let status):
             if connectionStatus != status { connectionStatus = status }
+            if case .disconnected = status {
+                connectedBackends = []
+            } else if case .connected = status, connectedBackends.isEmpty {
+                connectedBackends = homeBackend == .demo ? [.demo] : [homeBackend]
+            }
 
         case .sessionExpired(let rejected):
             if let updated = MiSessionStore.markRejected(rejected, defaults: userDefaults) {
@@ -182,6 +200,12 @@ extension HomeStore {
             if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
                 miAccountStatuses = snapshot.accountStatuses
             }
+            let previousBackends = deviceBackends
+            let nextConnected: Set<HomeBackend> = snapshot.activeBackends.isEmpty
+                ? [homeBackend]
+                : snapshot.activeBackends
+            if connectedBackends != nextConnected { connectedBackends = nextConnected }
+            if deviceBackends != snapshot.deviceBackends { deviceBackends = snapshot.deviceBackends }
             var nextRooms = snapshot.rooms
             if var lgDev = latestLGDevice, lgConfig.isEnabled {
                 if let matchedRoom = nextRooms.first(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
@@ -210,6 +234,11 @@ extension HomeStore {
 
             for incoming in snapshot.devices {
                 rawDeviceNames[incoming.id] = incoming.name
+                let backendChanged = previousBackends[incoming.id] != nil
+                    && previousBackends[incoming.id] != snapshot.deviceBackends[incoming.id]
+                if backendChanged {
+                    optimisticLockUntil.removeValue(forKey: incoming.id)
+                }
                 // A primary toggle is waiting for this read-back, so the lock from an older
                 // command must not hide the device's own property snapshot.
                 if let lockTime = optimisticLockUntil[incoming.id], now < lockTime,
@@ -276,14 +305,23 @@ extension HomeStore {
     /// Xiaomi Cloud accounts, or Demo mode never share or overwrite each other's time series.
     func syncSensorHistoryScope() {
         let scope: String
-        switch homeBackend {
-        case .demo:
+        if homeBackend == .demo {
             scope = "demo"
-        case .homeAssistant:
+        } else if hasHASource {
             let normalized = HAWebSocketProvider.canonicalHistoryScopeURL(serverURLString)
             scope = "ha:\(normalized)"
-        case .xiaomiCloud:
+        } else if hasMiSource {
             scope = miSessionScopeIdentifier ?? "mi:signed-out"
+        } else {
+            switch homeBackend {
+            case .demo:
+                scope = "demo"
+            case .homeAssistant:
+                let normalized = HAWebSocketProvider.canonicalHistoryScopeURL(serverURLString)
+                scope = "ha:\(normalized)"
+            case .xiaomiCloud:
+                scope = miSessionScopeIdentifier ?? "mi:signed-out"
+            }
         }
         sensorHistory.setConnectionScope(scope)
     }
@@ -365,6 +403,44 @@ extension HomeStore {
         )
     }
 
+    func makeLiveProvider() -> any HomeProvider {
+        let token = KeychainHelper.loadToken(defaults: userDefaults)
+        let ha: (any HomeProvider)? = (hasHASource || (!hasMiSource && homeBackend == .homeAssistant))
+            ? makeHAProvider(baseURLString: serverURLString, token: token)
+            : nil
+        let mi: (any HomeProvider)? = (hasMiSource || (!hasHASource && homeBackend == .xiaomiCloud))
+            ? makeMiAccountsProvider()
+            : nil
+        return Self.makeComposite(homeAssistant: ha, xiaomiCloud: mi, defaults: userDefaults)
+    }
+
+    static func makeComposite(
+        homeAssistant: (any HomeProvider)?,
+        xiaomiCloud: (any HomeProvider)?,
+        defaults: UserDefaults
+    ) -> DualSourceHomeProvider {
+        let box = UncheckedUserDefaults(defaults)
+        let stored = defaults.dictionary(forKey: ViewPreferenceKeys.canonicalDeviceIds) as? [String: String] ?? [:]
+        return DualSourceHomeProvider(
+            homeAssistant: homeAssistant,
+            xiaomiCloud: xiaomiCloud,
+            initialCanonicalIDs: stored,
+            knownPreferenceIDs: {
+                DevicePreferenceIndex.referencedIDs(defaults: box.defaults)
+            },
+            persistCanonicalIDs: { assignments in
+                box.defaults.set(assignments, forKey: ViewPreferenceKeys.canonicalDeviceIds)
+            }
+        )
+    }
+
+    private func rebuildLiveProvider() {
+        eventTask?.cancel()
+        shutdownCurrentProvider()
+        self.provider = makeLiveProvider()
+        startListening()
+    }
+
     /// Shows a found address as a question instead of switching to it (#18). An address whose instance id
     /// differs from the Home Assistant the user chose before is ignored.
     public func offerHAAddress(_ instance: HADiscoveredInstance) {
@@ -404,25 +480,15 @@ extension HomeStore {
     }
 
     public func switchBackend(_ backend: HomeBackend) {
-        let matches: Bool = switch backend {
-        case .homeAssistant: provider is HAWebSocketProvider
-        case .xiaomiCloud: provider is MiAccountsProvider
-        case .demo: provider is DemoHomeProvider
-        }
-        guard homeBackend != backend || !matches else { return }
+        if backend == .demo, homeBackend == .demo, provider is DemoHomeProvider { return }
+        if backend != .demo, homeBackend == backend, provider is DualSourceHomeProvider { return }
         invalidateUndoContext()
 
         let previousBackend = homeBackend
         self.homeBackend = backend
-        eventTask?.cancel()
-        shutdownCurrentProvider()
-
-        switch backend {
-        case .homeAssistant:
-            self.provider = makeHAProvider(baseURLString: serverURLString, token: KeychainHelper.loadToken(defaults: userDefaults))
-        case .xiaomiCloud:
-            self.provider = makeMiAccountsProvider()
-        case .demo:
+        if backend == .demo {
+            eventTask?.cancel()
+            shutdownCurrentProvider()
             // Strictly offline: stop any LAN TV and update work started by the previous backend (#47).
             if let lgClient = lgWebOSClient {
                 Task { await lgClient.stop() }
@@ -436,12 +502,19 @@ extension HomeStore {
             }
             updateState = .idle
             self.provider = DemoHomeProvider()
-        }
-        startListening()
-        // Leaving demo mode resumes the LAN TV link that demo stopped; `start()` no-ops when the
-        // config is disabled or has no host.
-        if previousBackend == .demo, backend != .demo, let lgClient = lgWebOSClient {
-            Task { await lgClient.start() }
+            startListening()
+        } else {
+            if previousBackend == .demo {
+                self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            }
+            rebuildLiveProvider()
+            // Leaving demo mode resumes the LAN TV link that demo stopped; `start()` no-ops when the
+            // config is disabled or has no host.
+            if previousBackend == .demo, let lgClient = lgWebOSClient {
+                Task { await lgClient.start() }
+            }
         }
     }
 
@@ -464,12 +537,12 @@ extension HomeStore {
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
+        self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
         self.homeBackend = .xiaomiCloud
         self.completeOnboarding()
-        eventTask?.cancel()
-        shutdownCurrentProvider()
-        self.provider = makeMiAccountsProvider()
-        startListening()
+        rebuildLiveProvider()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
 
@@ -484,17 +557,15 @@ extension HomeStore {
         self.homes = []
         self.selectedMiHomeId = nil
         userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
-        if homeBackend == .xiaomiCloud {
+        if homeBackend == .xiaomiCloud || provider is DualSourceHomeProvider {
             invalidateUndoContext()
             self.devices = []
             self.rooms = []
             self.environmentReadings = []
             self.scenes = []
             selectRoom(nil)
-            eventTask?.cancel()
-            shutdownCurrentProvider()
-            self.provider = makeMiAccountsProvider()
-            startListening()
+            if hasHASource { self.homeBackend = .homeAssistant }
+            rebuildLiveProvider()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
     }
@@ -519,7 +590,7 @@ extension HomeStore {
             selectedMiHomeId = nil
             userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         }
-        if homeBackend == .xiaomiCloud {
+        if homeBackend == .xiaomiCloud || provider is DualSourceHomeProvider {
             let removedDeviceIds = Set(devices.filter { $0.accountId == id }.map(\.id))
             devices.removeAll { $0.accountId == id }
             environmentReadings.removeAll { removedDeviceIds.contains($0.id) }
@@ -530,10 +601,10 @@ extension HomeStore {
             if let roomId = selectedRoomId, roomId.hasPrefix(id + "/") {
                 selectRoom(nil)
             }
-            eventTask?.cancel()
-            shutdownCurrentProvider()
-            self.provider = makeMiAccountsProvider()
-            startListening()
+            if miAccounts.isEmpty, hasHASource {
+                self.homeBackend = .homeAssistant
+            }
+            rebuildLiveProvider()
         }
         showToast(miAccounts.isEmpty
             ? L10n.tr("已退出米家账号", "Signed out of Xiaomi Home")
@@ -541,7 +612,9 @@ extension HomeStore {
     }
 
     private func shutdownCurrentProvider() {
-        if let old = provider as? MiAccountsProvider {
+        if let old = provider as? DualSourceHomeProvider {
+            Task { await old.shutdown() }
+        } else if let old = provider as? MiAccountsProvider {
             Task { await old.shutdown() }
         } else if let old = provider as? MiCloudProvider {
             Task { await old.shutdown() }
@@ -559,16 +632,12 @@ extension HomeStore {
         pendingHAAddressSuggestion = nil
         self.serverURLString = normalized
         KeychainHelper.saveToken(token)
+        self.hasHASource = !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.homeBackend = preferredLiveBackend
         if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.completeOnboarding()
         }
-        if homeBackend != .homeAssistant || !(provider is HAWebSocketProvider) {
-            switchBackend(.homeAssistant)
-        } else if let haProvider = provider as? HAWebSocketProvider {
-            Task {
-                await haProvider.updateCredentials(baseURLString: normalized, token: token)
-            }
-        }
+        rebuildLiveProvider()
         showToast(L10n.tr("已保存并重新连接 Home Assistant", "Saved and reconnecting to Home Assistant"))
     }
 
@@ -589,10 +658,14 @@ extension HomeStore {
         guard normalizedCurrent != instance.baseURL else { return }
         invalidateUndoContext()
         self.serverURLString = instance.baseURL
-        if reconnectProvider, let haProvider = provider as? HAWebSocketProvider {
-            let token = KeychainHelper.loadToken(defaults: userDefaults)
-            Task {
-                await haProvider.updateCredentials(baseURLString: instance.baseURL, token: token)
+        if reconnectProvider {
+            if let haProvider = provider as? HAWebSocketProvider {
+                let token = KeychainHelper.loadToken(defaults: userDefaults)
+                Task {
+                    await haProvider.updateCredentials(baseURLString: instance.baseURL, token: token)
+                }
+            } else if provider is DualSourceHomeProvider {
+                rebuildLiveProvider()
             }
         }
     }

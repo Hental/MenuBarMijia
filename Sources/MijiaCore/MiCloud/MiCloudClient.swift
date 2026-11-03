@@ -14,9 +14,11 @@ public struct MiDeviceRecord: Equatable, Sendable {
     public var splitParentDid: String?
     public var splitSiid: Int?
     public var localIp: String?
+    public var mac: String?
 
     public init(did: String, name: String, model: String, isOnline: Bool, specType: String? = nil,
-                splitParentDid: String? = nil, splitSiid: Int? = nil, localIp: String? = nil) {
+                splitParentDid: String? = nil, splitSiid: Int? = nil, localIp: String? = nil,
+                mac: String? = nil) {
         self.did = did
         self.name = name
         self.model = model
@@ -25,6 +27,7 @@ public struct MiDeviceRecord: Equatable, Sendable {
         self.splitParentDid = splitParentDid
         self.splitSiid = splitSiid
         self.localIp = localIp
+        self.mac = mac
     }
 
     /// The did MIoT property and action calls address.
@@ -350,7 +353,8 @@ public actor MiCloudClient: MiCloudAPI {
                 specType: item["spec_type"]?.stringValue,
                 splitParentDid: split?["parentId"]?.idString,
                 splitSiid: split?["moduleId"]?.intValue,
-                localIp: item["localip"]?.stringValue
+                localIp: item["localip"]?.stringValue,
+                mac: item["mac"]?.stringValue
             )
         }
     }

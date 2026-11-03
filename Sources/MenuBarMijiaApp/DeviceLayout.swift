@@ -91,7 +91,7 @@ public enum TileResizeGestureMath {
 
 /// Stores `[deviceId: TileSize]` as JSON under one defaults key so views can observe it with `@AppStorage`.
 public enum DeviceLayoutPrefs {
-    public static let storageKey = "device_tile_sizes"
+    public static let storageKey = ViewPreferenceKeys.tileSizes
 
     public static func decode(_ raw: String) -> [String: TileSize] {
         guard let data = raw.data(using: .utf8),
@@ -142,7 +142,7 @@ public enum DeviceLayoutPrefs {
 // MARK: - Custom Order
 
 extension DeviceLayoutPrefs {
-    public static let orderKey = "device_custom_order"
+    public static let orderKey = ViewPreferenceKeys.customOrder
 
     public static func decodeOrder(_ raw: String) -> [String] {
         guard let data = raw.data(using: .utf8),
@@ -398,10 +398,10 @@ public struct DeviceGroup: Codable, Identifiable, Equatable, Sendable {
 
 public enum GroupPrefs {
     public static let groupsKey = "device_groups"
-    public static let mapKey = "device_group_map"
+    public static let mapKey = ViewPreferenceKeys.groupMap
     public static let collapsedKey = "device_groups_collapsed"
     /// `[deviceId: display name]`; local to this app, the Mi Home name is untouched.
-    public static let aliasesKey = "device_aliases"
+    public static let aliasesKey = ViewPreferenceKeys.deviceAliases
 
     public static func groups(_ raw: String) -> [DeviceGroup] {
         (try? JSONDecoder().decode([DeviceGroup].self, from: Data(raw.utf8))) ?? []

@@ -1774,6 +1774,12 @@ public struct ControlCenterPanel: View {
         .padding(.bottom, -3)
     }
 
+    private var disconnectedEmptyBackend: HomeBackend {
+        if store.hasMiSource && !store.hasHASource { return .xiaomiCloud }
+        if store.hasHASource && !store.hasMiSource { return .homeAssistant }
+        return store.homeBackend
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 8) {
             Image(systemName: "sparkles")
@@ -1781,16 +1787,20 @@ public struct ControlCenterPanel: View {
                 .foregroundStyle(.secondary)
             if case .disconnected = store.connectionStatus {
                 Text(
-                    store.homeBackend == .xiaomiCloud
-                        ? L10n.tr("尚未登录米家云端账号", "Not signed in to Xiaomi Cloud")
-                        : L10n.tr("尚未连接到 Home Assistant", "Not connected to Home Assistant")
+                    store.isDualSourceActive
+                        ? L10n.tr("尚未连接到 Home Assistant 或米家云端", "Not connected to Home Assistant or Xiaomi Cloud")
+                        : (disconnectedEmptyBackend == .xiaomiCloud
+                            ? L10n.tr("尚未登录米家云端账号", "Not signed in to Xiaomi Cloud")
+                            : L10n.tr("尚未连接到 Home Assistant", "Not connected to Home Assistant"))
                 )
                     .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(
-                    store.homeBackend == .xiaomiCloud
-                        ? L10n.tr("无需额外部署服务器，使用手机「米家」App 扫码即可同步设备", "Scan with the Mi Home app on your phone to sync devices without a server")
-                        : L10n.tr("点击下方按钮配置服务器地址与令牌，或切换为手机米家扫码直连", "Configure your server URL and token below, or switch to Xiaomi Cloud QR login")
+                    store.isDualSourceActive
+                        ? L10n.tr("请检查两端配置，或在偏好设置中查看连接状态", "Check both configurations, or review connection status in Preferences")
+                        : (disconnectedEmptyBackend == .xiaomiCloud
+                            ? L10n.tr("无需额外部署服务器，使用手机「米家」App 扫码即可同步设备", "Scan with the Mi Home app on your phone to sync devices without a server")
+                            : L10n.tr("点击下方按钮配置服务器地址与令牌，或切换为手机米家扫码直连", "Configure your server URL and token below, or switch to Xiaomi Cloud QR login"))
                 )
                     .font(.system(size: DesignTokens.TypeSize.caption))
                     .foregroundStyle(.secondary)
@@ -2126,7 +2136,10 @@ public struct ControlCenterPanel: View {
             if store.homeBackend == .demo {
                 return L10n.tr("虚拟设备，离线运行", "Virtual devices, offline")
             }
-            if store.homeBackend == .xiaomiCloud {
+            if store.connectedBackends.contains(.homeAssistant) && store.connectedBackends.contains(.xiaomiCloud) {
+                return L10n.tr("HA + 米家云 (\(store.serverHostSummary))", "HA + Xiaomi Cloud (\(store.serverHostSummary))")
+            }
+            if store.connectedBackends.contains(.xiaomiCloud) {
                 return L10n.tr("\(store.serverHostSummary)，Miot 直连", "\(store.serverHostSummary), MIoT Direct")
             }
             return L10n.tr("HA 实时连接 (\(store.serverHostSummary))", "HA Live (\(store.serverHostSummary))")

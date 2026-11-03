@@ -175,6 +175,14 @@ public struct OnboardingGuideView: View {
             .labelsHidden()
             .controlSize(.small)
 
+            Text(L10n.tr(
+                "Home Assistant 与米家云端可以同时配置；这里只切换当前填写的连接表单，已配置的另一端会继续连接。",
+                "Home Assistant and Xiaomi Cloud can be configured together. This only switches the form below; the other configured source keeps running."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
             // #47: let people try the panel before signing any account in.
             if store.homeBackend == .demo {
                 HStack(alignment: .top, spacing: 6) {

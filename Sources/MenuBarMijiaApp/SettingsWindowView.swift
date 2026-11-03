@@ -540,9 +540,7 @@ private struct ConnectionSettingsTab: View {
             VStack(alignment: .leading, spacing: 16) {
                 SettingsSection(title: L10n.tr("连接配置", "Connection")) {
                     HStack {
-                        Text(store.homeBackend == .demo
-                             ? L10n.tr("当前为演示模式", "Demo mode is active")
-                             : L10n.tr("选择数据源", "Data source"))
+                        Text(store.connectionSourceSummary)
                             .font(.system(size: DesignTokens.TypeSize.caption))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -552,101 +550,35 @@ private struct ConnectionSettingsTab: View {
                             .help(disconnectReason ?? "")
                     }
 
-                    Picker(
-                        "",
-                        selection: Binding(
-                            get: { store.homeBackend },
-                            set: { newBackend in
-                                withAnimation(AppleMotion.snappySpring) {
-                                    store.switchBackend(newBackend)
-                                }
+                    Toggle(isOn: Binding(
+                        get: { store.homeBackend == .demo },
+                        set: { isDemo in
+                            withAnimation(AppleMotion.snappySpring) {
+                                store.switchBackend(isDemo ? .demo : store.preferredLiveBackend)
                             }
-                        )
-                    ) {
-                        ForEach(HomeBackend.allCases) { backend in
-                            Text(backend.title).tag(backend)
                         }
+                    )) {
+                        Text(L10n.tr("演示模式（内置虚拟设备，完全离线）", "Demo Mode (built-in virtual devices, fully offline)"))
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .controlSize(.regular)
+                    .toggleStyle(.switch)
 
-                    if store.homeBackend == .demo {
-                        Text(L10n.tr(
-                            "演示模式使用内置虚拟设备，完全离线。选择「米家云端直连」或「Home Assistant」即可切回真实账号。",
-                            "Demo mode uses built-in virtual devices and never touches the network. Choose Xiaomi Cloud or Home Assistant to switch back."
-                        ))
+                    Text(store.homeBackend == .demo
+                         ? L10n.tr(
+                            "演示模式使用内置虚拟设备，不发起任何网络请求。关闭开关即可连接已配置的账号。",
+                            "Demo mode uses built-in virtual devices and never touches the network. Turn it off to connect configured accounts."
+                         )
+                         : L10n.tr(
+                            "Home Assistant 与米家云端可以同时配置。两端都配置后会自动并行连接并合并重叠设备；只配置一端时单源运行。",
+                            "Home Assistant and Xiaomi Cloud can be configured together. With both, the app connects in parallel and merges overlapping devices; one source runs alone when it is the only one configured."
+                         ))
                         .font(.system(size: DesignTokens.TypeSize.caption))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    }
+                }
 
-                    if store.homeBackend == .homeAssistant {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(L10n.tr("服务器地址", "Server URL"))
-                                    .font(.system(size: DesignTokens.TypeSize.caption))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if let firstHA = store.discoveredHAInstances.first {
-                                    if HAWebSocketProvider.normalizeBaseURL(urlDraft) == firstHA.baseURL {
-                                        Label(
-                                            L10n.tr("局域网已识别 · \(firstHA.locationName)", "LAN Detected · \(firstHA.locationName)"),
-                                            systemImage: "checkmark.seal.fill"
-                                        )
-                                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                                        .foregroundStyle(.green)
-                                    } else {
-                                        Button(L10n.tr("填入已发现：\(firstHA.hostAndPort)", "Use Found: \(firstHA.hostAndPort)")) {
-                                            urlDraft = firstHA.baseURL
-                                        }
-                                        .buttonStyle(.plain)
-                                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                                        .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                            }
-                            TextField("https://your-home.ui.nabu.casa", text: $urlDraft)
-                                .textFieldStyle(.roundedBorder)
-                                .controlSize(.regular)
-                                .font(.system(size: DesignTokens.TypeSize.body, design: .monospaced))
-                            if let address = URL(string: HAWebSocketProvider.normalizeBaseURL(urlDraft)),
-                               address.scheme == "http",
-                               let host = address.host,
-                               !["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased()) {
-                                Label(L10n.tr("令牌将以明文在网络上传输，建议使用 HTTPS 或 Nabu Casa 地址。", "Your token will travel unencrypted. Use HTTPS or a Nabu Casa address."), systemImage: "exclamationmark.triangle.fill")
-                                    .font(.system(size: DesignTokens.TypeSize.caption))
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(L10n.tr("长期访问令牌 (安全存入钥匙串)", "Long-Lived Access Token (Stored in Keychain)"))
-                                    .font(.system(size: DesignTokens.TypeSize.caption))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if let secURL = URL(string: "\(HAWebSocketProvider.normalizeBaseURL(urlDraft))/profile/security") {
-                                    Button(L10n.tr("打开网页取令牌", "Open Security Page")) {
-                                        NSWorkspace.shared.open(secURL)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                                    .foregroundStyle(Color.accentColor)
-                                }
-                            }
-                            SecureField(L10n.tr("粘贴 HA 长期访问令牌", "Paste HA Long-Lived Access Token"), text: $tokenDraft)
-                                .textFieldStyle(.roundedBorder)
-                                .controlSize(.regular)
-                                .font(.system(size: DesignTokens.TypeSize.body, design: .monospaced))
-                            if let reason = disconnectReason {
-                                Label(reason, systemImage: "exclamationmark.octagon.fill")
-                                    .font(.system(size: DesignTokens.TypeSize.caption))
-                                    .foregroundStyle(.red)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
+                if store.homeBackend != .demo {
+                    SettingsSection(title: "Home Assistant") {
+                        homeAssistantForm
 
                         HStack {
                             Button(store.isDiscoveringHA ? L10n.tr("扫描中…", "Scanning…") : L10n.tr("扫描局域网 HA", "Scan LAN for HA")) {
@@ -676,12 +608,12 @@ private struct ConnectionSettingsTab: View {
                             .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
                         }
                         .padding(.top, 2)
-                    } else if store.homeBackend == .xiaomiCloud {
+                    }
+
+                    SettingsSection(title: L10n.tr("米家云端直连", "Xiaomi Cloud Direct")) {
                         MiAccountSection(store: store)
                     }
-                }
 
-                if store.homeBackend != .demo {
                     LGWebOSSettingsSection(store: store)
                 }
             }
@@ -697,6 +629,76 @@ private struct ConnectionSettingsTab: View {
                        HAWebSocketProvider.normalizeBaseURL(urlDraft) == KeychainHelper.defaultNASURL {
                         urlDraft = first.baseURL
                     }
+                }
+            }
+        }
+    }
+
+    private var homeAssistantForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(L10n.tr("服务器地址", "Server URL"))
+                        .font(.system(size: DesignTokens.TypeSize.caption))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let firstHA = store.discoveredHAInstances.first {
+                        if HAWebSocketProvider.normalizeBaseURL(urlDraft) == firstHA.baseURL {
+                            Label(
+                                L10n.tr("局域网已识别 · \(firstHA.locationName)", "LAN Detected · \(firstHA.locationName)"),
+                                systemImage: "checkmark.seal.fill"
+                            )
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                            .foregroundStyle(.green)
+                        } else {
+                            Button(L10n.tr("填入已发现：\(firstHA.hostAndPort)", "Use Found: \(firstHA.hostAndPort)")) {
+                                urlDraft = firstHA.baseURL
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+                TextField("https://your-home.ui.nabu.casa", text: $urlDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.regular)
+                    .font(.system(size: DesignTokens.TypeSize.body, design: .monospaced))
+                if let address = URL(string: HAWebSocketProvider.normalizeBaseURL(urlDraft)),
+                   address.scheme == "http",
+                   let host = address.host,
+                   !["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased()) {
+                    Label(L10n.tr("令牌将以明文在网络上传输，建议使用 HTTPS 或 Nabu Casa 地址。", "Your token will travel unencrypted. Use HTTPS or a Nabu Casa address."), systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: DesignTokens.TypeSize.caption))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(L10n.tr("长期访问令牌 (安全存入钥匙串)", "Long-Lived Access Token (Stored in Keychain)"))
+                        .font(.system(size: DesignTokens.TypeSize.caption))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let secURL = URL(string: "\(HAWebSocketProvider.normalizeBaseURL(urlDraft))/profile/security") {
+                        Button(L10n.tr("打开网页取令牌", "Open Security Page")) {
+                            NSWorkspace.shared.open(secURL)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                    }
+                }
+                SecureField(L10n.tr("粘贴 HA 长期访问令牌", "Paste HA Long-Lived Access Token"), text: $tokenDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.regular)
+                    .font(.system(size: DesignTokens.TypeSize.body, design: .monospaced))
+                if let reason = disconnectReason {
+                    Label(reason, systemImage: "exclamationmark.octagon.fill")
+                        .font(.system(size: DesignTokens.TypeSize.caption))
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -954,8 +956,8 @@ private struct PrivacySettingsTab: View {
             appVersion: info?["CFBundleShortVersionString"] as? String ?? "dev",
             buildNumber: info?["CFBundleVersion"] as? String ?? "-",
             macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            backendTitle: store.homeBackend.title,
-            miCloudRegion: store.homeBackend == .xiaomiCloud ? store.miCloudRegion.title : "-",
+            backendTitle: store.connectionSourceSummary,
+            miCloudRegion: store.hasMiSource ? store.miCloudRegion.title : "-",
             deviceCount: store.devices.count,
             onlineDeviceCount: store.onlineDeviceCount,
             hiddenDeviceCount: store.hiddenDevices.count,
