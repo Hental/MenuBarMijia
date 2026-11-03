@@ -19,15 +19,15 @@ export interface WindowsInstallerAsset {
   /** Asset file name, e.g. `MenuBarMijia-1.1.4-windows-x64-setup.exe`. */
   readonly name: string;
   /** Direct download URL under https://github.com/jryang1997/MenuBarMijia/releases/download/... */
-  readonly downloadURL: string;
+  readonly downloadUrl: string;
   /** Byte size reported by GitHub (0 when unknown). */
   readonly sizeBytes: number;
   /** Lowercase 64-hex SHA-256 from GitHub's inline `digest`, or `null` when only a `.sha256` sidecar exists. */
   readonly sha256: string | null;
   /** Optional `.sha256` sidecar download URL under https://github.com/jryang1997/MenuBarMijia/releases/download/... */
-  readonly checksumURL: string | null;
+  readonly checksumUrl: string | null;
   /** Detached Ed25519 signature URL (`<asset>.ed25519.sig`, ADR-0005). */
-  readonly signatureURL: string;
+  readonly signatureUrl: string;
 }
 
 export interface GitHubRelease {
@@ -106,45 +106,46 @@ export function parseSha256Digest(raw: unknown): string | null {
 
 function buildValidatedInstallerAsset(params: {
   rawName: unknown;
-  rawDownloadURL: unknown;
+  rawDownloadUrl: unknown;
   rawSizeBytes: unknown;
   rawSha256: unknown;
-  rawChecksumURL: unknown;
-  rawSignatureURL?: unknown;
+  rawChecksumUrl: unknown;
+  rawSignatureUrl?: unknown;
 }): WindowsInstallerAsset | null {
   const name = typeof params.rawName === "string" ? params.rawName.trim() : "";
   if (!name || /[\\/:]|\.\./.test(name) || !/\.(?:exe|msi)$/i.test(name)) return null;
-  const downloadURL = typeof params.rawDownloadURL === "string" ? params.rawDownloadURL.trim() : "";
-  if (!RELEASE_DOWNLOAD_URL_PATTERN.test(downloadURL)) return null;
+  const downloadUrl = typeof params.rawDownloadUrl === "string" ? params.rawDownloadUrl.trim() : "";
+  if (!RELEASE_DOWNLOAD_URL_PATTERN.test(downloadUrl)) return null;
   const sizeBytes =
     typeof params.rawSizeBytes === "number" && Number.isFinite(params.rawSizeBytes) && params.rawSizeBytes >= 0
       ? Math.floor(params.rawSizeBytes)
       : 0;
   const sha256 = parseSha256Digest(params.rawSha256);
-  const rawChecksum = typeof params.rawChecksumURL === "string" ? params.rawChecksumURL.trim() : "";
-  const checksumURL =
+  const rawChecksum = typeof params.rawChecksumUrl === "string" ? params.rawChecksumUrl.trim() : "";
+  const checksumUrl =
     RELEASE_DOWNLOAD_URL_PATTERN.test(rawChecksum) && /\.sha256$/i.test(rawChecksum)
       ? rawChecksum
       : null;
-  if (!sha256 && !checksumURL) return null;
-  const rawSig = typeof params.rawSignatureURL === "string" ? params.rawSignatureURL.trim() : "";
-  const signatureURL =
+  if (!sha256 && !checksumUrl) return null;
+  const rawSig = typeof params.rawSignatureUrl === "string" ? params.rawSignatureUrl.trim() : "";
+  const signatureUrl =
     RELEASE_DOWNLOAD_URL_PATTERN.test(rawSig) && /\.ed25519\.sig$/i.test(rawSig)
       ? rawSig
-      : `${downloadURL}.ed25519.sig`;
-  return { name, downloadURL, sizeBytes, sha256, checksumURL, signatureURL };
+      : `${downloadUrl}.ed25519.sig`;
+  return { name, downloadUrl, sizeBytes, sha256, checksumUrl, signatureUrl };
 }
 
 function parseInstallerAssetRecord(raw: unknown): WindowsInstallerAsset | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
+  // Cached releases written before the serde camelCase alignment still use uppercase URL keys.
   return buildValidatedInstallerAsset({
     rawName: record["name"],
-    rawDownloadURL: record["downloadURL"],
+    rawDownloadUrl: record["downloadUrl"] ?? record["downloadURL"],
     rawSizeBytes: record["sizeBytes"],
     rawSha256: record["sha256"],
-    rawChecksumURL: record["checksumURL"],
-    rawSignatureURL: record["signatureURL"],
+    rawChecksumUrl: record["checksumUrl"] ?? record["checksumURL"],
+    rawSignatureUrl: record["signatureUrl"] ?? record["signatureURL"],
   });
 }
 
@@ -176,11 +177,11 @@ export function selectWindowsInstallerAsset(rawAssets: unknown): WindowsInstalle
     const lowerName = name.toLowerCase();
     const candidate = buildValidatedInstallerAsset({
       rawName: name,
-      rawDownloadURL: rec["browser_download_url"],
+      rawDownloadUrl: rec["browser_download_url"],
       rawSizeBytes: rec["size"],
       rawSha256: rec["digest"],
-      rawChecksumURL: sidecarByBaseName.get(lowerName) ?? null,
-      rawSignatureURL: signatureByBaseName.get(lowerName) ?? null,
+      rawChecksumUrl: sidecarByBaseName.get(lowerName) ?? null,
+      rawSignatureUrl: signatureByBaseName.get(lowerName) ?? null,
     });
     if (!candidate) continue;
     if (lowerName.endsWith(".exe") && !exeCandidate) {

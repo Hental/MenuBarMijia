@@ -1414,9 +1414,67 @@
           ]
         }
       ]
+    },
+    "xiaomi.lock.s2": {
+      "type": "urn:miot-spec-v2:device:lock:0000A038:xiaomi-s2:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:lock:00007855:xiaomi-s2:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:door-state:00000407:xiaomi-s2:1",
+              "format": "uint8",
+              "access": ["read", "notify"],
+              "value-list": [
+                { "value": 1, "description": "Locked" },
+                { "value": 2, "description": "Unlocked" },
+                { "value": 3, "description": "Door Not Closed" },
+                { "value": 4, "description": "Ajar" },
+                { "value": 5, "description": "Child Lock Enabled" }
+              ]
+            }
+          ]
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:battery:00007805:xiaomi-s2:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:battery-level:00000014:xiaomi-s2:1",
+              "format": "uint8",
+              "access": ["read", "notify"]
+            }
+          ]
+        }
+      ]
+    },
+    "loock.lock.battery": {
+      "type": "urn:miot-spec-v2:device:lock:0000A038:loock-battery:1",
+      "services": [
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:service:lock:00007855:loock-battery:1",
+          "properties": []
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:service:battery:00007805:loock-battery:1",
+          "properties": [
+            {
+              "iid": 1,
+              "type": "urn:miot-spec-v2:property:battery-level:00000014:loock-battery:1",
+              "format": "uint8",
+              "access": ["read", "notify"]
+            }
+          ]
+        }
+      ]
     }
   },
-  "fallbackSpecs": [
+  "fallbackSpecs":   [
     {
       "did": "fb_airp",
       "model": "zhimi.airp.rma3",
@@ -1428,16 +1486,34 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 4,
                 "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 0, "description": "Auto" },
-                  { "value": 1, "description": "Sleep" },
-                  { "value": 2, "description": "Favorite" }
+                  {
+                    "value": 0,
+                    "description": "Auto"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Sleep"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Favorite"
+                  }
                 ]
               }
             ],
@@ -1447,9 +1523,45 @@
             "iid": 3,
             "type": "urn:miot-spec-v2:service:environment:0000780A:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] },
-              { "iid": 4, "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1", "format": "uint16", "access": ["read"], "value-range": [0, 1000, 1] },
-              { "iid": 7, "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1", "format": "float", "access": ["read"], "value-range": [-30, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1",
+                "format": "uint16",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  1000,
+                  1
+                ]
+              },
+              {
+                "iid": 7,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -30,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           },
@@ -1457,19 +1569,55 @@
             "iid": 4,
             "type": "urn:miot-spec-v2:service:filter:0000780B:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 4, "value": 0 },
-        { "siid": 3, "piid": 4, "value": 18 },
-        { "siid": 3, "piid": 7, "value": 24.5 },
-        { "siid": 3, "piid": 1, "value": 52 },
-        { "siid": 4, "piid": 1, "value": 86 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 4,
+          "value": 0
+        },
+        {
+          "siid": 3,
+          "piid": 4,
+          "value": 18
+        },
+        {
+          "siid": 3,
+          "piid": 7,
+          "value": 24.5
+        },
+        {
+          "siid": 3,
+          "piid": 1,
+          "value": 52
+        },
+        {
+          "siid": 4,
+          "piid": 1,
+          "value": 86
+        }
       ],
       "expectedKind": {
         "kind": "fan",
@@ -1486,8 +1634,16 @@
         "powerWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setFanPower", "entityId": "miot:fb_airp:2", "isOn": false },
-        { "kind": "setFanPresetMode", "entityId": "miot:fb_airp:2", "presetMode": "Sleep" }
+        {
+          "kind": "setFanPower",
+          "entityId": "miot:fb_airp:2",
+          "isOn": false
+        },
+        {
+          "kind": "setFanPresetMode",
+          "entityId": "miot:fb_airp:2",
+          "presetMode": "Sleep"
+        }
       ]
     },
     {
@@ -1501,16 +1657,34 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:camera-control:0000782F:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 3,
                 "type": "urn:miot-spec-v2:property:night-shot:00000057:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 0, "description": "Off" },
-                  { "value": 1, "description": "On" },
-                  { "value": 2, "description": "Auto" }
+                  {
+                    "value": 0,
+                    "description": "Off"
+                  },
+                  {
+                    "value": 1,
+                    "description": "On"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Auto"
+                  }
                 ]
               }
             ],
@@ -1519,8 +1693,16 @@
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": 1 },
-        { "siid": 2, "piid": 3, "value": 2 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": 1
+        },
+        {
+          "siid": 2,
+          "piid": 3,
+          "value": 2
+        }
       ],
       "expectedKind": {
         "kind": "camera",
@@ -1534,8 +1716,16 @@
         "powerWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setSwitch", "entityId": "miot:fb_cam:2", "isOn": false },
-        { "kind": "setSelectOption", "entityId": "miot:fb_cam:2", "option": "On" }
+        {
+          "kind": "setSwitch",
+          "entityId": "miot:fb_cam:2",
+          "isOn": false
+        },
+        {
+          "kind": "setSelectOption",
+          "entityId": "miot:fb_cam:2",
+          "option": "On"
+        }
       ]
     },
     {
@@ -1549,17 +1739,56 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:light:00007802:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
-              { "iid": 2, "type": "urn:miot-spec-v2:property:brightness:0000000D:fallback:1", "format": "uint8", "access": ["read"], "value-range": [1, 100, 1] },
-              { "iid": 3, "type": "urn:miot-spec-v2:property:color-temperature:0000000F:fallback:1", "format": "uint32", "access": ["read"], "value-range": [2700, 6500, 100] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:brightness:0000000D:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  1,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 3,
+                "type": "urn:miot-spec-v2:property:color-temperature:0000000F:fallback:1",
+                "format": "uint32",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  2700,
+                  6500,
+                  100
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 2, "value": 40 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 2,
+          "value": 40
+        }
       ],
       "expectedKind": {
         "kind": "light",
@@ -1576,8 +1805,16 @@
         "colorWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setLightPower", "entityId": "miot:fb_light:2", "isOn": false },
-        { "kind": "setLightBrightness", "entityId": "miot:fb_light:2", "percent": 20 }
+        {
+          "kind": "setLightPower",
+          "entityId": "miot:fb_light:2",
+          "isOn": false
+        },
+        {
+          "kind": "setLightBrightness",
+          "entityId": "miot:fb_light:2",
+          "percent": 20
+        }
       ]
     },
     {
@@ -1591,30 +1828,78 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:air-conditioner:0000780F:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 2,
                 "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 2, "description": "Cool" },
-                  { "value": 5, "description": "Heat" },
-                  { "value": 3, "description": "Dry" },
-                  { "value": 4, "description": "Fan" },
-                  { "value": 1, "description": "Auto" }
+                  {
+                    "value": 2,
+                    "description": "Cool"
+                  },
+                  {
+                    "value": 5,
+                    "description": "Heat"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Dry"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Fan"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Auto"
+                  }
                 ]
               },
-              { "iid": 4, "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", "format": "float", "access": ["read"], "value-range": [16, 30, 0.5] }
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  16,
+                  30,
+                  0.5
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 2, "value": 2 },
-        { "siid": 2, "piid": 4, "value": 24 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 2,
+          "value": 2
+        },
+        {
+          "siid": 2,
+          "piid": 4,
+          "value": 24
+        }
       ],
       "expectedKind": {
         "kind": "climate",
@@ -1633,8 +1918,17 @@
         "temperatureWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setClimatePower", "entityId": "miot:fb_ac:2", "isOn": false, "hvacMode": "cool" },
-        { "kind": "setClimateTemperature", "entityId": "miot:fb_ac:2", "temperature": 22 }
+        {
+          "kind": "setClimatePower",
+          "entityId": "miot:fb_ac:2",
+          "isOn": false,
+          "hvacMode": "cool"
+        },
+        {
+          "kind": "setClimateTemperature",
+          "entityId": "miot:fb_ac:2",
+          "temperature": 22
+        }
       ]
     },
     {
@@ -1648,29 +1942,73 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:air-conditioner:0000780F:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 2,
                 "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 2, "description": "Cool" },
-                  { "value": 5, "description": "Heat" },
-                  { "value": 3, "description": "Dry" },
-                  { "value": 4, "description": "Fan" },
-                  { "value": 1, "description": "Auto" }
+                  {
+                    "value": 2,
+                    "description": "Cool"
+                  },
+                  {
+                    "value": 5,
+                    "description": "Heat"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Dry"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Fan"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Auto"
+                  }
                 ]
               },
-              { "iid": 4, "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", "format": "float", "access": ["read"], "value-range": [16, 30, 0.5] }
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  16,
+                  30,
+                  0.5
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 2, "value": 5 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 2,
+          "value": 5
+        }
       ],
       "expectedKind": {
         "kind": "climate",
@@ -1689,7 +2027,11 @@
         "temperatureWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setClimateMode", "entityId": "miot:fb_heater:2", "hvacMode": "heat" }
+        {
+          "kind": "setClimateMode",
+          "entityId": "miot:fb_heater:2",
+          "hvacMode": "heat"
+        }
       ]
     },
     {
@@ -1703,29 +2045,69 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:fan:00007808:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 2,
                 "type": "urn:miot-spec-v2:property:fan-level:00000016:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 1, "description": "Level 1" },
-                  { "value": 2, "description": "Level 2" },
-                  { "value": 3, "description": "Level 3" },
-                  { "value": 4, "description": "Level 4" }
+                  {
+                    "value": 1,
+                    "description": "Level 1"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Level 2"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Level 3"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Level 4"
+                  }
                 ]
               },
-              { "iid": 3, "type": "urn:miot-spec-v2:property:horizontal-swing:00000017:fallback:1", "format": "bool", "access": ["read"] }
+              {
+                "iid": 3,
+                "type": "urn:miot-spec-v2:property:horizontal-swing:00000017:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 2, "value": 2 },
-        { "siid": 2, "piid": 3, "value": true }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 2,
+          "value": 2
+        },
+        {
+          "siid": 2,
+          "piid": 3,
+          "value": true
+        }
       ],
       "expectedKind": {
         "kind": "fan",
@@ -1739,8 +2121,16 @@
         "swingWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setFanPower", "entityId": "miot:fb_fan:2", "isOn": false },
-        { "kind": "setFanOscillating", "entityId": "miot:fb_fan:2", "oscillating": false }
+        {
+          "kind": "setFanPower",
+          "entityId": "miot:fb_fan:2",
+          "isOn": false
+        },
+        {
+          "kind": "setFanOscillating",
+          "entityId": "miot:fb_fan:2",
+          "oscillating": false
+        }
       ]
     },
     {
@@ -1754,16 +2144,34 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 4,
                 "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 0, "description": "Auto" },
-                  { "value": 1, "description": "Sleep" },
-                  { "value": 2, "description": "Favorite" }
+                  {
+                    "value": 0,
+                    "description": "Auto"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Sleep"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Favorite"
+                  }
                 ]
               }
             ],
@@ -1773,9 +2181,45 @@
             "iid": 3,
             "type": "urn:miot-spec-v2:service:environment:0000780A:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] },
-              { "iid": 4, "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1", "format": "uint16", "access": ["read"], "value-range": [0, 1000, 1] },
-              { "iid": 7, "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1", "format": "float", "access": ["read"], "value-range": [-30, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1",
+                "format": "uint16",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  1000,
+                  1
+                ]
+              },
+              {
+                "iid": 7,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -30,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           },
@@ -1783,14 +2227,30 @@
             "iid": 4,
             "type": "urn:miot-spec-v2:service:filter:0000780B:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": false }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": false
+        }
       ],
       "expectedKind": {
         "kind": "fan",
@@ -1803,7 +2263,11 @@
         "powerWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setFanPower", "entityId": "miot:fb_fresh:2", "isOn": true }
+        {
+          "kind": "setFanPower",
+          "entityId": "miot:fb_fresh:2",
+          "isOn": true
+        }
       ]
     },
     {
@@ -1817,16 +2281,34 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] },
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              },
               {
                 "iid": 4,
                 "type": "urn:miot-spec-v2:property:mode:00000008:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 0, "description": "Auto" },
-                  { "value": 1, "description": "Sleep" },
-                  { "value": 2, "description": "Favorite" }
+                  {
+                    "value": 0,
+                    "description": "Auto"
+                  },
+                  {
+                    "value": 1,
+                    "description": "Sleep"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Favorite"
+                  }
                 ]
               }
             ],
@@ -1836,9 +2318,45 @@
             "iid": 3,
             "type": "urn:miot-spec-v2:service:environment:0000780A:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] },
-              { "iid": 4, "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1", "format": "uint16", "access": ["read"], "value-range": [0, 1000, 1] },
-              { "iid": 7, "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1", "format": "float", "access": ["read"], "value-range": [-30, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 4,
+                "type": "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1",
+                "format": "uint16",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  1000,
+                  1
+                ]
+              },
+              {
+                "iid": 7,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "float",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -30,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           },
@@ -1846,15 +2364,35 @@
             "iid": 4,
             "type": "urn:miot-spec-v2:service:filter:0000780B:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1", "format": "uint8", "access": ["read"], "value-range": [0, 100, 1] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1",
+                "format": "uint8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  0,
+                  100,
+                  1
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true },
-        { "siid": 2, "piid": 4, "value": 1 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        },
+        {
+          "siid": 2,
+          "piid": 4,
+          "value": 1
+        }
       ],
       "expectedKind": {
         "kind": "fan",
@@ -1867,7 +2405,11 @@
         "powerWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setFanPresetMode", "entityId": "miot:fb_humid:2", "presetMode": "Auto" }
+        {
+          "kind": "setFanPresetMode",
+          "entityId": "miot:fb_humid:2",
+          "presetMode": "Auto"
+        }
       ]
     },
     {
@@ -1881,14 +2423,25 @@
             "iid": 2,
             "type": "urn:miot-spec-v2:service:switch:0000780C:fallback:1",
             "properties": [
-              { "iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:fallback:1", "format": "bool", "access": ["read"] }
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:on:00000006:fallback:1",
+                "format": "bool",
+                "access": [
+                  "read"
+                ]
+              }
             ],
             "actions": []
           }
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": true }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": true
+        }
       ],
       "expectedKind": {
         "kind": "plug",
@@ -1900,7 +2453,11 @@
         "powerWritable": false
       },
       "rejectedCommands": [
-        { "kind": "setSwitch", "entityId": "miot:fb_outlet:2", "isOn": false }
+        {
+          "kind": "setSwitch",
+          "entityId": "miot:fb_outlet:2",
+          "isOn": false
+        }
       ]
     },
     {
@@ -1918,13 +2475,30 @@
                 "iid": 1,
                 "type": "urn:miot-spec-v2:property:status:00000007:fallback:1",
                 "format": "uint8",
-                "access": ["read"],
+                "access": [
+                  "read"
+                ],
                 "value-list": [
-                  { "value": 1, "description": "Idle" },
-                  { "value": 2, "description": "Sweeping" },
-                  { "value": 3, "description": "Charging" },
-                  { "value": 4, "description": "Paused" },
-                  { "value": 5, "description": "Go Charging" }
+                  {
+                    "value": 1,
+                    "description": "Idle"
+                  },
+                  {
+                    "value": 2,
+                    "description": "Sweeping"
+                  },
+                  {
+                    "value": 3,
+                    "description": "Charging"
+                  },
+                  {
+                    "value": 4,
+                    "description": "Paused"
+                  },
+                  {
+                    "value": 5,
+                    "description": "Go Charging"
+                  }
                 ]
               }
             ],
@@ -1933,7 +2507,11 @@
         ]
       },
       "values": [
-        { "siid": 2, "piid": 1, "value": 1 }
+        {
+          "siid": 2,
+          "piid": 1,
+          "value": 1
+        }
       ],
       "expectedKind": {
         "kind": "vacuum",
@@ -1946,9 +2524,123 @@
         "actionsWritable": false
       },
       "rejectedCommands": [
-        { "kind": "vacuumAction", "entityId": "miot:fb_vac:2", "action": "start" },
-        { "kind": "vacuumAction", "entityId": "miot:fb_vac:2", "action": "returnToBase" }
+        {
+          "kind": "vacuumAction",
+          "entityId": "miot:fb_vac:2",
+          "action": "start"
+        },
+        {
+          "kind": "vacuumAction",
+          "entityId": "miot:fb_vac:2",
+          "action": "returnToBase"
+        }
       ]
+    },
+    {
+      "did": "fb_fridge",
+      "model": "fixture.fridge.unknown",
+      "name": "未知冰箱",
+      "spec": {
+        "type": "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
+            "properties": [],
+            "actions": []
+          },
+          {
+            "iid": 3,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -30,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  2,
+                  8,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          },
+          {
+            "iid": 4,
+            "type": "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:temperature:00000020:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -50,
+                  100,
+                  1
+                ]
+              },
+              {
+                "iid": 2,
+                "type": "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
+                "format": "int8",
+                "access": [
+                  "read"
+                ],
+                "value-range": [
+                  -24,
+                  -15,
+                  1
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      },
+      "values": [
+        {
+          "siid": 3,
+          "piid": 2,
+          "value": 6
+        },
+        {
+          "siid": 4,
+          "piid": 2,
+          "value": -20
+        }
+      ],
+      "expectedKind": {
+        "kind": "fridge",
+        "modeEntityId": null,
+        "currentMode": "None",
+        "availableModes": [],
+        "fridgeCurrentTemp": null,
+        "fridgeTargetTemp": 6,
+        "fridgeTargetEntityId": null,
+        "freezerCurrentTemp": null,
+        "freezerTargetTemp": -20,
+        "freezerTargetEntityId": null
+      }
     }
   ],
   "devices": [
@@ -2098,6 +2790,18 @@
       "did": "did_cooker",
       "model": "chunmi.cooker.normalcd2",
       "name": "电饭煲",
+      "isOnline": true
+    },
+    {
+      "did": "did_lock_state",
+      "model": "xiaomi.lock.s2",
+      "name": "入户门锁",
+      "isOnline": true
+    },
+    {
+      "did": "did_lock_battery",
+      "model": "loock.lock.battery",
+      "name": "卧室门锁",
       "isOnline": true
     }
   ],
@@ -2299,7 +3003,10 @@
       "siid": 2,
       "piid": 1,
       "value": 2
-    }
+    },
+    { "did": "did_lock_state", "siid": 2, "piid": 1, "value": 1 },
+    { "did": "did_lock_state", "siid": 3, "piid": 1, "value": 80 },
+    { "did": "did_lock_battery", "siid": 3, "piid": 1, "value": 40 }
   ],
   "expectedKinds": {
     "did_light": {
@@ -2531,6 +3238,20 @@
       "powerWatts": null,
       "childLockEntityId": null,
       "isChildLocked": false
+    },
+    "did_lock_state": {
+      "kind": "sensor",
+      "temperature": null,
+      "humidity": null,
+      "battery": 80,
+      "statusText": "已上锁"
+    },
+    "did_lock_battery": {
+      "kind": "sensor",
+      "temperature": null,
+      "humidity": null,
+      "battery": 40,
+      "statusText": "锁状态未知"
     }
   },
   "expectedEnvironmentReadings": [
@@ -2775,6 +3496,13 @@
         "siid": 2,
         "piid": 1
       }
+    ],
+    "did_lock_state": [
+      { "did": "did_lock_state", "siid": 3, "piid": 1 },
+      { "did": "did_lock_state", "siid": 2, "piid": 1 }
+    ],
+    "did_lock_battery": [
+      { "did": "did_lock_battery", "siid": 3, "piid": 1 }
     ]
   },
   "commandCases": [

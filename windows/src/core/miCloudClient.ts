@@ -1147,6 +1147,8 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
     };
   }
 
+  // A guessed (siid, piid) can hit the wrong attribute, so this fallback is read-only
+  // until a verified model-specific spec replaces it (#148).
   if (m.includes(".fridge.") || n.includes("冰箱")) {
     return {
       type: "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
@@ -1154,19 +1156,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
         {
           iid: 2,
           type: "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
-          properties: [
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
-              format: "uint8",
-              access: ["read", "write"],
-              valueList: [
-                { value: 0, description: "None" },
-                { value: 1, description: "Holiday" },
-                { value: 2, description: "Smart" },
-              ],
-            },
-          ],
+          properties: [],
           actions: [],
         },
         {
@@ -1174,7 +1164,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-30, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [2, 8, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [2, 8, 1] },
           ],
           actions: [],
         },
@@ -1183,7 +1173,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
           type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
           properties: [
             { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-50, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read", "write"], valueRange: [-24, -15, 1] },
+            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [-24, -15, 1] },
           ],
           actions: [],
         },
@@ -1411,6 +1401,62 @@ function energyScale(prop: MiotProperty): number | null {
   return null;
 }
 
+/** Descriptions that claim a door security state. Offline devices must not keep one of these. */
+const AFFIRMATIVE_LOCK_STATUS = new Set([
+  "已上锁",
+  "已开锁",
+  "门虚掩",
+  "门未关",
+  "门锁卡住",
+  "正在上锁",
+  "正在开锁",
+  "守护中",
+]);
+
+/**
+ * Map a MIoT `door-state` value-list description to a lock status.
+ * Child-lock / anti-lock entries and unrecognized text return null so the card stays unknown (#149).
+ */
+function interpretLockStatus(description: string): string | null {
+  const lower = description.toLowerCase();
+  if (
+    lower.includes("child") ||
+    lower.includes("童锁") ||
+    lower.includes("反锁") ||
+    lower.includes("anti-lock") ||
+    lower.includes("antilock")
+  ) {
+    return null;
+  }
+  if (
+    lower.includes("unlock") ||
+    lower.includes("已开锁") ||
+    lower.includes("未上锁") ||
+    lower.includes("not locked") ||
+    lower.includes("未锁")
+  ) {
+    return "已开锁";
+  }
+  if (
+    (lower.includes("ajar") || lower.includes("虚掩")) &&
+    !lower.includes("解除") &&
+    !lower.includes("clear") &&
+    !lower.includes("release")
+  ) {
+    return "门虚掩";
+  }
+  if (lower.includes("not closed") || lower.includes("not close") || lower.includes("未关") || lower.includes("没关")) {
+    return "门未关";
+  }
+  if (lower.includes("jam") || lower.includes("卡住")) {
+    return "门锁卡住";
+  }
+  if (lower.includes("locked") || lower.includes("已上锁") || lower.includes("已锁")) {
+    return "已上锁";
+  }
+  return null;
+}
+
 export const MiotSynthesizer = {
   synthesize(
     devices: readonly MiDeviceRecord[],
@@ -1448,6 +1494,10 @@ export const MiotSynthesizer = {
       const roomName = room?.name.trim() || "全屋";
       const roomId = room ? `room_${room.id}` : "other";
 
+      const kind =
+        record.isOnline || built.kind !== "sensor" || !built.statusText || !AFFIRMATIVE_LOCK_STATUS.has(built.statusText)
+          ? built
+          : { ...built, statusText: "锁状态未知" };
       const smartDevice: SmartDevice = {
         id: record.did,
         name: record.name,
@@ -1455,7 +1505,7 @@ export const MiotSynthesizer = {
         roomName,
         model: record.model,
         isOnline: record.isOnline,
-        kind: built,
+        kind,
       };
       smartDevices.push(smartDevice);
 
@@ -2131,7 +2181,17 @@ export const MiotSynthesizer = {
       let statusText: string | null = null;
       if (temp === null && hum === null) {
         if (sName === "lock") {
-          statusText = "守护中";
+          const doorServices = [
+            primaryService,
+            ...spec.services.filter((s) => miotShortName(s.type) === "door"),
+          ];
+          const door = readFirst(doorServices, "door-state");
+          const doorValue = typeof door?.val === "number" ? Math.trunc(door.val) : null;
+          const description =
+            doorValue !== null
+              ? (door?.prop.valueList?.find((item) => item.value === doorValue)?.description ?? null)
+              : null;
+          statusText = (description && interpretLockStatus(description)) || "锁状态未知";
         } else if (sName === "motion-sensor" || sName === "occupancy-sensor") {
           const motion = readProp(primaryService, "motion-state") ?? readProp(primaryService, "occupancy-status");
           const lux = readFirst(

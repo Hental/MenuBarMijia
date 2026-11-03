@@ -95,7 +95,7 @@ S3 door: door-state {1=Locked;2=Unlocked;...} 只读 · S4 battery 只读
 
 1. **`fridge-chamber` 在同一规格出现两次**（siid 3 冷藏 / siid 4 冷冻）——必须按 `siid` 区分，`MiotReader.first` 按名取第一个会让冷冻室镜像冷藏室。
 2. 轮询预算：`getProps` 100 属性/请求分块，浴霸这类 60 属性规格一次拉完；`requiredProps` 从 builder 自动推导，新 builder 无需额外管道。
-3. 传感器类全部只读，适合并入现有 `SensorSpec`（`statusText` 已有先例：门锁守护中）。
+3. 传感器类全部只读，适合并入现有 `SensorSpec`（`statusText` 已有先例：门锁只在读到 `door-state` 时写已上锁/已开锁，否则为「锁状态未知」）。
 4. `television` 开机只有 `ble-control.turn-on`，云端成功率看机型——UI 要按「关机稳、开机看运气」设计。
 
 ## 5. 建议路线
