@@ -12,9 +12,18 @@ extension HomeStore {
         return homeBackend == .xiaomiCloud && miSessionMaskedUserId != nil
     }
 
-    /// The three-step checklist shown by `OnboardingGuideView` (#180).
+    /// Whether an account, token or the demo is configured, connected or not. Once this is true the
+    /// full-screen connect form would be redundant, so onboarding moves to the dashboard checklist.
+    public var hasConfiguredHomeSource: Bool {
+        if homeBackend == .demo { return true }
+        if hasHASource || miSessionMaskedUserId != nil || !miAccounts.isEmpty { return true }
+        if case .connected = connectionStatus { return true }
+        return false
+    }
+
+    /// The three-step checklist shown by the guide and the dashboard card (#180).
     public var onboardingChecklist: OnboardingChecklist {
-        OnboardingChecklist(connectedAccount: hasConnectedHomeSource, milestones: onboardingMilestones)
+        OnboardingChecklist(hasConfiguredSource: hasConfiguredHomeSource, milestones: onboardingMilestones)
     }
 
     /// Marks a step the user actually tried. Idempotent; the set is persisted for the next launch.

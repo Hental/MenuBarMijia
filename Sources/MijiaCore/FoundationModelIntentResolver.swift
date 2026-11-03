@@ -112,7 +112,8 @@ public struct FoundationModelIntentResolver: AssistantCommandResolving {
         _ utterance: String,
         devices: [SmartDevice],
         scenes: [HomeScene],
-        context: AssistantContext
+        context: AssistantContext,
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) async throws -> IntentPlan {
         let availability = Self.availability
         guard availability == .available else {
@@ -145,7 +146,8 @@ public struct FoundationModelIntentResolver: AssistantCommandResolving {
                 reply: response.content.reply,
                 catalog: catalog,
                 devices: devices,
-                scenes: scenes
+                scenes: scenes,
+                confirmation: confirmation
             )
         } catch {
             throw AssistantLocalModelError.failed

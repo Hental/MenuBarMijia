@@ -31,7 +31,7 @@ struct OnboardingChecklistTests {
         #expect(checklist.nextStep == .connectAccount)
         #expect(checklist.completedSteps.isEmpty)
 
-        checklist.connectedAccount = true
+        checklist.hasConfiguredSource = true
         #expect(checklist.isComplete(.connectAccount))
         #expect(checklist.nextStep == .searchDevice)
 
@@ -99,5 +99,108 @@ struct OnboardingChecklistTests {
         #expect(store.undoTurnAllOff() != nil)
         #expect(store.onboardingMilestones.contains(.undidAllOff))
         #expect(store.onboardingChecklist.isComplete(.allOffAndUndo))
+    }
+
+    @Test("The guide hands the dashboard back once a source is configured, and hides only after all three steps")
+    func presentationTransitions() {
+        let fresh = OnboardingChecklist(hasConfiguredSource: false)
+        #expect(OnboardingPresentation.resolve(
+            checklist: fresh, hasCompletedOnboarding: false, isReopened: false
+        ) == .fullGuide)
+
+        let connected = OnboardingChecklist(hasConfiguredSource: true)
+        #expect(OnboardingPresentation.resolve(
+            checklist: connected, hasCompletedOnboarding: false, isReopened: false
+        ) == .dashboardChecklist)
+
+        var partial = connected
+        partial.milestones = [.searchedDevice]
+        #expect(OnboardingPresentation.resolve(
+            checklist: partial, hasCompletedOnboarding: false, isReopened: false
+        ) == .dashboardChecklist)
+        partial.milestones.insert(.turnedAllOff)
+        #expect(OnboardingPresentation.resolve(
+            checklist: partial, hasCompletedOnboarding: false, isReopened: false
+        ) == .dashboardChecklist)
+
+        var complete = connected
+        complete.milestones = [.searchedDevice, .turnedAllOff, .undidAllOff]
+        #expect(OnboardingPresentation.resolve(
+            checklist: complete, hasCompletedOnboarding: false, isReopened: false
+        ) == .hidden)
+        #expect(OnboardingPresentation.resolve(
+            checklist: complete, hasCompletedOnboarding: true, isReopened: false
+        ) == .hidden)
+        // Reopening from Settings reviews the guide without replacing the dashboard.
+        #expect(OnboardingPresentation.resolve(
+            checklist: complete, hasCompletedOnboarding: true, isReopened: true
+        ) == .dashboardChecklist)
+        #expect(OnboardingPresentation.resolve(
+            checklist: fresh, hasCompletedOnboarding: true, isReopened: true
+        ) == .fullGuide)
+        #expect(OnboardingPresentation.resolve(
+            checklist: fresh, hasCompletedOnboarding: true, isReopened: false
+        ) == .hidden)
+    }
+
+    @Test("Connecting swaps the full guide for the dashboard checklist and keeps it until every step is tried")
+    @MainActor
+    func storePresentationAfterConnecting() async throws {
+        let store = HomeStore(
+            provider: MockHomeProvider(snapshot: SynthesizedHome(devices: [], scenes: [])),
+            defaultsSuiteName: "test.onboarding.presentation.\(UUID().uuidString)"
+        )
+        for _ in 0..<50 {
+            if case .connected = store.connectionStatus { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.hasConfiguredHomeSource)
+        #expect(store.onboardingPresentation == .dashboardChecklist)
+        #expect(store.shouldShowOnboarding)
+        #expect(!store.showsFullOnboardingGuide)
+        #expect(store.showsOnboardingChecklist)
+
+        // The remaining lessons survive search and All Off; only the undo completes the third step.
+        store.recordOnboardingMilestone(.searchedDevice)
+        #expect(store.onboardingPresentation == .dashboardChecklist)
+        store.recordOnboardingMilestone(.turnedAllOff)
+        #expect(store.onboardingPresentation == .dashboardChecklist)
+        store.recordOnboardingMilestone(.undidAllOff)
+        #expect(store.onboardingPresentation == .hidden)
+        #expect(!store.shouldShowOnboarding)
+
+        // Reopening while connected shows the checklist, not the full-screen connect form.
+        store.reopenOnboarding()
+        #expect(store.onboardingPresentation == .dashboardChecklist)
+        store.completeOnboarding()
+        #expect(store.onboardingPresentation == .hidden)
+    }
+
+    @Test("Undoing something other than All Off does not tick the All Off lesson")
+    @MainActor
+    func onlyAllOffUndoCounts() async throws {
+        let snapshot = SynthesizedHome(
+            rooms: [RoomArea(id: "living", name: "客厅", sortOrder: 1)],
+            devices: [Self.livingLight],
+            scenes: []
+        )
+        let store = HomeStore(
+            provider: MockHomeProvider(snapshot: snapshot),
+            defaultsSuiteName: "test.onboarding.undo-source.\(UUID().uuidString)"
+        )
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        store.executeQuickAction(.lightsOff)
+        #expect(store.undoBanner != nil)
+        #expect(store.undoBanner?.isAllOff == false)
+        #expect(store.undoTurnAllOff() != nil)
+        #expect(!store.onboardingMilestones.contains(.undidAllOff))
+
+        store.turnAllOff()
+        #expect(store.undoBanner?.isAllOff == true)
+        #expect(store.undoTurnAllOff() != nil)
+        #expect(store.onboardingMilestones.contains(.undidAllOff))
     }
 }

@@ -22,6 +22,8 @@ public struct UndoBanner: Equatable, Sendable {
     public var habitReceipt: UserHabitMemory.RecordingReceipt?
     /// Explicit window for actions outside the panel (automation, #59); nil uses the device-count rule.
     public var duration: TimeInterval?
+    /// True only for 全关, so the onboarding marker records an undo of the all-off lesson (#180).
+    public var isAllOff: Bool
 
     public init(
         id: UUID = UUID(),
@@ -29,7 +31,8 @@ public struct UndoBanner: Equatable, Sendable {
         restoreCommands: [DeviceCommand],
         previousDevices: [SmartDevice],
         habitReceipt: UserHabitMemory.RecordingReceipt? = nil,
-        duration: TimeInterval? = nil
+        duration: TimeInterval? = nil,
+        isAllOff: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -37,6 +40,7 @@ public struct UndoBanner: Equatable, Sendable {
         self.previousDevices = previousDevices
         self.habitReceipt = habitReceipt
         self.duration = duration
+        self.isAllOff = isAllOff
     }
 }
 
@@ -231,13 +235,30 @@ public final class HomeStore {
     /// Transient flag allowing the user to reopen the onboarding guide from Settings at any time.
     public var isShowingOnboarding: Bool = false
 
+    /// Which onboarding surface to draw. The full guide only replaces the dashboard while nothing
+    /// is configured; after connecting, the remaining lessons ride above the dashboard so search and
+    /// All Off/Undo can be tried while the instructions stay visible (#180 review).
+    public var onboardingPresentation: OnboardingPresentation {
+        OnboardingPresentation.resolve(
+            checklist: onboardingChecklist,
+            hasCompletedOnboarding: hasCompletedOnboarding,
+            isReopened: isShowingOnboarding
+        )
+    }
+
+    /// Any onboarding surface is on screen: the full guide or the dashboard checklist.
     public var shouldShowOnboarding: Bool {
-        if isShowingOnboarding { return true }
-        guard !hasCompletedOnboarding, devices.isEmpty else { return false }
-        if case .connected = connectionStatus { return false }
-        let hasMiSession = !miAccounts.isEmpty
-        let hasHAToken = !KeychainHelper.loadToken(defaults: userDefaults).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return !hasMiSession && !hasHAToken
+        onboardingPresentation != .hidden
+    }
+
+    /// The full-screen guide replaces the dashboard. Only true before a source is configured.
+    public var showsFullOnboardingGuide: Bool {
+        onboardingPresentation == .fullGuide
+    }
+
+    /// The compact next-steps card rides above the live dashboard.
+    public var showsOnboardingChecklist: Bool {
+        onboardingPresentation == .dashboardChecklist
     }
 
     public func completeOnboarding() {

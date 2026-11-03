@@ -75,7 +75,7 @@ public struct ControlCenterPanel: View {
     public var body: some View {
         let _ = (store.effectiveLanguage, store.selectedRoomId, store.rooms.count)
         ZStack(alignment: .bottom) {
-            if store.shouldShowOnboarding {
+            if store.showsFullOnboardingGuide {
                 OnboardingGuideView(store: store)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -294,6 +294,18 @@ public struct ControlCenterPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+
+            // #180 review: after connecting, the lessons stay above the dashboard so search and
+            // All Off/Undo can be tried while these instructions are still on screen.
+            if store.showsOnboardingChecklist {
+                OnboardingChecklistCard(
+                    store: store,
+                    onBeginSearch: { withAnimation(AppleMotion.snappySpring) { search.begin() } }
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .transition(AppleMotion.drawerTransition)
+            }
 
             if store.miSessionShowsExpired || store.miSessionExpiringSoonDate != nil {
                 miSessionExpiryBanner

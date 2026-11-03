@@ -10,8 +10,27 @@ public protocol AssistantCommandResolving: Sendable {
         _ utterance: String,
         devices: [SmartDevice],
         scenes: [HomeScene],
-        context: AssistantContext
+        context: AssistantContext,
+        confirmation: ModelActionPolicy.ConfirmationPolicy
     ) async throws -> IntentPlan
+}
+
+public extension AssistantCommandResolving {
+    /// Callers without a confirmation preference (probes, tests) keep the shipped rules.
+    func resolve(
+        _ utterance: String,
+        devices: [SmartDevice],
+        scenes: [HomeScene],
+        context: AssistantContext
+    ) async throws -> IntentPlan {
+        try await resolve(
+            utterance,
+            devices: devices,
+            scenes: scenes,
+            context: context,
+            confirmation: .default
+        )
+    }
 }
 
 // MARK: - On-Device Model Availability
@@ -146,7 +165,8 @@ public enum AssistantLocalPlanMapper {
         reply: String,
         catalog: IntentCatalog,
         devices: [SmartDevice],
-        scenes: [HomeScene]
+        scenes: [HomeScene],
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) -> IntentPlan {
         let chosen: [ChosenAction] = actions.flatMap { action -> [ChosenAction] in
             let target = action.target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -164,7 +184,8 @@ public enum AssistantLocalPlanMapper {
             modelReply: reply,
             catalog: catalog,
             devices: devices,
-            scenes: scenes
+            scenes: scenes,
+            confirmation: confirmation
         )
     }
 }

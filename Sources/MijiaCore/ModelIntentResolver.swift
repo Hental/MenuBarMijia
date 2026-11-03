@@ -536,7 +536,8 @@ public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
             modelReply: modelReply,
             catalog: catalog,
             devices: devices,
-            scenes: scenes
+            scenes: scenes,
+            confirmation: confirmation
         )
     }
 
@@ -549,7 +550,8 @@ public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
         modelReply: String,
         catalog: IntentCatalog,
         devices: [SmartDevice],
-        scenes: [HomeScene]
+        scenes: [HomeScene],
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) -> IntentPlan {
         let decision = ModelActionPolicy.decide(
             devices: devices,
