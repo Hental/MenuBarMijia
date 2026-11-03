@@ -78,11 +78,18 @@ public struct HAEntityState: Equatable, Sendable {
     public let entityId: String
     public var state: String
     public var attributes: [String: JSONValue]
+    public var lastChanged: Date?
 
-    public init(entityId: String, state: String, attributes: [String: JSONValue] = [:]) {
+    public init(
+        entityId: String,
+        state: String,
+        attributes: [String: JSONValue] = [:],
+        lastChanged: Date? = nil
+    ) {
         self.entityId = entityId
         self.state = state
         self.attributes = attributes
+        self.lastChanged = lastChanged
     }
 
     public var isAvailable: Bool {
@@ -180,6 +187,9 @@ public struct SynthesizedHome: Equatable, Sendable {
     public var scenes: [HomeScene]
     /// Homes on the account (empty for backends without the concept).
     public var homes: [HomeOption] = []
+    /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
+    /// close the away gap, because the door may have opened while polling was paused.
+    public var closesAwayGap: Bool = true
 
     public init(
         rooms: [RoomArea] = [],
@@ -236,7 +246,16 @@ public enum DeviceSynthesizer {
             let rawDeviceName = dev.name_by_user ?? dev.name ?? "智能设备"
             let cleanName = cleanDeviceName(rawDeviceName, roomName: roomName, model: model)
 
-            if let built = buildSmartDevice(
+            if let built = applyingSafetyObservations(
+                buildSmartDevice(
+                    deviceId: dev.id,
+                    name: cleanName,
+                    roomId: roomId,
+                    roomName: roomName,
+                    model: model,
+                    entities: devEntities,
+                    states: states
+                ),
                 deviceId: dev.id,
                 name: cleanName,
                 roomId: roomId,
@@ -257,7 +276,7 @@ public enum DeviceSynthesizer {
                     || eid.hasPrefix("fan.") || eid.hasPrefix("vacuum.")
                     || eid.hasPrefix("camera.") || eid.hasPrefix("switch.")
                     || eid.hasPrefix("media_player.") || eid.hasPrefix("sensor.")
-                    || eid.hasPrefix("button.") else { continue }
+                    || eid.hasPrefix("binary_sensor.") || eid.hasPrefix("button.") else { continue }
             let entity = entityById[eid]
             guard entity?.disabled_by == nil, entity?.hidden_by == nil else { continue }
             if let deviceId = entity?.device_id,
@@ -269,13 +288,25 @@ public enum DeviceSynthesizer {
             let roomName = normalizeRoomName(areaNameById[areaId] ?? "全屋")
             let name = entity?.name ?? state.attributes["friendly_name"]?.stringValue
                 ?? entity?.original_name ?? eid
-            if let built = buildSmartDevice(
+            let orphanName = cleanDeviceName(name, roomName: roomName, model: "")
+            let orphanRoomId = normalizedRoomId(for: roomName, fallback: areaId)
+            let orphanEntities = [entity ?? HAEntityEntry(entity_id: eid)]
+            if let built = applyingSafetyObservations(
+                buildSmartDevice(
+                    deviceId: eid,
+                    name: orphanName,
+                    roomId: orphanRoomId,
+                    roomName: roomName,
+                    model: "",
+                    entities: orphanEntities,
+                    states: states
+                ),
                 deviceId: eid,
-                name: cleanDeviceName(name, roomName: roomName, model: ""),
-                roomId: normalizedRoomId(for: roomName, fallback: areaId),
+                name: orphanName,
+                roomId: orphanRoomId,
                 roomName: roomName,
                 model: "",
-                entities: [entity ?? HAEntityEntry(entity_id: eid)],
+                entities: orphanEntities,
                 states: states
             ) {
                 smartDevices.append(built)
@@ -419,6 +450,89 @@ public enum DeviceSynthesizer {
     }
 
     // MARK: - Device Builders
+
+    private static func applyingSafetyObservations(
+        _ built: SmartDevice?,
+        deviceId: String,
+        name: String,
+        roomId: String,
+        roomName: String,
+        model: String,
+        entities: [HAEntityEntry],
+        states: [String: HAEntityState]
+    ) -> SmartDevice? {
+        let observations = safetyObservations(deviceId: deviceId, entities: entities, states: states)
+        if var built {
+            guard case .sensor(var spec) = built.kind else { return built }
+            spec.observations = observations
+            built.kind = .sensor(spec)
+            return built
+        }
+        let safetyEntities = entities.filter { safetyKind(of: $0, states: states) != nil }
+        guard !safetyEntities.isEmpty else { return nil }
+        // A safety sensor keeps its card while offline so its starred offline alert can fire (#199).
+        let isOnline = safetyEntities.contains { states[$0.entity_id]?.isAvailable == true }
+        return SmartDevice(
+            id: deviceId,
+            name: name,
+            roomId: roomId,
+            roomName: roomName,
+            model: model,
+            isOnline: isOnline,
+            kind: .sensor(SensorSpec(observations: observations))
+        )
+    }
+
+    private static func safetyObservations(
+        deviceId: String,
+        entities: [HAEntityEntry],
+        states: [String: HAEntityState]
+    ) -> [SensorObservation] {
+        var observations: [SensorObservation] = []
+        for entity in entities {
+            guard let kind = safetyKind(of: entity, states: states),
+                  let state = states[entity.entity_id] else { continue }
+            let alarming: Bool
+            switch state.state.lowercased() {
+            case "on": alarming = true
+            case "off": alarming = false
+            default: continue
+            }
+            observations.append(SensorObservation(
+                sourceId: "\(deviceId)#\(entity.entity_id)",
+                kind: kind,
+                alarming: alarming,
+                reportedAt: state.lastChanged
+            ))
+        }
+        return observations
+    }
+
+    private static func safetyKind(
+        of entity: HAEntityEntry,
+        states: [String: HAEntityState]
+    ) -> SensorAlertKind? {
+        guard entity.entity_id.hasPrefix("binary_sensor.") else { return nil }
+        if entity.disabled_by != nil || entity.hidden_by != nil { return nil }
+        switch entity.entity_category?.lowercased() {
+        case "config", "diagnostic":
+            return nil
+        default:
+            break
+        }
+        return safetyKind(deviceClass: states[entity.entity_id]?.attributes["device_class"]?.stringValue)
+    }
+
+    private static func safetyKind(deviceClass: String?) -> SensorAlertKind? {
+        switch deviceClass?.lowercased() {
+        case "moisture": .leak
+        case "smoke": .smoke
+        case "gas": .gas
+        case "door", "window", "opening", "garage_door": .contact
+        case "motion", "occupancy", "presence": .motion
+        default: nil
+        }
+    }
 
     private static func buildSmartDevice(
         deviceId: String,
@@ -1022,17 +1136,6 @@ public enum DeviceSynthesizer {
     }
 
     private static func kindPriority(_ kind: DeviceKind) -> Int {
-        switch kind {
-        case .climate: return 1
-        case .light: return 2
-        case .plug: return 3
-        case .fan: return 4
-        case .vacuum: return 5
-        case .fridge: return 6
-        case .speaker: return 7
-        case .tv: return 8
-        case .camera: return 9
-        case .sensor: return 10
-        }
+        kind.tag.rank
     }
 }

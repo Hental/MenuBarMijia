@@ -15,7 +15,9 @@ import {
   type HabitDayType,
   assistantEndpointIdentity,
   buildAssistantContext,
-  buildHabitSummary,
+  decodeHabitOperation,
+  resolveHabitSharing,
+  shareHabitSentence,
   buildSystemOneRequestBody,
   buildTimeSummary,
   deviceHeadInstruction,
@@ -2255,30 +2257,46 @@ describe("assistant ambient context (#38)", () => {
     assert.equal(buildTimeSummary(new Date(2026, 9, 27, 23, 5)), "深夜 23:05");
   });
 
-  it("summarizes sensors, running devices and learned phrases", () => {
+  it("summarizes sensors, running devices and named habit titles", () => {
     const context = buildAssistantContext({
       now: new Date(2026, 9, 27, 15, 30),
       readings: [{ id: "sensor.living", label: "客厅温湿度计", roomName: "客厅", temperature: 26.5, humidity: 58, battery: 94 }],
       devices: [light, offLight, sensor],
-      habitSummary: buildHabitSummary(true, [{ phrase: "有点热", reply: "已将主卧空调设为 25°C" }]),
+      scenes: [],
+      sharing: "on",
+      memory: { entries: [] },
+      phrases: [{ phrase: "有点热", intents: [{ targetId: "lamp", operation: { kind: "power", isOn: false } }] }],
+      mention: { kind: "utterance", text: "关闭客厅吸顶灯" },
     });
     assert.equal(context.timeSummary, "下午 15:30");
     assert.equal(context.environmentSummary, "客厅 26.5°C 58%");
     assert.equal(context.activeDevicesSummary, "客厅吸顶灯(开 亮度60% 当前:Day 可用模式:Day/Night)");
-    assert.equal(context.habitSummary, "个人口头禅：「有点热」→已将主卧空调设为 25°C");
+    assert.equal(context.habitSummary, "个人口头禅：「有点热」→关闭客厅吸顶灯");
   });
 
-  it("says the whole home is off and sends no habits when learning is disabled", () => {
+  it("says the whole home is off and sends no habits when sharing is off", () => {
     const context = buildAssistantContext({
       now: new Date(2026, 9, 27, 15, 30),
       readings: [],
       devices: [offLight],
-      habitSummary: buildHabitSummary(false, [{ phrase: "有点热", reply: "开空调" }]),
+      scenes: [],
+      sharing: "off",
+      memory: { entries: [] },
+      phrases: [{ phrase: "有点热", intents: [{ targetId: "lamp-off", operation: { kind: "power", isOn: true } }] }],
+      mention: { kind: "utterance", text: "打开书房台灯" },
     });
     assert.equal(context.activeDevicesSummary, "全屋设备均关闭");
     assert.equal(context.environmentSummary, "");
     assert.equal(context.habitSummary, "");
-    assert.equal(buildHabitSummary(true, []), "");
+    assert.equal(shareHabitSentence({
+      sharing: "on",
+      memory: { entries: [] },
+      phrases: [],
+      devices: [offLight],
+      scenes: [],
+      mention: { kind: "utterance", text: "打开书房台灯" },
+      now: new Date(2026, 9, 27, 15, 30),
+    }), "");
   });
 });
 
@@ -2533,6 +2551,17 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
       sequencesBefore: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>;
       expected: Array<Array<{ targetId: string; kind: string; value: unknown }>>;
     }>;
+    shareCases: Array<{
+      name: string;
+      sharing: "on" | "off";
+      utterance: string;
+      date: string;
+      hour: number;
+      deviceIds: string[];
+      entries: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string; ageDays?: number }>;
+      phrases?: Array<{ phrase: string; targets: Array<{ targetId: string; operationKey: string }> }>;
+      expected: string;
+    }>;
   };
 
   const toIntent = (item: { targetId: string; kind: string; value: unknown }): DeviceIntent => {
@@ -2706,6 +2735,33 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
         item.name,
       );
     }
+
+    for (const item of corpus.shareCases) {
+      const now = caseDate(item.date, item.hour);
+      const devices = item.deviceIds.map((id) => {
+        const dev = corpus.devices.find((d) => d.id === id);
+        assert.ok(dev, `${item.name}: unknown device ${id}`);
+        return dev;
+      });
+      const phrases = (item.phrases ?? []).map((phrase) => ({
+        phrase: phrase.phrase,
+        intents: phrase.targets.map((target) => {
+          const operation = decodeHabitOperation(target.operationKey);
+          assert.ok(operation, `${item.name}: unknown operation ${target.operationKey}`);
+          return { targetId: target.targetId, operation };
+        }),
+      }));
+      const sentence = shareHabitSentence({
+        sharing: item.sharing,
+        memory: memoryFrom(item.entries, now),
+        phrases,
+        devices,
+        scenes: [],
+        mention: { kind: "utterance", text: item.utterance },
+        now,
+      });
+      assert.equal(sentence, item.expected, item.name);
+    }
   });
 });
 
@@ -2756,6 +2812,11 @@ describe("Proactive suggestion resolver (#113)", () => {
     now: new Date(2026, 9, 16, 21, 30),
     readings: [{ id: "r1", label: "温湿度计", roomName: "客厅", temperature: 29.5, humidity: 60, battery: null }],
     devices,
+    scenes: [],
+    sharing: "off",
+    memory: { entries: [] },
+    phrases: [],
+    mention: { kind: "none" },
   });
 
   it("builds the proactive chat prompt and parses ranked suggestions", async () => {
@@ -2853,15 +2914,231 @@ describe("Habit-aware ambient summary (#113)", () => {
     const memory = new UserHabitMemory([
       { bucket: "夜晚", targetId: "dev_ceiling", operationKey: "power:off", count: 3 },
     ]);
-    const summary = buildHabitSummary(
-      true,
-      [{ phrase: "有点热", reply: "已将主卧空调设为 25°C" }],
+    const summary = shareHabitSentence({
+      sharing: "on",
       memory,
-      [light],
-      [],
-      new Date(2026, 9, 16, 21, 30),
-    );
-    assert.match(summary, /^夜晚常做：关闭客厅吸顶灯\(3次\)。个人口头禅：/);
+      phrases: [{ phrase: "有点热", intents: [] }],
+      devices: [light],
+      scenes: [],
+      mention: { kind: "utterance", text: "关闭客厅吸顶灯" },
+      now: new Date(2026, 9, 16, 21, 30),
+    });
+    assert.equal(summary, "夜晚常做：关闭客厅吸顶灯(3次)");
+  });
+});
+
+describe("Habit share sentence", () => {
+  function lamp(id: string, name: string, room: string): SmartDevice {
+    return {
+      id,
+      name,
+      roomId: room,
+      roomName: room,
+      model: "test.light",
+      isOnline: true,
+      kind: {
+        kind: "light",
+        entityId: `light.${id}`,
+        isOn: false,
+        brightnessPercent: null,
+        colorTempKelvin: null,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [],
+      },
+    };
+  }
+
+  const ceiling = lamp("dev_ceiling", "客厅吸顶灯", "客厅");
+  const study = lamp("dev_study", "书房台灯", "书房");
+  const ac = lamp("dev_ac", "客厅空调", "客厅");
+  const devices = [ceiling, study, ac];
+  const now = new Date(2026, 9, 16, 21, 30);
+  const entries = [
+    { bucket: "夜晚", targetId: "dev_missing", operationKey: "power:off", count: 3 },
+    { bucket: "夜晚", targetId: "dev_ceiling", operationKey: "power:off", count: 3 },
+    { bucket: "夜晚", targetId: "dev_study", operationKey: "power:on", count: 3 },
+    { bucket: "夜晚", targetId: "dev_ac", operationKey: "power:on", count: 3 },
+  ];
+
+  function sentence(mention: { kind: "none" } | { kind: "utterance"; text: string }, extra: {
+    sharing?: "off" | "on";
+    memory?: { entries: typeof entries; sequences?: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>; lastAction?: { targetId: string; operationKey: string; recordedAtMs: number } | null };
+    phrases?: Array<{ phrase: string; intents: DeviceIntent[] }>;
+    devices?: SmartDevice[];
+    now?: Date;
+  } = {}) {
+    return shareHabitSentence({
+      sharing: extra.sharing ?? "on",
+      memory: extra.memory ?? { entries },
+      phrases: extra.phrases ?? [],
+      devices: extra.devices ?? devices,
+      scenes: [],
+      mention,
+      now: extra.now ?? now,
+    });
+  }
+
+  it("resolves a missing or non-boolean flag to off and persists it", () => {
+    assert.deepEqual(resolveHabitSharing(undefined), { sharing: "off", persistOff: true });
+    assert.deepEqual(resolveHabitSharing(null), { sharing: "off", persistOff: true });
+    assert.deepEqual(resolveHabitSharing("yes"), { sharing: "off", persistOff: true });
+    assert.deepEqual(resolveHabitSharing(false), { sharing: "off", persistOff: false });
+    assert.deepEqual(resolveHabitSharing(true), { sharing: "on", persistOff: false });
+  });
+
+  it("sends the coarse sentence only for devices the command names", () => {
+    assert.equal(sentence({ kind: "utterance", text: "关闭客厅吸顶灯" }, { sharing: "off" }), "");
+    assert.equal(sentence({ kind: "none" }), "");
+    assert.equal(sentence({ kind: "utterance", text: "   " }), "");
+
+    const ceilingOnly = sentence({ kind: "utterance", text: "关闭客厅吸顶灯" });
+    assert.equal(ceilingOnly, "夜晚常做：关闭客厅吸顶灯(3次)");
+    assert.match(ceilingOnly, /夜晚常做：/);
+    assert.match(ceilingOnly, /关闭客厅吸顶灯\(3次\)/);
+    assert.equal(ceilingOnly.includes("书房"), false);
+    assert.equal(ceilingOnly.includes("21:30"), false);
+    assert.equal(ceilingOnly.includes("dev_"), false);
+
+    const studyRoom = sentence({ kind: "utterance", text: "书房有点热" });
+    assert.equal(studyRoom, "夜晚常做：打开书房台灯(3次)");
+    assert.match(studyRoom, /打开书房台灯/);
+    assert.equal(studyRoom.includes("客厅"), false);
+
+    const acOnly = sentence({ kind: "utterance", text: "打开空调" });
+    assert.equal(acOnly, "夜晚常做：打开客厅空调(3次)");
+    assert.match(acOnly, /打开客厅空调/);
+    assert.equal(acOnly.includes("吸顶灯"), false);
+    assert.equal(acOnly.includes("台灯"), false);
+
+    assert.equal(sentence({ kind: "utterance", text: "全屋关灯" }), "");
+
+    const both = sentence({ kind: "utterance", text: "关闭客厅吸顶灯打开书房台灯" });
+    assert.equal(both, "夜晚常做：关闭客厅吸顶灯(3次)、打开书房台灯(3次)");
+    assert.match(both, /关闭客厅吸顶灯/);
+    assert.match(both, /打开书房台灯/);
+    assert.equal(both.includes("dev_"), false);
+    assert.equal(both.includes("21:30"), false);
+  });
+
+  it("keeps every occurrence of a repeated device name reserved", () => {
+    const repeated = sentence({ kind: "utterance", text: "客厅吸顶灯能不能把客厅吸顶灯调暗一点" });
+    assert.equal(repeated, "夜晚常做：关闭客厅吸顶灯(3次)");
+    assert.equal(repeated.includes("空调"), false);
+  });
+
+  it("does not treat a shared room-stripped base as a needle", () => {
+    const living = lamp("living_lamp", "客厅台灯", "客厅");
+    const studyLamp = lamp("study_lamp", "书房台灯", "书房");
+    const text = sentence({ kind: "utterance", text: "打开台灯" }, {
+      devices: [living, studyLamp],
+      memory: {
+        entries: [
+          { bucket: "夜晚", targetId: "living_lamp", operationKey: "power:on", count: 3 },
+          { bucket: "夜晚", targetId: "study_lamp", operationKey: "power:on", count: 3 },
+        ],
+      },
+    });
+    assert.equal(text, "");
+  });
+
+  it("arrows a phrase at the title and skips empty targets", () => {
+    const phrases = [
+      { phrase: "看书", intents: [{ targetId: "dev_study", operation: { kind: "power" as const, isOn: true } }] },
+      { phrase: "空目标", intents: [] },
+    ];
+    const named = sentence({ kind: "utterance", text: "打开书房台灯" }, { phrases });
+    assert.equal(named, "夜晚常做：打开书房台灯(3次)。个人口头禅：「看书」→打开书房台灯");
+    assert.equal(named.includes("空目标"), false);
+
+    const room = sentence({ kind: "utterance", text: "书房有点热" }, { phrases });
+    assert.match(room, /个人口头禅：「看书」→打开书房台灯/);
+    assert.match(room, /打开书房台灯/);
+    assert.equal(room.includes("客厅"), false);
+    assert.equal(room.includes("空目标"), false);
+
+    const other = sentence({ kind: "utterance", text: "关闭客厅吸顶灯" }, { phrases });
+    assert.equal(other.includes("看书"), false);
+    assert.equal(other.includes("空目标"), false);
+  });
+
+  it("includes a sequence only when both ends are named inside the hour", () => {
+    const inside = sentence({ kind: "utterance", text: "关闭客厅吸顶灯打开书房台灯" }, {
+      memory: {
+        entries,
+        sequences: [{ afterKey: "dev_study|power:on", targetId: "dev_ceiling", operationKey: "power:off", count: 2 }],
+        lastAction: { targetId: "dev_study", operationKey: "power:on", recordedAtMs: now.getTime() - 30 * 60 * 1000 },
+      },
+    });
+    assert.equal(inside, "夜晚常做：关闭客厅吸顶灯(3次)、打开书房台灯(3次)。刚做完打开书房台灯后常做：关闭客厅吸顶灯(2次)");
+    assert.match(inside, /刚做完打开书房台灯后常做：关闭客厅吸顶灯\(2次\)/);
+
+    const studyOnly = sentence({ kind: "utterance", text: "打开书房台灯" }, {
+      memory: {
+        entries,
+        sequences: [{ afterKey: "dev_study|power:on", targetId: "dev_ceiling", operationKey: "power:off", count: 2 }],
+        lastAction: { targetId: "dev_study", operationKey: "power:on", recordedAtMs: now.getTime() - 30 * 60 * 1000 },
+      },
+    });
+    assert.equal(studyOnly.includes("刚做完"), false);
+    const ceilingOnly = sentence({ kind: "utterance", text: "关闭客厅吸顶灯" }, {
+      memory: {
+        entries,
+        sequences: [{ afterKey: "dev_study|power:on", targetId: "dev_ceiling", operationKey: "power:off", count: 2 }],
+        lastAction: { targetId: "dev_study", operationKey: "power:on", recordedAtMs: now.getTime() - 30 * 60 * 1000 },
+      },
+    });
+    assert.equal(ceilingOnly.includes("刚做完"), false);
+
+    const stale = sentence({ kind: "utterance", text: "关闭客厅吸顶灯打开书房台灯" }, {
+      memory: {
+        entries,
+        sequences: [{ afterKey: "dev_study|power:on", targetId: "dev_ceiling", operationKey: "power:off", count: 2 }],
+        lastAction: { targetId: "dev_study", operationKey: "power:on", recordedAtMs: now.getTime() - 61 * 60 * 1000 },
+      },
+    });
+    assert.equal(stale, "夜晚常做：关闭客厅吸顶灯(3次)、打开书房台灯(3次)");
+    assert.equal(stale.includes("刚做完"), false);
+  });
+
+  it("puts the same sentence on assistant context and keeps the clock for a nameless mention", () => {
+    const mention = { kind: "utterance" as const, text: "关闭客厅吸顶灯" };
+    const memory = { entries };
+    const direct = shareHabitSentence({
+      sharing: "on",
+      memory,
+      phrases: [],
+      devices,
+      scenes: [],
+      mention,
+      now,
+    });
+    const context = buildAssistantContext({
+      now,
+      readings: [],
+      devices,
+      scenes: [],
+      sharing: "on",
+      memory,
+      phrases: [],
+      mention,
+    });
+    assert.equal(context.habitSummary, direct);
+    assert.equal(direct, "夜晚常做：关闭客厅吸顶灯(3次)");
+
+    const idle = buildAssistantContext({
+      now,
+      readings: [],
+      devices,
+      scenes: [],
+      sharing: "on",
+      memory,
+      phrases: [],
+      mention: { kind: "none" },
+    });
+    assert.equal(idle.habitSummary, "");
+    assert.match(idle.timeSummary, /21:30/);
   });
 });
 

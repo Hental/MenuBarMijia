@@ -9,11 +9,24 @@ extension HomeStore {
     /// low-draw infrastructure quiet while a coffee machine or heater still alerts after 45 min.
     static let longRunningPlugMinimumWatts: Double = 300
     static let lowBatteryAlertedAtKey = "safety_low_battery_alerted_at_v1"
+    static let sensorEdgeKey = "safety_sensor_edge_v1"
+    static let sensorAlertsOnlyWhenAwayKey = "safety_alert_only_when_away_v1"
 
     static func loadLowBatteryAlertedAt(from defaults: UserDefaults) -> [String: Date] {
         let stored = defaults.dictionary(forKey: Self.lowBatteryAlertedAtKey) ?? [:]
         return stored.compactMapValues { ($0 as? NSNumber)?.doubleValue }
             .mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    static func loadSensorEdge(from defaults: UserDefaults) -> [String: Bool] {
+        guard let stored = defaults.dictionary(forKey: sensorEdgeKey) else { return [:] }
+        var edge: [String: Bool] = [:]
+        for (key, value) in stored {
+            if let number = value as? NSNumber {
+                edge[key] = number.boolValue
+            }
+        }
+        return edge
     }
 
     /// Remembers the 24 h low-battery cooldown across launches (#35).
@@ -22,6 +35,31 @@ extension HomeStore {
             lowBatteryAlertedAt.mapValues { $0.timeIntervalSince1970 },
             forKey: Self.lowBatteryAlertedAtKey
         )
+    }
+
+    private func persistSensorEdge() {
+        userDefaults.set(sensorEdge, forKey: Self.sensorEdgeKey)
+    }
+
+    public func isSensorAlertEnabled(_ kind: SensorAlertKind) -> Bool {
+        sensorAlertPreferences[kind] ?? kind.enabledByDefault
+    }
+
+    public func setSensorAlertEnabled(_ kind: SensorAlertKind, _ enabled: Bool) {
+        sensorAlertPreferences[kind] = enabled
+        userDefaults.set(enabled, forKey: kind.defaultsKey)
+    }
+
+    public var menuBarShowsHazard: Bool {
+        guard enableSafetyAlerts else { return false }
+        for device in devices {
+            guard case .sensor(let spec) = device.kind else { continue }
+            for observation in spec.observations
+            where observation.alarming && observation.kind.colorsMenuBar && isSensorAlertEnabled(observation.kind) {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - SafetyAlert Evaluation Engine
@@ -116,6 +154,24 @@ extension HomeStore {
                 longRunAlertedForSession.remove(dev.id)
             }
         }
+
+        let enabled = Dictionary(uniqueKeysWithValues: SensorAlertKind.allCases.map { ($0, isSensorAlertEnabled($0)) })
+        let evaluated = SensorAlerts.evaluate(
+            devices: devices,
+            ledger: sensorEdge,
+            now: now,
+            calendar: .current,
+            policy: SensorAlertPolicy(
+                enabled: enabled,
+                onlyWhenAway: sensorAlertsOnlyWhenAway,
+                includesAway: awayGap.includesAway
+            )
+        )
+        if evaluated.ledger != sensorEdge {
+            sensorEdge = evaluated.ledger
+            persistSensorEdge()
+        }
+        emitted.append(contentsOf: evaluated.alerts)
 
         previousOnlineDeviceIds = Set(devices.filter(\.isOnline).map(\.id))
         return emitted

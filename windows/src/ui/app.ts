@@ -11,7 +11,8 @@ import {
   UndoPhrase,
   UserHabitMemory,
   buildAssistantContext,
-  buildHabitSummary,
+  resolveHabitSharing,
+  shareHabitSentence,
   habitActionable,
   inferAssistantPreset,
   assistantEndpointIdentity,
@@ -146,6 +147,14 @@ import {
   temperatureSymbol,
   toCelsius,
 } from "../core/temperature.js";
+import {
+  KIND_CHIP,
+  filterByListCut,
+  kindChips,
+  showsKindRow,
+  type DeviceKindTag,
+  type DeviceListCut,
+} from "./listCut.js";
 
 declare global {
   interface Window {
@@ -209,6 +218,7 @@ interface PersistedSettings {
   allOffOverrides: Record<string, boolean>;
   assistantModel: string;
   habitLearningEnabled: boolean;
+  habitShareEnabled: boolean;
   learnedShortcuts: LearnedShortcut[];
   /** Time-bucket habit entries learned from manual card actions and local commands (#113). */
   habitEntries: HabitEntry[];
@@ -567,6 +577,10 @@ function loadSettings(): LoadedSettings {
       const mode: ConnectionMode = parsed.connectionMode === "demo" || parsed.connectionMode === "xiaomiCloud" || parsed.connectionMode === "homeAssistant"
         ? parsed.connectionMode
         : miSession ? "xiaomiCloud" : "demo";
+      const habitShare = resolveHabitSharing(parsed.habitShareEnabled);
+      if (habitShare.persistOff) {
+        writeSettingsForStorage({ ...parsed, habitShareEnabled: false });
+      }
       return {
         settings: {
           connectionMode: mode,
@@ -595,6 +609,7 @@ function loadSettings(): LoadedSettings {
               : {},
           assistantModel: parsed.assistantModel ?? "~typesafe/jev-latest",
           habitLearningEnabled: parsed.habitLearningEnabled ?? true,
+          habitShareEnabled: habitShare.sharing === "on",
           learnedShortcuts: parsed.learnedShortcuts ?? [],
           habitEntries: Array.isArray(parsed.habitEntries)
             ? parsed.habitEntries.filter(
@@ -671,6 +686,7 @@ function loadSettings(): LoadedSettings {
       allOffOverrides: {},
       assistantModel: "~typesafe/jev-latest",
       habitLearningEnabled: true,
+      habitShareEnabled: false,
       learnedShortcuts: [],
       habitEntries: [],
       hasCompletedOnboarding: false,
@@ -699,7 +715,7 @@ function loadSettings(): LoadedSettings {
 }
 
 /** Writes settings without credentials; secrets belong to the Windows Credential Manager (#28). */
-function writeSettingsForStorage(settings: PersistedSettings): void {
+function writeSettingsForStorage(settings: object): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeSettingsForStorage(settings)));
   } catch {
@@ -810,7 +826,38 @@ export class MenuMijiaWindowsApp {
   private devices: SmartDevice[];
   private scenes: HomeScene[];
   private environmentReadings: EnvironmentReading[] = [];
-  private selectedRoom = "全部";
+  private listCut: DeviceListCut = { kind: "all" };
+
+  private get selectedRoom(): string {
+    return this.listCut.kind === "room" ? this.listCut.roomName : "全部";
+  }
+
+  private set selectedRoom(room: string) {
+    this.listCut = !room || room === "全部"
+      ? { kind: "all" }
+      : { kind: "room", roomName: room };
+  }
+
+  private selectDeviceKind(tag: DeviceKindTag): void {
+    this.listCut = { kind: "deviceKind", tag };
+  }
+
+  private kindTagFromDataset(value: string | undefined): DeviceKindTag | null {
+    switch (value) {
+      case "climate":
+      case "light":
+      case "plug":
+      case "fan":
+      case "vacuum":
+      case "fridge":
+      case "camera":
+      case "sensor":
+        return value;
+      default:
+        return null;
+    }
+  }
+
   private expandedDeviceId: string | null = null;
   private isShowingAssistantBar = true;
   private activeSheet: "none" | "onboarding" | "settings" = "none";
@@ -1343,11 +1390,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private get filteredDevices(): SmartDevice[] {
-    return this.devices.filter((dev) => {
-      if (this.settings.hideOfflineDevices && !dev.isOnline) return false;
-      if (this.selectedRoom === "全部") return true;
-      return dev.roomName === this.selectedRoom;
-    });
+    return filterByListCut(this.devices, this.listCut, this.settings.hideOfflineDevices);
   }
 
   private get activeDeviceCount(): number {
@@ -1630,9 +1673,16 @@ export class MenuMijiaWindowsApp {
   }
 
   private cloudPanelStructureFingerprint(): string {
+    const kindChipsForPanel = kindChips(
+      this.devices,
+      this.listCut,
+      this.settings.hideOfflineDevices,
+    );
     return JSON.stringify({
       homes: this.homes,
       scenes: this.scenes,
+      kindChips: kindChipsForPanel,
+      kindRowVisible: showsKindRow(kindChipsForPanel, this.listCut),
       allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
       devices: this.devices.map((device) => {
         const kind = device.kind;
@@ -1802,6 +1852,26 @@ export class MenuMijiaWindowsApp {
     return allOffTargets(this.filteredDevices, this.settings.allOffOverrides);
   }
 
+  private renderKindBar(): string {
+    const chips = kindChips(this.devices, this.listCut, this.settings.hideOfflineDevices);
+    if (!showsKindRow(chips, this.listCut)) return "";
+    const buttons = chips.map((tag) => {
+      const chip = KIND_CHIP[tag];
+      const active = this.listCut.kind === "deviceKind" && this.listCut.tag === tag;
+      const hint = chip.hint ? ` title="${this.escapeHtml(t(chip.hint))}"` : "";
+      return `<button class="cc-room-pill${active ? " is-active" : ""}" data-kind="${tag}" aria-pressed="${active}"${hint}>${this.escapeHtml(t(chip.title))}</button>`;
+    }).join("");
+    return `<div class="cc-room-bar"><div class="cc-room-track"><div class="cc-room-scroll">${buttons}</div></div></div>`;
+  }
+
+  private allOffButtonText(count: number): string {
+    if (this.listCut.kind === "all") return `${t("全关")} (${count})`;
+    const scope = this.listCut.kind === "room"
+      ? this.listCut.roomName
+      : t(KIND_CHIP[this.listCut.tag].title);
+    return `${t("全关·{room}", { room: this.escapeHtml(scope) })} (${count})`;
+  }
+
   private renderAllOffControl(): string {
     if (this.isEditingLayout) return `<button class="cc-all-off-pill is-done" id="btn-done-editing" aria-label="${t("完成布局编辑")}">${t("完成")}</button>`;
     const count = this.allOffTargets.length;
@@ -1809,7 +1879,7 @@ export class MenuMijiaWindowsApp {
     return `<button class="cc-all-off-pill is-hold" id="btn-all-off" title="${t("按住 0.6 秒关闭这 {count} 台（插座、扫地机默认不参与，可在设置里调整）", { count })}" aria-label="${t("全关，关闭 {count} 台设备，按住 0.6 秒确认", { count })}">
       <span class="cc-hold-fill"></span>
       ${SF_ICONS.power}
-      <span>${this.selectedRoom === "全部" ? t("全关") : t("全关·{room}", { room: this.escapeHtml(this.selectedRoom) })} (${count})</span>
+      <span>${this.allOffButtonText(count)}</span>
     </button>`;
   }
 
@@ -1965,13 +2035,14 @@ export class MenuMijiaWindowsApp {
           now: new Date(),
           readings,
           devices: aliasedDevices,
-          habitSummary: buildHabitSummary(
-            this.settings.habitLearningEnabled,
-            this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-            this.devices,
-            this.scenes,
-          ),
+          scenes: this.scenes,
+          sharing: this.settings.habitShareEnabled ? "on" : "off",
+          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+            phrase: shortcut.phrase,
+            intents: shortcut.intents,
+          })),
+          mention: { kind: "utterance", text: trimmed },
         });
         plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
         if (sourceRevision !== this.sourceRevision) return;
@@ -2511,13 +2582,14 @@ export class MenuMijiaWindowsApp {
           now: new Date(),
           readings: this.computedEnvironmentReadings,
           devices: this.devices,
-          habitSummary: buildHabitSummary(
-            this.settings.habitLearningEnabled,
-            this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-            this.devices,
-            this.scenes,
-          ),
+          scenes: this.scenes,
+          sharing: this.settings.habitShareEnabled ? "on" : "off",
+          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+            phrase: shortcut.phrase,
+            intents: shortcut.intents,
+          })),
+          mention: { kind: "none" },
         }),
       )
       .then((suggestions) => {
@@ -3308,15 +3380,18 @@ export class MenuMijiaWindowsApp {
           <div class="cc-room-scroll">
             ${this.rooms
               .map(
-                (room) => `
+                (room) => {
+                  const pressed = room === "全部" ? this.listCut.kind === "all" : this.selectedRoom === room;
+                  return `
               <button
-                class="cc-room-pill ${this.selectedRoom === room ? "is-active" : ""}"
+                class="cc-room-pill ${pressed ? "is-active" : ""}"
                 data-room="${this.escapeHtml(room)}"
-                aria-pressed="${this.selectedRoom === room}"
+                aria-pressed="${pressed}"
               >
                 ${this.escapeHtml(room === "全部" ? t("全部") : room)}
               </button>
-            `,
+            `;
+                },
               )
               .join("")}
           </div>
@@ -3342,6 +3417,7 @@ export class MenuMijiaWindowsApp {
           </button>
           </div>
         </div>
+        ${this.renderKindBar()}
 
         <div class="cc-divider"></div>
 
@@ -3496,13 +3572,17 @@ export class MenuMijiaWindowsApp {
       `;
     }
 
-    if (this.settings.hideOfflineDevices && this.devices.length > 0 && this.filteredDevices.length === 0) {
+    if (this.devices.length > 0 && this.filteredDevices.length === 0 && (this.settings.hideOfflineDevices || this.listCut.kind === "deviceKind")) {
+      const title = this.listCut.kind === "deviceKind"
+        ? (this.settings.hideOfflineDevices ? t("这一类暂无通电在线的设备") : t("这一类暂无设备"))
+        : t("该房间暂无通电在线的设备");
+      const offlineButton = this.settings.hideOfflineDevices
+        ? `<div class="cc-empty-actions"><button class="cc-btn-secondary" id="btn-show-offline">${t("显示离线设备")}</button></div>`
+        : "";
       return `
         <div class="cc-empty-state">
-          <div class="cc-empty-title">${t("该房间暂无通电在线的设备")}</div>
-          <div class="cc-empty-actions">
-            <button class="cc-btn-secondary" id="btn-show-offline">${t("显示离线设备")}</button>
-          </div>
+          <div class="cc-empty-title">${title}</div>
+          ${offlineButton}
         </div>
       `;
     }
@@ -5121,6 +5201,13 @@ export class MenuMijiaWindowsApp {
               <input type="checkbox" id="settings-habit" ${this.settings.habitLearningEnabled ? "checked" : ""} />
               <span>${t("自动记住自然语言习惯（相同表达下次 0ms 本地直达）")}</span>
             </label>
+            <label class="cc-checkbox">
+              <input type="checkbox" id="settings-habit-share" ${this.settings.habitShareEnabled ? "checked" : ""} />
+              <span>${t("发送习惯摘要（只包含这句话点名的设备）")}</span>
+            </label>
+            <label>${t("预览这句话会发送的习惯摘要")}</label>
+            <input id="settings-habit-share-sample" class="cc-input" type="text" />
+            <div id="settings-habit-share-preview">${t("不会发送习惯摘要")}</div>
             ${
               this.settings.learnedShortcuts.length > 0
                 ? `<div class="cc-timers-stack">
@@ -5628,6 +5715,18 @@ export class MenuMijiaWindowsApp {
         this.expandedDeviceId = null;
         this.render();
         this.root.querySelector(".cc-room-pill.is-active")?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+      });
+    });
+
+    this.root.querySelectorAll<HTMLElement>("[data-kind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tag = this.kindTagFromDataset(btn.dataset.kind);
+        if (!tag) return;
+        this.selectDeviceKind(tag);
+        this.animateEntrance = true;
+        this.expandedDeviceId = null;
+        this.render();
+        this.root.querySelector(`[data-kind="${tag}"]`)?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
       });
     });
 
@@ -6141,6 +6240,29 @@ export class MenuMijiaWindowsApp {
       if (apiKeyEl) this.syncKeyFieldWithEndpoint(apiKeyEl, target.value);
     });
 
+    const refreshHabitSharePreview = () => {
+      const shareEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share");
+      const sampleEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share-sample");
+      const preview = this.root.querySelector<HTMLElement>("#settings-habit-share-preview");
+      if (!shareEl || !sampleEl || !preview) return;
+      const sentence = shareHabitSentence({
+        sharing: shareEl.checked ? "on" : "off",
+        memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+        phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+          phrase: shortcut.phrase,
+          intents: shortcut.intents,
+        })),
+        devices: withAliases(this.layout, this.devices),
+        scenes: this.scenes,
+        mention: { kind: "utterance", text: sampleEl.value },
+        now: new Date(),
+      });
+      preview.textContent = sentence.length > 0 ? sentence : t("不会发送习惯摘要");
+    };
+    this.root.querySelector("#settings-habit-share")?.addEventListener("change", refreshHabitSharePreview);
+    this.root.querySelector("#settings-habit-share-sample")?.addEventListener("input", refreshHabitSharePreview);
+    refreshHabitSharePreview();
+
     this.root.querySelector("#btn-save-settings")?.addEventListener("click", () => {
       const baseEl = this.root.querySelector<HTMLInputElement>("#settings-base-url");
       const apiKeyEl = this.root.querySelector<HTMLInputElement>("#settings-api-key");
@@ -6181,6 +6303,8 @@ export class MenuMijiaWindowsApp {
       const fallbackModel = inferredPreset.defaultModel || "gpt-4o-mini";
       if (modelEl) this.settings.assistantModel = modelEl.value.trim() || fallbackModel;
       if (habitEl) this.settings.habitLearningEnabled = habitEl.checked;
+      const habitShareEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share");
+      if (habitShareEl) this.settings.habitShareEnabled = habitShareEl.checked;
       this.saveSettings(true);
       if (this.settings.connectionMode === "homeAssistant") void this.refreshHADevices();
       this.activeSheet = "none";

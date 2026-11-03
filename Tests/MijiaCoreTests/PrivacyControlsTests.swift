@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import MijiaCore
 
-/// 方案 v1 第 4 步：习惯记忆可查看、可单条删除、可关闭；关闭后不学习也不发给 AI。
 struct PrivacyControlsTests {
     static let ceiling = AssistantScheduleTests.ceiling
 
@@ -25,7 +24,7 @@ struct PrivacyControlsTests {
         #expect(memory.phrases.isEmpty)
     }
 
-    @Test("Turning habit learning off stops recording and keeps habits out of the AI prompt")
+    @Test("Turning habit learning off stops recording; sharing, not learning, sends the summary")
     @MainActor
     func learningSwitch() async throws {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.ceiling], scenes: []))
@@ -34,14 +33,18 @@ struct PrivacyControlsTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(store.isHabitLearningEnabled)
+        #expect(store.habitSharing == .off)
         _ = await store.runAssistantCommand("关闭书房吸顶灯")
         #expect(store.userHabitMemory.entries.count == 1)
-        #expect(!store.buildAssistantContext().habitSummary.isEmpty)
+        #expect(store.buildAssistantContext(mention: .utterance("关闭书房吸顶灯")).habitSummary.isEmpty)
+
+        store.habitSharing = .on
+        #expect(store.buildAssistantContext(mention: .utterance("关闭书房吸顶灯")).habitSummary.contains("关闭书房吸顶灯"))
 
         store.isHabitLearningEnabled = false
         _ = await store.runAssistantCommand("打开书房吸顶灯")
         #expect(store.userHabitMemory.entries.count == 1)
-        #expect(store.buildAssistantContext().habitSummary.isEmpty)
+        #expect(store.buildAssistantContext(mention: .utterance("关闭书房吸顶灯")).habitSummary.contains("关闭书房吸顶灯"))
     }
 
     @Test("Privacy preferences persist across launches")

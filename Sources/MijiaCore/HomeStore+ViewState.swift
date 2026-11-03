@@ -70,12 +70,30 @@ extension HomeStore {
         }
     }
 
+    public var selectedRoomId: String? {
+        if case .room(let id) = listCut { return id }
+        return nil
+    }
+
+    @discardableResult
+    public func selectRoom(_ roomId: String?) -> Bool {
+        let next: DeviceListCut = roomId.map(DeviceListCut.room) ?? .all
+        guard listCut != next else { return false }
+        listCut = next
+        return true
+    }
+
+    public func selectKind(_ tag: DeviceKindTag) {
+        guard listCut != .kind(tag) else { return }
+        listCut = .kind(tag)
+    }
+
     public func cycleRoom(delta: Int = 1) {
         let options: [String?] = [nil] + rooms.map { Optional($0.id) }
         guard options.count > 1 else { return }
         let curIdx = options.firstIndex(where: { $0 == selectedRoomId }) ?? 0
         let nextIdx = (curIdx + delta + options.count) % options.count
-        selectedRoomId = options[nextIdx]
+        selectRoom(options[nextIdx])
     }
 
     // MARK: - User Actions & Optimistic State Mutations

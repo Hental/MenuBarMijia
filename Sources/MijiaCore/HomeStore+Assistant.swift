@@ -94,7 +94,7 @@ extension HomeStore {
         isProactiveRecommending = true
         defer { isProactiveRecommending = false }
         let resolver = makeAssistantResolver(config: config)
-        let assistantContext = buildAssistantContext()
+        let assistantContext = buildAssistantContext(mention: .none)
         do {
             let inferred = try await resolver.recommendProactiveSuggestions(
                 devices: devices,
@@ -138,7 +138,7 @@ extension HomeStore {
         }
     }
 
-    public func buildAssistantContext(now: Date = Date()) -> AssistantContext {
+    public func buildAssistantContext(now: Date = Date(), mention: CommandMention) -> AssistantContext {
         let bucket = UserHabitMemory.TimeBucket.from(date: now)
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -156,9 +156,14 @@ extension HomeStore {
             "\(dev.name)(\(IntentCatalog.stateSummary(dev)))"
         }
         let activeSummary = activeParts.isEmpty ? "全屋设备均关闭" : activeParts.joined(separator: "、")
-        let habitSummary = isHabitLearningEnabled
-            ? userHabitMemory.promptSummary(for: now, devices: devices, scenes: scenes)
-            : ""
+        let habitSummary = shareHabitSentence(
+            sharing: habitSharing,
+            memory: userHabitMemory,
+            devices: devices,
+            scenes: scenes,
+            mention: mention,
+            now: now
+        )
 
         return AssistantContext(
             timeSummary: PromptText.sanitize(timeSummary, limit: PromptText.contextLimit),
@@ -191,7 +196,7 @@ extension HomeStore {
         defer { isProactiveRecommending = false }
 
         let resolver = makeAssistantResolver(config: config)
-        let context = buildAssistantContext()
+        let context = buildAssistantContext(mention: .none)
         do {
             let inferred = try await resolver.recommendProactiveSuggestions(
                 devices: devices,
@@ -352,7 +357,7 @@ extension HomeStore {
                 return nil
             }
             let resolver = makeAssistantResolver(config: config)
-            let context = buildAssistantContext()
+            let context = buildAssistantContext(mention: .utterance(utterance))
             if !context.habitSummary.isEmpty {
                 habitSummary = context.habitSummary
             }

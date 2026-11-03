@@ -365,10 +365,20 @@ struct AssistantTests {
             now: eveningDate
         )
 
-        let summary = memory.promptSummary(for: eveningDate, devices: Self.devices, scenes: Self.scenes)
+        let summary = L10n.$overrideTemperatureUnit.withValue(.celsius) {
+            shareHabitSentence(
+                sharing: .on,
+                memory: memory,
+                devices: Self.devices,
+                scenes: Self.scenes,
+                mention: .utterance("书房吸顶灯和客厅空调"),
+                now: eveningDate
+            )
+        }
         #expect(summary.contains("夜晚常做："))
         #expect(summary.contains("书房吸顶灯·月光模式"))
         #expect(summary.contains("「老规矩写代码」"))
+        #expect(summary.contains("→书房吸顶灯·月光模式+客厅空调·25°C"))
 
         let suggestions = L10n.$overrideTemperatureUnit.withValue(.celsius) {
             memory.topSuggestions(for: eveningDate, devices: Self.devices, scenes: Self.scenes)
@@ -499,6 +509,7 @@ struct AssistantTests {
     func storeRecordsHabitContext() async throws {
         let (store, _) = try await makeStore()
         store.isHabitLearningEnabled = true
+        store.habitSharing = .on
         var memory = store.userHabitMemory
         memory.record(
             utterance: "我要睡觉了",
@@ -513,7 +524,7 @@ struct AssistantTests {
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
 
-        _ = await store.runAssistantCommand("我要睡觉了")
+        _ = await store.runAssistantCommand("我要睡觉了主卧床头灯")
         let receipt = try #require(store.lastAssistantReceipt)
         #expect(receipt.route == .aiModel)
         #expect(receipt.usedHabitContext == true)

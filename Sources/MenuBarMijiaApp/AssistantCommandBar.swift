@@ -478,8 +478,8 @@ struct AssistantCommandBar: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(L10n.tr(
-                "会发送：这句话、设备名称/房间/状态、时间段、室温\(store.isHabitLearningEnabled ? "、习惯摘要" : "")。只问这一次，可在设置里撤销。",
-                "Sends: your words, device names/rooms/states, time of day, room temperature\(store.isHabitLearningEnabled ? ", habit summary" : ""). Asked once; revoke in Settings."
+                "会发送：这句话、设备名称/房间/状态、时间段、室温\(store.habitSharing == .on ? "、习惯摘要" : "")。只问这一次，可在设置里撤销。",
+                "Sends: your words, device names/rooms/states, time of day, room temperature\(store.habitSharing == .on ? ", habit summary" : ""). Asked once; revoke in Settings."
             ))
                 .font(.system(size: DesignTokens.TypeSize.caption))
                 .foregroundStyle(.secondary)
@@ -802,6 +802,7 @@ struct AssistantSettingsSection: View {
     @State private var apiKeyDraft: String = ""
     @State private var isTestingConnection = false
     @State private var isShowingHabits = false
+    @State private var habitShareSample = ""
     /// Habit memory lives in UserDefaults (not observed), so bump this to redraw after edits.
     @State private var habitRevision = 0
     /// Imported-key labels and cloud consent also live in UserDefaults; bump to redraw after import/undo/revoke.
@@ -1055,6 +1056,38 @@ struct AssistantSettingsSection: View {
             .controlSize(.regular)
 
             Toggle(isOn: Binding(
+                get: { store.habitSharing == .on },
+                set: { store.habitSharing = $0 ? .on : .off }
+            )) {
+                Text(L10n.tr("发送习惯摘要（只包含这句话点名的设备）", "Share habit summary (only devices this command names)"))
+                    .font(.system(size: DesignTokens.TypeSize.caption))
+            }
+            .toggleStyle(.glass)
+            .controlSize(.regular)
+
+            TextField(
+                L10n.tr("预览这句话会发送的习惯摘要", "Preview the habit summary this sentence would send"),
+                text: $habitShareSample
+            )
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: DesignTokens.TypeSize.caption))
+
+            let habitSharePreview = shareHabitSentence(
+                sharing: store.habitSharing,
+                memory: store.userHabitMemory,
+                devices: store.devices,
+                scenes: store.scenes,
+                mention: .utterance(habitShareSample),
+                now: Date()
+            )
+            Text(habitSharePreview.isEmpty
+                 ? L10n.tr("不会发送习惯摘要", "Nothing from your habits is sent.")
+                 : habitSharePreview)
+                .font(.system(size: DesignTokens.TypeSize.caption))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(isOn: Binding(
                 get: { store.prefersOnDeviceSpeech },
                 set: { store.prefersOnDeviceSpeech = $0 }
             )) {
@@ -1141,8 +1174,8 @@ struct AssistantSettingsSection: View {
             }
 
             Text(L10n.tr(
-                "发给 AI 的内容：你说的那句话、设备名称/房间/当前状态、时间段、室温\(store.isHabitLearningEnabled ? "、习惯摘要" : "")。只有本机解析不了的指令才会发送。API Key 和米家登录信息只存在本机钥匙串，不会发送。",
-                "Sent to AI only when local parsing cannot resolve: your command text, device names/rooms/states, time slot, room temperature\(store.isHabitLearningEnabled ? ", and habit summary" : ""). API keys and Xiaomi credentials stay in your local Keychain."
+                "发给 AI 的内容：你说的那句话、设备名称/房间/当前状态、时间段、室温。打开「发送习惯摘要」后，还会发送这句话点名的设备的习惯摘要。只有本机解析不了的指令才会发送。API Key 和米家登录信息只存在本机钥匙串，不会发送。",
+                "Sent to AI only when local parsing cannot resolve: your command text, device names/rooms/states, time slot, and room temperature. Turning on “Share habit summary” also sends the habit summary for devices this command names. API keys and Xiaomi credentials stay in your local Keychain."
             ))
                 .font(.system(size: DesignTokens.TypeSize.caption))
                 .foregroundStyle(.secondary)

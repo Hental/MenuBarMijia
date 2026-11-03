@@ -61,6 +61,7 @@ final class MenuBarPanelController: NSObject {
     private var suppressReleaseUntil: TimeInterval = 0
     /// What the status button currently shows; kept after a sync so diagnostics and tests can read it.
     private(set) var labelSymbol: String?
+    private var labelShowsHazard = false
     private(set) var labelText: String?
     private(set) var tooltipText: String?
     private var observers: [any NSObjectProtocol] = []
@@ -104,6 +105,7 @@ final class MenuBarPanelController: NSObject {
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil
             labelSymbol = nil
+            labelShowsHazard = false
             labelText = nil
             tooltipText = nil
         }
@@ -135,6 +137,7 @@ final class MenuBarPanelController: NSObject {
         store = nil
         didInstall = false
         labelSymbol = nil
+        labelShowsHazard = false
         labelText = nil
         tooltipText = nil
     }
@@ -200,12 +203,22 @@ final class MenuBarPanelController: NSObject {
         let symbol = speech.isListening ? "waveform" : store.menuBarSymbolName
         let text = speech.isListening ? Self.speechLabel(speech.draft) : store.menuBarText
         let summary = MenuBarStatusSummary.text(for: store)
+        let hazard = store.menuBarShowsHazard
 
-        if symbol != labelSymbol {
+        if symbol != labelSymbol || hazard != labelShowsHazard {
             labelSymbol = symbol
+            labelShowsHazard = hazard
             if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
-                image.isTemplate = true
-                button.image = image
+                if hazard {
+                    image.isTemplate = false
+                    let red = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
+                    let painted = image.withSymbolConfiguration(red) ?? image
+                    painted.isTemplate = false
+                    button.image = painted
+                } else {
+                    image.isTemplate = true
+                    button.image = image
+                }
             }
         }
         if text != labelText {

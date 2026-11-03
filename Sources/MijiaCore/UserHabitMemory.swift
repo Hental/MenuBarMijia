@@ -87,11 +87,52 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         }
     }
 
+    public struct PhraseTarget: Codable, Equatable, Sendable {
+        public var targetId: String
+        public var operationKey: String
+
+        public init(targetId: String, operationKey: String) {
+            self.targetId = targetId
+            self.operationKey = operationKey
+        }
+    }
+
     public struct PhraseMemory: Codable, Equatable, Sendable {
         public var phrase: String
         public var bucket: TimeBucket
         public var summary: String
         public var count: Int
+        public var targets: [PhraseTarget]
+
+        public init(phrase: String, bucket: TimeBucket, summary: String, count: Int, targets: [PhraseTarget] = []) {
+            self.phrase = phrase
+            self.bucket = bucket
+            self.summary = summary
+            self.count = count
+            self.targets = targets
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case phrase, bucket, summary, count, targets
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            phrase = try container.decode(String.self, forKey: .phrase)
+            bucket = try container.decode(TimeBucket.self, forKey: .bucket)
+            summary = try container.decode(String.self, forKey: .summary)
+            count = try container.decode(Int.self, forKey: .count)
+            targets = try container.decodeIfPresent([PhraseTarget].self, forKey: .targets) ?? []
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(phrase, forKey: .phrase)
+            try container.encode(bucket, forKey: .bucket)
+            try container.encode(summary, forKey: .summary)
+            try container.encode(count, forKey: .count)
+            try container.encode(targets, forKey: .targets)
+        }
     }
 
     public struct HabitEntry: Codable, Equatable, Sendable {
@@ -366,15 +407,17 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         if let raw = utterance?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let actionSummary = Self.describe(intents: intents, devices: devices, scenes: scenes)
             if !actionSummary.isEmpty {
+                let targets = encoded.map { PhraseTarget(targetId: $0.targetId, operationKey: $0.operationKey) }
                 if let idx = phrases.firstIndex(where: { $0.phrase == raw }) {
                     receipt.phrase = RecordingReceipt.PhraseChange(phrase: raw, previous: phrases[idx])
                     phrases[idx].count += 1
                     phrases[idx].bucket = bucket
                     phrases[idx].summary = actionSummary
+                    phrases[idx].targets = targets
                 } else {
                     receipt.phrase = RecordingReceipt.PhraseChange(phrase: raw, previous: nil)
                     phrases.insert(
-                        PhraseMemory(phrase: raw, bucket: bucket, summary: actionSummary, count: 1),
+                        PhraseMemory(phrase: raw, bucket: bucket, summary: actionSummary, count: 1, targets: targets),
                         at: 0
                     )
                 }
@@ -737,49 +780,6 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         return sequences.first {
             $0.afterKey == last.key && $0.targetId == entry.targetId && $0.operationKey == entry.operationKey
         }?.count ?? 0
-    }
-
-    /// Compact natural-language summary of the user's habits injected into Jev's `state.user_habits`.
-    public func promptSummary(
-        for now: Date = Date(),
-        devices: [SmartDevice],
-        scenes: [HomeScene]
-    ) -> String {
-        let bucket = TimeBucket.from(date: now)
-        var parts: [String] = []
-
-        let topForBucket = entries
-            .filter { $0.bucket == bucket }
-            .prefix(4)
-            .compactMap { entry -> String? in
-                guard let op = Self.decodeOperation(entry.operationKey),
-                      let label = Self.suggestionTitle(
-                        for: DeviceIntent(targetId: entry.targetId, operation: op),
-                        devices: devices,
-                        scenes: scenes
-                      ) else { return nil }
-                return "\(label)(\(entry.count)次)"
-            }
-        if !topForBucket.isEmpty {
-            parts.append("\(bucket.rawValue)常做：\(topForBucket.joined(separator: "、"))")
-        }
-
-        let topPhrases = phrases.prefix(4).map { "「\($0.phrase)」→\($0.summary)" }
-        if !topPhrases.isEmpty {
-            parts.append("个人口头禅：\(topPhrases.joined(separator: "；"))")
-        }
-
-        // Next-action hint from the freshest learned transition (ADR-0009).
-        if let last = lastAction, now.timeIntervalSince(last.recordedAt) <= Self.sequenceBoostWindow,
-           let next = sequences.first(where: { $0.afterKey == last.key }),
-           let prevOp = Self.decodeOperation(last.operationKey),
-           let prevTitle = Self.suggestionTitle(for: DeviceIntent(targetId: last.targetId, operation: prevOp), devices: devices, scenes: scenes),
-           let nextOp = Self.decodeOperation(next.operationKey),
-           let nextTitle = Self.suggestionTitle(for: DeviceIntent(targetId: next.targetId, operation: nextOp), devices: devices, scenes: scenes) {
-            parts.append("刚做完\(prevTitle)后常做：\(nextTitle)(\(next.count)次)")
-        }
-
-        return parts.joined(separator: "。")
     }
 
     // MARK: - Encoding & Filtering Helpers

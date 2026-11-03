@@ -52,15 +52,20 @@ extension HomeStore {
         devices.filter { hiddenDeviceIds.contains($0.id) }
     }
 
+    private func passesVisibility(_ dev: SmartDevice) -> Bool {
+        if hiddenDeviceIds.contains(dev.id) { return false }
+        if hideOfflineDevices && !dev.isOnline { return false }
+        return true
+    }
+
     public var filteredDevices: [SmartDevice] {
-        devices.filter { dev in
-            if hiddenDeviceIds.contains(dev.id) { return false }
-            if hideOfflineDevices && !dev.isOnline { return false }
-            if let roomId = selectedRoomId {
-                return dev.roomId == roomId
-            }
-            return true
-        }
+        devices.filter { passesVisibility($0) && listCut.matches($0) }
+    }
+
+    public var kindChips: [DeviceKindTag] {
+        var tags = Set(devices.filter(passesVisibility).map { $0.kind.tag })
+        if case .kind(let selected) = listCut { tags.insert(selected) }
+        return tags.sorted { $0.rank < $1.rank }
     }
 
     public var favoriteDevices: [SmartDevice] {

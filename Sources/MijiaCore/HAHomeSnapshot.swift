@@ -76,6 +76,20 @@ struct HAHomeSnapshot {
         } else {
             attributes = [:]
         }
-        return HAEntityState(entityId: entityId, state: state, attributes: attributes)
+        return HAEntityState(
+            entityId: entityId,
+            state: state,
+            attributes: attributes,
+            lastChanged: parseLastChanged(object["last_changed"])
+        )
+    }
+
+    private static func parseLastChanged(_ value: JSONValue?) -> Date? {
+        guard let raw = value?.stringValue else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
     }
 }

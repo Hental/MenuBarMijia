@@ -437,6 +437,38 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.match(textOf('[data-tile-id="fixture-light"]'), /可能过期/);
   });
 
+  it("adds and removes kind chips when polling changes device availability", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
+      sensor.isOnline = false;
+      fixture.deviceRecords.push(sensor);
+    });
+    await click('[data-kind="light"]');
+    await click("#btn-toggle-hide-offline");
+    assert.ok(document.querySelector('[data-kind="light"]'));
+    assert.equal(document.querySelector('[data-kind="sensor"]'), null);
+
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = true;
+    const broughtOnline = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(broughtOnline.started, "Polling did not request properties");
+    broughtOnline.release();
+    await withTimeout(broughtOnline.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-kind="sensor"]') !== null);
+    assert.ok(document.querySelector('[data-kind="light"]'));
+
+    sensor.isOnline = false;
+    const takenOffline = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(takenOffline.started, "Polling did not request properties");
+    takenOffline.release();
+    await withTimeout(takenOffline.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-kind="sensor"]') === null);
+    assert.ok(document.querySelector('[data-kind="light"]'));
+  });
+
   it("shows a collapsed group again when its only device comes online", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
@@ -2369,6 +2401,51 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
     assert.equal(habitEntries().length, 0);
   });
 
+  it("previews the draft habit sentence and writes the share switch only when saving", async () => {
+    const hour = new Date().getHours();
+    const bucket = hour >= 18 && hour < 23 ? "夜晚" : hour >= 14 && hour < 18 ? "下午" : hour >= 11 && hour < 14 ? "午间" : hour >= 6 && hour < 11 ? "清晨" : "深夜";
+    localStorage.setItem(settingsKey, JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      habitEntries: [{ bucket, targetId: "light.study_desk", operationKey: "power:off", count: 3 }],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, false);
+    await click("#btn-settings");
+    const share = element("#settings-habit-share") as HTMLInputElement;
+    assert.equal(share.checked, false);
+    const sample = element("#settings-habit-share-sample") as HTMLInputElement;
+    sample.value = "书房台灯";
+    sample.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(element("#settings-habit-share-preview").textContent, "不会发送习惯摘要");
+    share.checked = true;
+    share.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.match(element("#settings-habit-share-preview").textContent ?? "", /关闭书房台灯\(3次\)/);
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, false);
+    await click("#btn-save-settings");
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, true);
+  });
+
+  it("applies device aliases to the habit-sharing preview", async () => {
+    const hour = new Date().getHours();
+    const bucket = hour >= 18 && hour < 23 ? "夜晚" : hour >= 14 && hour < 18 ? "下午" : hour >= 11 && hour < 14 ? "午间" : hour >= 6 && hour < 11 ? "清晨" : "深夜";
+    localStorage.setItem(settingsKey, JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      habitEntries: [{ bucket, targetId: "light.study_desk", operationKey: "power:off", count: 3 }],
+      layout: { aliases: { "light.study_desk": "阅读灯" } },
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click("#btn-settings");
+    const share = element("#settings-habit-share") as HTMLInputElement;
+    share.checked = true;
+    share.dispatchEvent(new window.Event("change", { bubbles: true }));
+    const sample = element("#settings-habit-share-sample") as HTMLInputElement;
+    sample.value = "阅读灯";
+    sample.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.match(element("#settings-habit-share-preview").textContent ?? "", /关闭阅读灯\(3次\)/);
+  });
+
   it("learns nothing when habit learning is disabled", async () => {
     localStorage.setItem(settingsKey, JSON.stringify({
       connectionMode: "demo",
@@ -3118,5 +3195,41 @@ describe("只显示在线设备 (#158)", () => {
     startCached({ hideOfflineDevices: "yes" });
     assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "false");
     assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
+  });
+});
+
+describe("device kind filter", () => {
+  function tileIds(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId ?? "");
+  }
+
+  it("shows only lights across rooms, then a room pill clears the kind", async () => {
+    startDemo();
+    await setImmediate();
+    const before = Object.keys(JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}")).sort();
+
+    await click('[data-kind="light"]');
+    assert.deepEqual(tileIds().sort(), ["light.living_ceiling", "light.study_desk"]);
+    assert.match(element('[data-tile-id="light.living_ceiling"] .cc-tile-status').textContent ?? "", /客厅/);
+    assert.equal(element('[data-room="全部"]').getAttribute("aria-pressed"), "false");
+    assert.equal(element('[data-room="全部"]').classList.contains("is-active"), false);
+
+    await click('[data-room="全部"]');
+    assert.ok(tileIds().includes("climate.living_ac"));
+    assert.ok(tileIds().includes("fan.bedroom_standing"));
+    assert.equal(element('[data-kind="light"]').getAttribute("aria-pressed"), "false");
+
+    await click('[data-kind="light"]');
+    await click('[data-room="客厅"]');
+    assert.ok(tileIds().includes("climate.living_ac"));
+    assert.ok(tileIds().includes("light.living_ceiling"));
+    assert.ok(!tileIds().includes("light.study_desk"));
+    assert.equal(element('[data-kind="light"]').getAttribute("aria-pressed"), "false");
+    assert.equal(element('[data-room="客厅"]').getAttribute("aria-pressed"), "true");
+
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as Record<string, unknown>;
+    assert.deepEqual(Object.keys(stored).sort(), before);
+    assert.equal("listCut" in stored, false);
+    assert.equal(JSON.stringify(stored).includes("deviceKind"), false);
   });
 });

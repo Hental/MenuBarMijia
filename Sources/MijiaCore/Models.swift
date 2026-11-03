@@ -394,22 +394,99 @@ public enum CameraStreamSource: Equatable, Sendable {
     case demo(deviceId: String)
 }
 
+public enum SensorAlertKind: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case leak
+    case smoke
+    case gas
+    case contact
+    case motion
+
+    public var id: String { rawValue }
+
+    public var enabledByDefault: Bool {
+        switch self {
+        case .leak, .smoke, .gas: true
+        case .contact, .motion: false
+        }
+    }
+
+    public var colorsMenuBar: Bool {
+        switch self {
+        case .leak, .smoke, .gas: true
+        case .contact, .motion: false
+        }
+    }
+
+    public var honorsAwayLimit: Bool {
+        switch self {
+        case .leak, .smoke, .gas: false
+        case .contact, .motion: true
+        }
+    }
+
+    public var notifiesOnFirstSample: Bool {
+        switch self {
+        case .leak, .smoke, .gas: true
+        case .contact, .motion: false
+        }
+    }
+
+    public var defaultsKey: String { "safety_alert_\(rawValue)_v1" }
+
+    public var settingsTitle: String {
+        switch self {
+        case .leak: L10n.tr("漏水告警", "Water leak")
+        case .smoke: L10n.tr("烟雾告警", "Smoke")
+        case .gas: L10n.tr("燃气告警", "Gas")
+        case .contact: L10n.tr("门窗开关", "Door and window")
+        case .motion: L10n.tr("人体移动", "Motion")
+        }
+    }
+
+    func notificationTitle(deviceName: String) -> String {
+        switch self {
+        case .leak: L10n.format("%@ 浸水告警", "%@ Leak", deviceName)
+        case .smoke: L10n.format("%@ 烟雾告警", "%@ Smoke", deviceName)
+        case .gas: L10n.format("%@ 燃气告警", "%@ Gas", deviceName)
+        case .contact: L10n.format("%@ 门窗打开", "%@ Door Open", deviceName)
+        case .motion: L10n.format("%@ 有人移动", "%@ Motion", deviceName)
+        }
+    }
+}
+
+public struct SensorObservation: Equatable, Sendable {
+    public var sourceId: String
+    public var kind: SensorAlertKind
+    public var alarming: Bool
+    public var reportedAt: Date?
+
+    public init(sourceId: String, kind: SensorAlertKind, alarming: Bool, reportedAt: Date? = nil) {
+        self.sourceId = sourceId
+        self.kind = kind
+        self.alarming = alarming
+        self.reportedAt = reportedAt
+    }
+}
+
 public struct SensorSpec: Equatable, Sendable {
     public var temperature: Double?
     public var humidity: Double?
     public var battery: Int?
     public var statusText: String?
+    public var observations: [SensorObservation] = []
 
     public init(
         temperature: Double? = nil,
         humidity: Double? = nil,
         battery: Int? = nil,
-        statusText: String? = nil
+        statusText: String? = nil,
+        observations: [SensorObservation] = []
     ) {
         self.temperature = temperature
         self.humidity = humidity
         self.battery = battery
         self.statusText = statusText
+        self.observations = observations
     }
 }
 

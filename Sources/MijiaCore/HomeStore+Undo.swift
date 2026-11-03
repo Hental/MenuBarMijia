@@ -203,10 +203,15 @@ extension HomeStore {
         filteredDevices.filter { $0.isActiveOn && joinsAllOff($0) && Self.allOffChange(for: $0) != nil }
     }
 
-    /// The room 全关 is limited to, or nil for the whole visible home.
-    public var allOffRoomName: String? {
-        guard let roomId = selectedRoomId else { return nil }
-        return rooms.first(where: { $0.id == roomId })?.name
+    public var allOffScopeName: String? {
+        switch listCut {
+        case .all:
+            return nil
+        case .room(let id):
+            return rooms.first { $0.id == id }?.name
+        case .kind(let tag):
+            return tag.chipTitle
+        }
     }
 
     /// The command that switches `device` off, the one that brings it back, and the optimistic state.

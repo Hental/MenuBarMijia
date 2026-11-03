@@ -115,7 +115,17 @@ extension HomeStore {
 
     /// False while the Mac or display sleeps, the screen is locked, or another user is active.
     public func setSystemActive(_ active: Bool) {
+        if !active {
+            awayGap.includesAway = true
+            userDefaults.set(true, forKey: MacAwayGap.storageKey)
+        }
         updatePollingContext { $0.systemActive = active }
+    }
+
+    func finishPresenceSnapshot() {
+        guard pollingContext.systemActive, awayGap.includesAway else { return }
+        awayGap.includesAway = false
+        userDefaults.set(false, forKey: MacAwayGap.storageKey)
     }
 
     public func setLowPowerMode(_ enabled: Bool) {
@@ -206,6 +216,9 @@ extension HomeStore {
                 for alert in evaluateSafetyAlerts(now: Date()) {
                     handler(alert)
                 }
+            }
+            if snapshot.closesAwayGap {
+                finishPresenceSnapshot()
             }
             notifyMissedScheduledCommandsIfNeeded()
         }
@@ -624,7 +637,7 @@ extension HomeStore {
             userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         }
         selectedMiHomeId = id
-        selectedRoomId = nil
+        selectRoom(nil)
         refreshNow()
     }
 

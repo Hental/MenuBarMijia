@@ -41,6 +41,7 @@ public struct ControlCenterPanel: View {
     @State private var isPresented = false
     /// Re-centers the active room pill when the user taps an already-selected pill after scrolling.
     @State private var roomScrollTrigger = 0
+    @State private var kindScrollTrigger = 0
 
     /// Card sizes are remembered per page: a room id, or "all" for the overview.
     private var layoutScope: String { store.selectedRoomId ?? "all" }
@@ -210,7 +211,7 @@ public struct ControlCenterPanel: View {
                     .padding(.bottom, 8)
                     .transition(AppleMotion.drawerTransition)
             } else {
-                roomFilterBar
+                listFilterBars
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
             }
@@ -1089,7 +1090,7 @@ public struct ControlCenterPanel: View {
                     // The label says what will be switched off (#23); a hold confirms.
                     let count = store.allOffTargets.count
                     HoldToConfirmButton(
-                        title: store.allOffRoomName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
+                        title: store.allOffScopeName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
                         count: count,
                         onConfirm: {
                             withAnimation(AppleMotion.snappySpring) { store.turnAllOff() }
@@ -1227,9 +1228,8 @@ public struct ControlCenterPanel: View {
             if store.hiddenDeviceIds.contains(env.id) {
                 store.unhideDevice(env.id)
             }
-            if store.selectedRoomId != nil,
-               !store.filteredDevices.contains(where: { $0.id == env.id }) {
-                store.selectedRoomId = nil
+            if !store.filteredDevices.contains(where: { $0.id == env.id }) {
+                store.selectRoom(nil)
             }
             for section in pageSections where section.devices.contains(where: { $0.id == env.id }) {
                 let key = collapseKey(section)
@@ -1345,6 +1345,111 @@ public struct ControlCenterPanel: View {
         } else {
             proxy.scrollTo(target, anchor: anchor)
         }
+    }
+
+    private var listFilterBars: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            roomFilterBar
+            if showsKindRow { kindFilterBar }
+        }
+    }
+
+    private var showsKindRow: Bool {
+        if case .kind = store.listCut { return true }
+        return store.kindChips.count >= 2
+    }
+
+    private func scrollKindStrip(using proxy: ScrollViewProxy, tag: DeviceKindTag) {
+        if reduceMotion {
+            proxy.scrollTo(tag, anchor: .center)
+        } else {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                proxy.scrollTo(tag, anchor: .center)
+            }
+        }
+    }
+
+    private var kindFilterBar: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(store.kindChips, id: \.self) { tag in
+                        kindPill(tag)
+                            .id(tag)
+                    }
+                }
+                .padding(.vertical, 3)
+                .padding(.horizontal, 4)
+                .horizontalWheelScroll()
+            }
+            .defaultScrollAnchor(.leading)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .onChange(of: store.listCut) { _, cut in
+                guard case .kind(let tag) = cut else { return }
+                scrollKindStrip(using: proxy, tag: tag)
+            }
+            .onChange(of: kindScrollTrigger) { _, _ in
+                guard case .kind(let tag) = store.listCut else { return }
+                scrollKindStrip(using: proxy, tag: tag)
+            }
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.0), location: 0.0),
+                        .init(color: .black, location: 0.035),
+                        .init(color: .black, location: 0.86),
+                        .init(color: .black.opacity(0.0), location: 1.0)
+                    ],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            )
+        }
+        .background(segmentedTrack, in: Capsule(style: .continuous))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(segmentedTrackRim, lineWidth: DesignTokens.hairline)
+        }
+        .clipShape(Capsule(style: .continuous))
+    }
+
+    @ViewBuilder
+    private func kindPill(_ tag: DeviceKindTag) -> some View {
+        if let hint = tag.chipHint {
+            kindPillButton(tag).panelHelp(hint)
+        } else {
+            kindPillButton(tag)
+        }
+    }
+
+    private func kindPillButton(_ tag: DeviceKindTag) -> some View {
+        let isSelected = store.listCut == .kind(tag)
+        let surface = TileSurface(isActive: true, scheme: effectiveScheme)
+        return Button {
+            withAnimation(AppleMotion.snappySpring) {
+                if store.listCut == .kind(tag) {
+                    kindScrollTrigger &+= 1
+                } else {
+                    store.selectKind(tag)
+                }
+            }
+        } label: {
+            Text(tag.chipTitle)
+                .font(.system(size: DesignTokens.TypeSize.caption, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? surface.ink : Color.secondary)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background {
+                    if isSelected {
+                        Capsule(style: .continuous)
+                            .fill(surface.fill)
+                            .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
+                    }
+                }
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .animation(AppleMotion.snappySpring, value: isSelected)
     }
 
     private var roomFilterBar: some View {
@@ -1474,17 +1579,15 @@ public struct ControlCenterPanel: View {
 
     private func selectRoom(_ roomId: String?, animation: Animation) {
         withAnimation(animation) {
-            if store.selectedRoomId == roomId {
-                roomScrollTrigger &+= 1
-            } else {
-                store.selectedRoomId = roomId
-            }
+            if !store.selectRoom(roomId) { roomScrollTrigger &+= 1 }
         }
     }
 
     @ViewBuilder
     private func roomPill(title: String, roomId: String?) -> some View {
-        let isSelected = (store.selectedRoomId == roomId)
+        let isSelected = roomId == nil
+            ? store.listCut == .all
+            : store.selectedRoomId == roomId
         // The selected pill is a lit tile of its own, so its label takes the tile's ink: a dark
         // capsule in dark mode would otherwise keep the light-mode platter ink.
         let surface = TileSurface(isActive: true, scheme: effectiveScheme)
@@ -1588,15 +1691,23 @@ public struct ControlCenterPanel: View {
                 }
                 .padding(.top, 2)
             } else {
-                Text(
-                    store.hideOfflineDevices
-                        ? L10n.tr("该房间暂无通电在线的设备", "No online devices in this room")
-                        : store.hasReceivedInitialSnapshot
-                            ? L10n.tr("这个房间暂无设备", "No devices in this room")
-                            : L10n.tr("正在同步设备列表…", "Syncing devices…")
-                )
-                    .font(.system(size: DesignTokens.TypeSize.body, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Group {
+                    if case .kind = store.listCut {
+                        Text(store.hideOfflineDevices
+                            ? L10n.tr("这一类暂无通电在线的设备", "Nothing of this type is online")
+                            : L10n.tr("这一类暂无设备", "Nothing of this type"))
+                    } else {
+                        Text(
+                            store.hideOfflineDevices
+                                ? L10n.tr("该房间暂无通电在线的设备", "No online devices in this room")
+                                : store.hasReceivedInitialSnapshot
+                                    ? L10n.tr("这个房间暂无设备", "No devices in this room")
+                                    : L10n.tr("正在同步设备列表…", "Syncing devices…")
+                        )
+                    }
+                }
+                .font(.system(size: DesignTokens.TypeSize.body, weight: .medium))
+                .foregroundStyle(.secondary)
                 if store.hideOfflineDevices {
                     Button(L10n.tr("显示离线设备", "Show Offline Devices")) {
                         withAnimation(AppleMotion.snappySpring) {

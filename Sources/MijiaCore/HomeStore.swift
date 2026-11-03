@@ -83,7 +83,7 @@ public final class HomeStore {
         readBackEchoHold = nil
     }
 
-    public var selectedRoomId: String? = nil // nil = 全部 / 常用
+    public internal(set) var listCut: DeviceListCut = .all
     public var expandedDeviceId: String? = nil
     public var focusedDeviceId: String? = nil
     public var isOptionKeyPressed: Bool = false
@@ -149,6 +149,14 @@ public final class HomeStore {
         didSet { userDefaults.set(enableSafetyAlerts, forKey: "enable_safety_alerts") }
     }
 
+    public var sensorAlertsOnlyWhenAway: Bool {
+        didSet { userDefaults.set(sensorAlertsOnlyWhenAway, forKey: Self.sensorAlertsOnlyWhenAwayKey) }
+    }
+
+    /// Explicit per-kind overrides. Reading this from `isSensorAlertEnabled` lets SwiftUI
+    /// observe toggles that previously only reached `UserDefaults` (#199).
+    public internal(set) var sensorAlertPreferences: [SensorAlertKind: Bool] = [:]
+
     public var homeName: String {
         didSet { userDefaults.set(homeName, forKey: "home_name") }
     }
@@ -168,9 +176,12 @@ public final class HomeStore {
         }
     }
 
-    /// When off, nothing new is learned and no habit summary is sent to the AI model.
     public var isHabitLearningEnabled: Bool = true {
         didSet { userDefaults.set(isHabitLearningEnabled, forKey: "assistant_habit_learning_enabled") }
+    }
+
+    public var habitSharing: HabitSharing = .off {
+        didSet { userDefaults.set(habitSharing == .on, forKey: "assistant_habit_share_enabled") }
     }
 
     /// Test seam for the manual-control debounce window (sliders fire continuously, #113).
@@ -294,6 +305,8 @@ public final class HomeStore {
     var rawDeviceNames: [String: String] = [:]
 
     var lowBatteryAlertedAt: [String: Date] = [:]
+    var sensorEdge: [String: Bool] = [:]
+    var awayGap = MacAwayGap(includesAway: false)
     var activeSinceByDeviceId: [String: Date] = [:]
     var longRunAlertedForSession: Set<String> = []
 
@@ -351,18 +364,42 @@ public final class HomeStore {
         self.lgConfig = LGWebOSConfig.load(from: ud)
         self.homeName = ud.string(forKey: "home_name") ?? KeychainHelper.localizedDefaultHomeName
         self.isHabitLearningEnabled = boolOrDefaultTrue("assistant_habit_learning_enabled")
+        let habitShareKey = "assistant_habit_share_enabled"
+        let storedHabitShare: StoredHabitShare
+        if let object = ud.object(forKey: habitShareKey) {
+            if let flag = object as? Bool {
+                storedHabitShare = flag ? .on : .off
+            } else {
+                storedHabitShare = .absent
+            }
+        } else {
+            storedHabitShare = .absent
+        }
+        let habitShare = resolveHabitSharing(storedHabitShare)
+        if habitShare.persistOff {
+            ud.set(false, forKey: habitShareKey)
+        }
+        self.habitSharing = habitShare.sharing
         // Privacy-first default: ask for on-device recognition unless the user explicitly opted out (#50).
         self.prefersOnDeviceSpeech = boolOrDefaultTrue("assistant_on_device_speech")
         self.hasCompletedOnboarding = ud.bool(forKey: "has_completed_onboarding")
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
+        self.sensorAlertsOnlyWhenAway = ud.bool(forKey: Self.sensorAlertsOnlyWhenAwayKey)
+        self.sensorAlertPreferences = SensorAlertKind.allCases.reduce(into: [SensorAlertKind: Bool]()) { preferences, kind in
+            if ud.object(forKey: kind.defaultsKey) != nil {
+                preferences[kind] = ud.bool(forKey: kind.defaultsKey)
+            }
+        }
+        self.awayGap = MacAwayGap(includesAway: ud.bool(forKey: MacAwayGap.storageKey))
         self.isCompactGridMode = (ud.object(forKey: "compact_grid_mode") as? Bool) ?? true
         self.showQuickActionsBar = boolOrDefaultTrue("show_quick_actions_bar")
         self.enableGrokBall = ud.bool(forKey: "enable_grok_ball")
         self.menuBarTargetId = ud.string(forKey: "menubar_target_id") ?? "auto:primary"
         self.lastManuallyUsedLightId = ud.string(forKey: Self.lastManualLightIdKey)
         self.lowBatteryAlertedAt = Self.loadLowBatteryAlertedAt(from: ud)
+        self.sensorEdge = Self.loadSensorEdge(from: ud)
 
         let savedModeRaw = ud.string(forKey: "menubar_display_mode")
         if let savedModeRaw, let mode = MenuBarDisplayMode(rawValue: savedModeRaw) {

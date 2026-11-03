@@ -925,7 +925,7 @@ struct MenuBarPanelControllerTests {
         let roomScrollView = try #require(findRoomScrollView(in: hosting))
         #expect(roomScrollView.contentView.bounds.origin.x < 1)
 
-        store.selectedRoomId = "r8"
+        store.selectRoom("r8")
         try await Task.sleep(for: .milliseconds(80))
         Self.pumpMainRunLoop()
         hosting.layoutSubtreeIfNeeded()
@@ -933,7 +933,7 @@ struct MenuBarPanelControllerTests {
         window.displayIfNeeded()
         #expect(roomScrollView.contentView.bounds.origin.x > 40)
 
-        store.selectedRoomId = nil
+        store.selectRoom(nil)
         try await Task.sleep(for: .milliseconds(80))
         Self.pumpMainRunLoop()
         hosting.layoutSubtreeIfNeeded()
@@ -1115,6 +1115,7 @@ struct MenuBarPanelControllerTests {
                 .environment(\.reduceMotionOverride, true)
         )
         hosting.frame = NSRect(x: 0, y: 0, width: 376, height: 560)
+        LayoutUIState.shared.cardGlobalFrames.removeAll()
         let window = NSWindow(
             contentRect: NSRect(x: 60, y: 120, width: 376, height: 560),
             styleMask: [.borderless], backing: .buffered, defer: false
@@ -1132,6 +1133,7 @@ struct MenuBarPanelControllerTests {
         window.displayIfNeeded()
         try await Task.sleep(for: .milliseconds(250))
         Self.pumpMainRunLoop()
+        let card = try #require(LayoutUIState.shared.cardGlobalFrames[light.id])
 
         func sendMouse(_ type: NSEvent.EventType, at point: NSPoint) {
             guard let event = NSEvent.mouseEvent(
@@ -1142,8 +1144,8 @@ struct MenuBarPanelControllerTests {
             NSApp.sendEvent(event)
         }
 
-        // Long-press on the right-side detail/expand area of the compact light card (x: 115, y: 395).
-        let longPressPoint = NSPoint(x: 115, y: 395)
+        // Long-press the card body. The kind row shifts the first card, so a fixed window point misses it.
+        let longPressPoint = NSPoint(x: card.minX + 28, y: hosting.bounds.height - card.midY)
         sendMouse(.leftMouseDown, at: longPressPoint)
         try await Task.sleep(for: .milliseconds(550))
         Self.pumpMainRunLoop()
