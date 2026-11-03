@@ -325,31 +325,21 @@ public struct LateNightWindow: Codable, Equatable, Sendable {
         return hour >= startHour || hour < endHour
     }
 
-    /// Next occurrence of the window end at or after `date`; used as the per-night cooldown so one
-    /// night never runs the same rule twice.
-    public func end(after date: Date, calendar: Calendar = .current) -> Date {
+    /// Identifies which night a timestamp belongs to. Times after midnight in a window such as
+    /// 23 → 6 anchor to the previous evening, so every tick of one night shares a key.
+    public func nightAnchor(containing date: Date, calendar: Calendar = .current) -> Date? {
+        guard contains(date, calendar: calendar) else { return nil }
         let startOfDay = calendar.startOfDay(for: date)
-        let todayEnd = calendar.date(
-            bySettingHour: endHour,
-            minute: 0,
-            second: 0,
-            of: startOfDay
-        ) ?? startOfDay
         if startHour < endHour {
-            if date < todayEnd { return todayEnd }
-            return calendar.date(byAdding: .day, value: 1, to: todayEnd) ?? todayEnd
+            return startOfDay
         }
-        // The window opened on a previous evening when the current hour is before its end.
         let hour = calendar.component(.hour, from: date)
         if hour >= startHour {
-            return calendar.date(byAdding: .day, value: 1, to: todayEnd) ?? todayEnd
+            return startOfDay
         }
-        return todayEnd
+        return calendar.date(byAdding: .day, value: -1, to: startOfDay) ?? startOfDay
     }
 
-    public func secondsUntilEnd(from date: Date, calendar: Calendar = .current) -> TimeInterval {
-        max(0, end(after: date, calendar: calendar).timeIntervalSince(date))
-    }
 }
 
 public struct AutomationRule: Codable, Identifiable, Equatable, Sendable {
@@ -497,6 +487,9 @@ public enum AutomationMatcher {
 
 public enum AutomationPolicy {
     public static let triggerCooldown: TimeInterval = 60
+    /// Late-night dedupe keys are per night; the fixed cooldown only has to cover one night even
+    /// if the clock jumps backwards.
+    public static let nightlyCooldown: TimeInterval = 24 * 60 * 60
     /// Automation usually fires while the panel is closed; keep the undo banner long enough to be
     /// found after unlocking instead of expiring unseen in ten seconds.
     public static let undoWindow: TimeInterval = 5 * 60

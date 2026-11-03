@@ -29,6 +29,7 @@ final class FakeMacContextProvider: MacContextProviding {
 @MainActor
 struct AutomationContextEngineTests {
     static let lightId = "light_study"
+    static let workScene = HomeScene(id: "scene_work", name: "办公模式", entityId: "scene.work")
 
     static func studyLight(isOn: Bool = true) -> SmartDevice {
         SmartDevice(
@@ -47,8 +48,14 @@ struct AutomationContextEngineTests {
     private static var retainedEngines: [AutomationEngine] = []
     private static var retainedStores: [HomeStore] = []
 
-    private func makeStore(lightOn: Bool = true) async throws -> (HomeStore, MockHomeProvider) {
-        let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.studyLight(isOn: lightOn)]))
+    private func makeStore(
+        lightOn: Bool = true,
+        scenes: [HomeScene] = []
+    ) async throws -> (HomeStore, MockHomeProvider) {
+        let mock = MockHomeProvider(snapshot: SynthesizedHome(
+            devices: [Self.studyLight(isOn: lightOn)],
+            scenes: scenes
+        ))
         let store = HomeStore(
             provider: mock,
             defaultsSuiteName: "test.automation.context.\(UUID().uuidString)"
@@ -69,10 +76,11 @@ struct AutomationContextEngineTests {
         rules: [AutomationRule],
         defaults: UserDefaults,
         lightOn: Bool = true,
+        scenes: [HomeScene] = [],
         calendar: Calendar = .current
     ) async throws -> (AutomationEngine, HomeStore, MockHomeProvider, FakeMacContextProvider) {
         AutomationRuleStore(defaults: defaults).save(rules)
-        let (store, mock) = try await makeStore(lightOn: lightOn)
+        let (store, mock) = try await makeStore(lightOn: lightOn, scenes: scenes)
         let provider = FakeMacContextProvider()
         let engine = AutomationEngine(
             defaults: defaults,
@@ -303,6 +311,49 @@ struct AutomationContextEngineTests {
         #expect(await mock.executedCommands == [offCommand()])
     }
 
+    @Test("Calendar fallback runs a later meeting when the earliest already fired")
+    func calendarFallbackAfterFiredMeeting() async throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let rule = AutomationRule(
+            trigger: .calendarMeetingStartingSoon,
+            action: .scene(sceneId: Self.workScene.id),
+            triggerOptions: AutomationTriggerOptions(calendarLeadMinutes: 60)
+        )
+        let (_, _, mock, provider) = try await makeEngine(
+            rules: [rule],
+            defaults: defaults,
+            scenes: [Self.workScene]
+        )
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = CalendarMeeting(
+            id: "first",
+            title: "First",
+            startDate: start.addingTimeInterval(30 * 60),
+            endDate: start.addingTimeInterval(60 * 60)
+        )
+        let second = CalendarMeeting(
+            id: "second",
+            title: "Second",
+            startDate: start.addingTimeInterval(59 * 60),
+            endDate: start.addingTimeInterval(89 * 60)
+        )
+
+        await provider.emit(MacContextSnapshot(meetings: [first, second]), at: start)
+        #expect(await mock.executedCommands == [.activateScene(entityId: "scene.work")])
+
+        // Both meetings are still inside the lead window; the earliest key is now deduped and the
+        // second meeting must get its own chance instead of being masked.
+        await provider.emit(
+            MacContextSnapshot(meetings: [first, second]),
+            at: start.addingTimeInterval(10)
+        )
+        #expect(await mock.executedCommands == [
+            .activateScene(entityId: "scene.work"),
+            .activateScene(entityId: "scene.work")
+        ])
+    }
+
     @Test("Late-night use runs once per night, not once per observer tick")
     func lateNightRule() async throws {
         let (defaults, suite) = try makeDefaults()
@@ -322,12 +373,17 @@ struct AutomationContextEngineTests {
         let firstNight = calendar.date(from: DateComponents(
             year: 2026, month: 6, day: 15, hour: 23, minute: 30
         ))!
+        let afterMidnight = calendar.date(from: DateComponents(
+            year: 2026, month: 6, day: 16, hour: 3, minute: 30
+        ))!
         let nextNight = calendar.date(from: DateComponents(
             year: 2026, month: 6, day: 16, hour: 23, minute: 30
         ))!
 
         await provider.emit(MacContextSnapshot(), at: firstNight)
         await provider.emit(MacContextSnapshot(), at: firstNight.addingTimeInterval(600))
+        // The shrinking remaining window must not let the same night fire again at 03:30.
+        await provider.emit(MacContextSnapshot(), at: afterMidnight)
         #expect(await mock.executedCommands == [offCommand()])
 
         await provider.emit(MacContextSnapshot(), at: nextNight)

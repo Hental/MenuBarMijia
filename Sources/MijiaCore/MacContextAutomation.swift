@@ -66,8 +66,8 @@ public struct MacContextSnapshot: Equatable, Sendable {
     }
 }
 
-/// A fire decision for one rule. `dedupeKey` is per rule (and per calendar event), so two camera
-/// rules, or two battery thresholds, can fire independently.
+/// A fire decision for one rule. `dedupeKey` is per rule (and per calendar event / night), so two
+/// camera rules, or two battery thresholds, can fire independently.
 public struct AutomationTriggerEvent: Equatable, Sendable {
     public var trigger: AutomationTrigger
     public var dedupeKey: String
@@ -83,111 +83,113 @@ public struct AutomationTriggerEvent: Equatable, Sendable {
 /// Pure evaluation of the #174 signals. One `switch` owns every trigger's semantics so the engine
 /// never grows signal-specific conditionals.
 ///
-/// Notification-driven triggers (`away`, `back`, displays) return `nil`; `AutomationEngine` keeps
-/// its existing one-minute coalescing for those. Everything here is a *transition* except
-/// `lateNightUsage` (a state the observer re-evaluates on every tick) and
-/// `calendarMeetingStartingSoon` (a point in time), which are deduplicated by the caller.
+/// Notification-driven triggers (`away`, `back`, displays) return no events; `AutomationEngine`
+/// keeps its existing one-minute coalescing for those. Transitions return at most one event. A
+/// calendar rule can return several eligible meetings so the engine can skip already-fired events
+/// and still run for a later meeting; late-night rules also return one event, whose key is anchored
+/// to the particular night.
 public enum MacContextAutomation {
-    public static func event(
+    public static func events(
         for rule: AutomationRule,
         previous: MacContextSnapshot?,
         current: MacContextSnapshot,
         at now: Date,
         calendar: Calendar = .current
-    ) -> AutomationTriggerEvent? {
-        guard rule.isEnabled else { return nil }
+    ) -> [AutomationTriggerEvent] {
+        guard rule.isEnabled else { return [] }
         let options = rule.triggerOptions
 
         switch rule.trigger {
         case .away, .back, .externalDisplayConnected, .externalDisplayDisconnected:
-            return nil
+            return []
 
         case .cameraInUse:
-            guard let previous, !previous.cameraInUse, current.cameraInUse else { return nil }
-            return transitionEvent(rule)
+            guard let previous, !previous.cameraInUse, current.cameraInUse else { return [] }
+            return [transitionEvent(rule)]
         case .cameraNotInUse:
-            guard let previous, previous.cameraInUse, !current.cameraInUse else { return nil }
-            return transitionEvent(rule)
+            guard let previous, previous.cameraInUse, !current.cameraInUse else { return [] }
+            return [transitionEvent(rule)]
         case .microphoneInUse:
-            guard let previous, !previous.microphoneInUse, current.microphoneInUse else { return nil }
-            return transitionEvent(rule)
+            guard let previous, !previous.microphoneInUse, current.microphoneInUse else { return [] }
+            return [transitionEvent(rule)]
         case .microphoneNotInUse:
-            guard let previous, previous.microphoneInUse, !current.microphoneInUse else { return nil }
-            return transitionEvent(rule)
+            guard let previous, previous.microphoneInUse, !current.microphoneInUse else { return [] }
+            return [transitionEvent(rule)]
 
         case .powerConnected:
             guard let previous,
                   previous.powerSource != .ac,
-                  current.powerSource == .ac else { return nil }
-            return transitionEvent(rule)
+                  current.powerSource == .ac else { return [] }
+            return [transitionEvent(rule)]
         case .powerDisconnected:
             guard let previous,
                   previous.powerSource == .ac,
-                  current.powerSource != .ac else { return nil }
-            return transitionEvent(rule)
+                  current.powerSource != .ac else { return [] }
+            return [transitionEvent(rule)]
         case .batteryBelowThreshold:
             guard let previous,
                   current.powerSource == .battery,
                   let percent = current.batteryPercent,
-                  percent < options.batteryThresholdPercent else { return nil }
+                  percent < options.batteryThresholdPercent else { return [] }
             let wasAlreadyBelow = previous.powerSource == .battery
                 && (previous.batteryPercent ?? Int.max) < options.batteryThresholdPercent
-            guard !wasAlreadyBelow else { return nil }
-            return transitionEvent(rule)
+            guard !wasAlreadyBelow else { return [] }
+            return [transitionEvent(rule)]
 
         case .wifiNetworkJoined:
-            guard let previous, current.isWiFiAuthorized, previous.isWiFiAuthorized else { return nil }
+            guard let previous, current.isWiFiAuthorized, previous.isWiFiAuthorized else { return [] }
             let previousSSID = previous.wifiSSID
-            guard current.wifiSSID != previousSSID else { return nil }
+            guard current.wifiSSID != previousSSID else { return [] }
             if let target = options.wifiSSID {
-                guard current.wifiSSID == target else { return nil }
+                guard current.wifiSSID == target else { return [] }
             } else {
-                guard current.wifiSSID != nil else { return nil }
+                guard current.wifiSSID != nil else { return [] }
             }
-            return transitionEvent(rule)
+            return [transitionEvent(rule)]
         case .wifiNetworkLeft:
-            guard let previous, current.isWiFiAuthorized, previous.isWiFiAuthorized else { return nil }
+            guard let previous, current.isWiFiAuthorized, previous.isWiFiAuthorized else { return [] }
             let previousSSID = previous.wifiSSID
-            guard previousSSID != nil, current.wifiSSID != previousSSID else { return nil }
+            guard previousSSID != nil, current.wifiSSID != previousSSID else { return [] }
             if let target = options.wifiSSID, previousSSID != target {
-                return nil
+                return []
             }
-            return transitionEvent(rule)
+            return [transitionEvent(rule)]
 
         case .focusModeEnabled:
             guard let previous, previous.isFocusActive == false, current.isFocusActive == true else {
-                return nil
+                return []
             }
-            return transitionEvent(rule)
+            return [transitionEvent(rule)]
         case .focusModeDisabled:
             guard let previous, previous.isFocusActive == true, current.isFocusActive == false else {
-                return nil
+                return []
             }
-            return transitionEvent(rule)
+            return [transitionEvent(rule)]
 
         case .calendarMeetingStartingSoon:
             let lead = TimeInterval(options.calendarLeadMinutes * 60)
-            let startingSoon = current.meetings.filter {
-                $0.startDate > now && $0.startDate.timeIntervalSince(now) <= lead
-            }
-            guard let meeting = startingSoon.min(by: { $0.startDate < $1.startDate }) else {
-                return nil
-            }
-            return AutomationTriggerEvent(
-                trigger: rule.trigger,
-                dedupeKey: "\(rule.trigger.rawValue).\(rule.id.uuidString).\(meeting.id)",
-                cooldown: max(AutomationPolicy.triggerCooldown, lead + 60)
-            )
+            return current.meetings
+                .filter { $0.startDate > now && $0.startDate.timeIntervalSince(now) <= lead }
+                .sorted { $0.startDate < $1.startDate }
+                .map { meeting in
+                    AutomationTriggerEvent(
+                        trigger: rule.trigger,
+                        dedupeKey: "\(rule.trigger.rawValue).\(rule.id.uuidString).\(meeting.id)",
+                        cooldown: max(AutomationPolicy.triggerCooldown, lead + 60)
+                    )
+                }
 
         case .lateNightUsage:
             guard current.isUserPresent,
-                  options.lateNightWindow.contains(now, calendar: calendar) else { return nil }
-            let untilWindowEnd = options.lateNightWindow.secondsUntilEnd(from: now, calendar: calendar)
-            return AutomationTriggerEvent(
+                  let night = options.lateNightWindow.nightAnchor(containing: now, calendar: calendar)
+            else { return [] }
+            return [AutomationTriggerEvent(
                 trigger: rule.trigger,
-                dedupeKey: "\(rule.trigger.rawValue).\(rule.id.uuidString)",
-                cooldown: max(AutomationPolicy.triggerCooldown, untilWindowEnd + 1)
-            )
+                // The night anchor makes each night an independent dedupe key, while the fixed
+                // cooldown blocks every later tick in the same night even as the window shrinks.
+                dedupeKey: "\(rule.trigger.rawValue).\(rule.id.uuidString).\(Int(night.timeIntervalSince1970))",
+                cooldown: AutomationPolicy.nightlyCooldown
+            )]
         }
     }
 

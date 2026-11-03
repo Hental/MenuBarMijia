@@ -146,16 +146,18 @@ final class AutomationEngine {
         lastContext = effective
         guard let store else { return }
         for rule in ruleStore.load() where rule.isEnabled {
-            guard let event = MacContextAutomation.event(
+            let events = MacContextAutomation.events(
                 for: rule,
                 previous: previous,
                 current: effective,
                 at: now,
                 calendar: calendar
-            ) else { continue }
-            guard deduper.shouldFire(event.dedupeKey, at: now, cooldown: event.cooldown) else {
-                continue
-            }
+            )
+            // Calendar rules return every eligible meeting; skip an already-fired event and let a
+            // later meeting in the same lead window fire instead of being masked by it.
+            guard events.contains(where: {
+                deduper.shouldFire($0.dedupeKey, at: now, cooldown: $0.cooldown)
+            }) else { continue }
             await execute(rule, store: store)
         }
     }

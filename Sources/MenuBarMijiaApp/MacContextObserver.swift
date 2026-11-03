@@ -70,7 +70,7 @@ final class MacContextObserver: MacContextProviding {
 
     private func tick() {
         let now = Date()
-        let (powerSource, batteryPercent) = Self.powerState()
+        let (powerSource, batteryPercent) = Self.readPowerState()
         let snapshot = MacContextSnapshot(
             cameraInUse: Self.cameraInUse(),
             microphoneInUse: Self.microphoneInUse(),
@@ -90,7 +90,8 @@ final class MacContextObserver: MacContextProviding {
 
     // MARK: - Power
 
-    private static func powerState() -> (MacPowerSource, Int?) {
+    /// Internal (not private) so the observer smoke test exercises the real IOKit ownership path.
+    static func readPowerState() -> (MacPowerSource, Int?) {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
             return (.unknown, nil)
         }
@@ -109,7 +110,7 @@ final class MacContextObserver: MacContextProviding {
         if let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] {
             for powerSource in list {
                 guard let description = IOPSGetPowerSourceDescription(blob, powerSource)?
-                    .takeRetainedValue() as? [String: Any],
+                    .takeUnretainedValue() as? [String: Any],
                     description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType
                 else { continue }
                 guard let current = description[kIOPSCurrentCapacityKey] as? Int,

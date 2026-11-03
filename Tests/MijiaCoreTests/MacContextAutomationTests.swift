@@ -33,13 +33,13 @@ struct MacContextAutomationTests {
             action: .quickAction(.lightsOff),
             triggerOptions: options
         )
-        return MacContextAutomation.event(
+        return MacContextAutomation.events(
             for: rule,
             previous: previous,
             current: current,
             at: now ?? date(12),
             calendar: calendar ?? utcCalendar
-        )
+        ).first
     }
 
     @Test("Rules stored before #174 decode with default options")
@@ -90,12 +90,12 @@ struct MacContextAutomationTests {
             isEnabled: false
         )
         let current = MacContextSnapshot(cameraInUse: true)
-        #expect(MacContextAutomation.event(
+        #expect(MacContextAutomation.events(
             for: rule,
             previous: MacContextSnapshot(),
             current: current,
             at: date(12)
-        ) == nil)
+        ).isEmpty)
     }
 
     @Test("Camera and microphone fire only on the matching transition")
@@ -206,6 +206,40 @@ struct MacContextAutomationTests {
         ) == nil)
     }
 
+    @Test("All eligible calendar meetings become events in start order")
+    func calendarMultipleMeetings() {
+        let now = date(10)
+        let first = CalendarMeeting(
+            id: "first",
+            title: "First",
+            startDate: now.addingTimeInterval(10 * 60),
+            endDate: now.addingTimeInterval(40 * 60)
+        )
+        let second = CalendarMeeting(
+            id: "second",
+            title: "Second",
+            startDate: now.addingTimeInterval(20 * 60),
+            endDate: now.addingTimeInterval(50 * 60)
+        )
+        let rule = AutomationRule(
+            trigger: .calendarMeetingStartingSoon,
+            action: .quickAction(.lightsOff),
+            triggerOptions: AutomationTriggerOptions(calendarLeadMinutes: 30)
+        )
+        let events = MacContextAutomation.events(
+            for: rule,
+            previous: nil,
+            current: MacContextSnapshot(meetings: [second, first]),
+            at: now,
+            calendar: utcCalendar
+        )
+        #expect(events.count == 2)
+        #expect(events.map(\.dedupeKey).contains { $0.hasSuffix(".first") })
+        #expect(events.map(\.dedupeKey).contains { $0.hasSuffix(".second") })
+        #expect(events[0].dedupeKey.hasSuffix(".first"))
+        #expect(events[1].dedupeKey.hasSuffix(".second"))
+    }
+
     @Test("Late-night use fires inside the window only while the Mac is present")
     func lateNightWindow() {
         let options = AutomationTriggerOptions(lateNightStartHour: 23, lateNightEndHour: 6)
@@ -222,6 +256,29 @@ struct MacContextAutomationTests {
         #expect((fired?.cooldown ?? 0) > 6 * 60 * 60)
     }
 
+    @Test("Late-night dedupe is anchored to one night")
+    func lateNightNightlyKey() throws {
+        let rule = AutomationRule(
+            trigger: .lateNightUsage,
+            action: .quickAction(.lightsOff),
+            triggerOptions: AutomationTriggerOptions(lateNightStartHour: 23, lateNightEndHour: 6)
+        )
+        let present = MacContextSnapshot(isUserPresent: true)
+        let beforeMidnight = try #require(MacContextAutomation.events(
+            for: rule, previous: nil, current: present, at: date(23, 30), calendar: utcCalendar
+        ).first)
+        let afterMidnight = try #require(MacContextAutomation.events(
+            for: rule, previous: nil, current: present, at: date(3, 30, day: 16), calendar: utcCalendar
+        ).first)
+        let nextNight = try #require(MacContextAutomation.events(
+            for: rule, previous: nil, current: present, at: date(23, 30, day: 16), calendar: utcCalendar
+        ).first)
+
+        #expect(beforeMidnight.dedupeKey == afterMidnight.dedupeKey)
+        #expect(beforeMidnight.dedupeKey != nextNight.dedupeKey)
+        #expect(beforeMidnight.cooldown == AutomationPolicy.nightlyCooldown)
+    }
+
     @Test("Late-night window math handles midnight crossing and same-day windows")
     func lateNightWindowMath() {
         let window = LateNightWindow(startHour: 23, endHour: 6)
@@ -230,14 +287,15 @@ struct MacContextAutomationTests {
         #expect(!window.contains(date(6, 0), calendar: utcCalendar))
         #expect(!window.contains(date(12, 0), calendar: utcCalendar))
 
-        #expect(window.end(after: date(23, 30), calendar: utcCalendar) == date(6, 0, day: 16))
-        #expect(window.end(after: date(3, 0), calendar: utcCalendar) == date(6, 0))
-
         let afternoon = LateNightWindow(startHour: 13, endHour: 14)
         #expect(afternoon.contains(date(13, 30), calendar: utcCalendar))
         #expect(!afternoon.contains(date(14, 0), calendar: utcCalendar))
-        #expect(afternoon.end(after: date(9), calendar: utcCalendar) == date(14, 0))
-        #expect(afternoon.end(after: date(20), calendar: utcCalendar) == date(14, 0, day: 16))
+
+        #expect(window.nightAnchor(containing: date(23, 30), calendar: utcCalendar)
+            == utcCalendar.startOfDay(for: date(23, 30)))
+        #expect(window.nightAnchor(containing: date(3, 30, day: 16), calendar: utcCalendar)
+            == utcCalendar.startOfDay(for: date(23, 30)))
+        #expect(window.nightAnchor(containing: date(12), calendar: utcCalendar) == nil)
 
         let empty = LateNightWindow(startHour: 0, endHour: 0)
         #expect(!empty.contains(date(0), calendar: utcCalendar))
