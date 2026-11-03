@@ -1998,8 +1998,10 @@ export const MiotSynthesizer = {
         currentMode,
         availableModes: mode?.prop.valueList?.map((i) => i.description) ?? [],
         ...readOnlyFlags({
-          actionsWritable: primaryService.actions.some((action) =>
-            ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"].includes(miotShortName(action.type)),
+          actionsWritable: spec.services.some((service) =>
+            service.actions.some((action) =>
+              ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"].includes(miotShortName(action.type)),
+            ),
           ),
         }),
       };

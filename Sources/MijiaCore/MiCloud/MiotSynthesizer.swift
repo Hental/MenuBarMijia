@@ -419,6 +419,9 @@ public enum MiotSynthesizer {
         let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
 
         let vacuumStartActions = ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"]
+        let actionsWritable = r.spec.services.contains { service in
+            vacuumStartActions.contains { service.action(named: $0) != nil }
+        }
         return .vacuum(VacuumSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             status: vacuumStatus(forDescription: status?.valueDescription),
@@ -426,7 +429,7 @@ public enum MiotSynthesizer {
             modeEntityId: mode.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
             currentMode: mode?.valueDescription,
             availableModes: mode?.property.valueList?.map(\.description) ?? [],
-            actionsWritable: vacuumStartActions.contains { s.action(named: $0) != nil }
+            actionsWritable: actionsWritable
         ))
     }
 

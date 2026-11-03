@@ -180,5 +180,34 @@ struct FallbackControlTests {
         #expect(throws: MiotCommandError.self) {
             try MiotCommandMapper.map(.vacuumAction(entityId: "miot:vac:2", action: .start), spec: vacuum)
         }
+
+        let secondary = MiotDeviceSpec(
+            type: "urn:miot-spec-v2:device:vacuum:0000A006:roborock-s5:1",
+            services: [
+                MiotService(
+                    iid: 2,
+                    type: "urn:miot-spec-v2:service:vacuum:00007810:roborock-s5:1",
+                    properties: [MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:status:00000007:roborock-s5:1", format: "uint8", access: ["read"])]
+                ),
+                MiotService(
+                    iid: 3,
+                    type: "urn:miot-spec-v2:service:vacuum-extend:00007810:roborock-s5:1",
+                    actions: [MiotAction(iid: 1, type: "urn:miot-spec-v2:action:start-sweep:00002804:roborock-s5:1")]
+                ),
+            ]
+        )
+        let secondaryKind = try #require(MiotSynthesizer.synthesize(
+            devices: [MiDeviceRecord(did: "vac-ext", name: "扫地机", model: "roborock.vacuum.s5", isOnline: true)],
+            rooms: [],
+            specs: ["roborock.vacuum.s5": secondary],
+            values: [MiotPropKey(did: "vac-ext", siid: 2, piid: 1): .number(1)]
+        ).devices.first?.kind)
+        guard case .vacuum(let writable) = secondaryKind else {
+            Issue.record("Expected a vacuum with a secondary start action")
+            return
+        }
+        #expect(writable.actionsWritable)
+        #expect(try MiotCommandMapper.map(.vacuumAction(entityId: "miot:vac-ext:2", action: .start), spec: secondary)
+            == .action(MiotActionCall(did: "vac-ext", siid: 3, aiid: 1)))
     }
 }

@@ -8,6 +8,7 @@ import { Window } from "happy-dom";
 
 import { installWindow } from "./dom.js";
 import { MenuMijiaWindowsApp } from "../src/ui/app.js";
+import { SKINS } from "../src/ui/panelPrefs.js";
 import { cloudFixture } from "./cloudFixture.js";
 import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
 import { MiCloudCrypto } from "../src/core/miCloudCrypto.js";
@@ -1090,6 +1091,72 @@ describe("Unverified MIoT fallback controls (#154)", () => {
     assert.equal(document.querySelector("[data-acstep]"), null);
     await click('[data-expand-device="ac-fan"]');
     assert.ok(document.querySelector('[data-acfan="ac-fan:Low"]'));
+  });
+
+  it("does not dim a read-only light when the tile is dragged", async () => {
+    const skins = SKINS as Array<{ id: string; readonly title: string }>;
+    skins.push({ id: "frost", get title() { return "霜"; } });
+    try {
+      const light = (id: string, brightnessWritable: boolean) => ({
+        id,
+        name: id,
+        roomId: "r1",
+        roomName: "客厅",
+        model: "yeelink.light.ceiling22",
+        isOnline: true,
+        kind: {
+          kind: "light",
+          entityId: `miot:${id}:2`,
+          isOn: true,
+          brightnessPercent: 40,
+          colorTempKelvin: 4000,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+          powerWritable: true,
+          brightnessWritable,
+          colorWritable: false,
+        },
+      });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+        connectionMode: "xiaomiCloud",
+        hasCompletedOnboarding: true,
+        skin: "frost",
+        isCompactGridMode: false,
+        cachedXiaomiDevices: [light("ro-light", false), light("rw-light", true)],
+      }));
+      (globalThis as { CSS?: { escape: (value: string) => string } }).CSS = {
+        escape: (value: string) => value,
+      };
+      new MenuMijiaWindowsApp(element("#app"));
+      await setImmediate();
+
+      const fill = (id: string) =>
+        document.querySelector(`[data-tile-id="${id}"] .cc-tile-fill`)?.getAttribute("style") ?? "";
+      const drag = (id: string) => {
+        element(`[data-tile-id="${id}"]`).dispatchEvent(
+          new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 10, clientY: 40 }),
+        );
+        window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 180, clientY: 42 }));
+      };
+
+      const before = fill("ro-light");
+      assert.match(before, /width:40%/);
+      drag("ro-light");
+      await setImmediate();
+      assert.equal(fill("ro-light"), before);
+      window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+      await setImmediate();
+      assert.doesNotMatch(document.body.textContent ?? "", /已将|控制失败/);
+
+      drag("rw-light");
+      await setImmediate();
+      assert.match(fill("rw-light"), /width:100%/);
+    } finally {
+      skins.pop();
+      delete (globalThis as { CSS?: unknown }).CSS;
+    }
   });
 });
 

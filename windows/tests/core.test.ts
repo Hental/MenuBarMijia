@@ -447,6 +447,41 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       MiotCommandMapper.map({ kind: "vacuumAction", entityId: "miot:fb_vac:2", action: "start" }, vacuumFallback),
     );
 
+    const secondaryStart: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:vacuum:0000A006:roborock-s5:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:vacuum:00007810:roborock-s5:1",
+          properties: [
+            {
+              iid: 1,
+              type: "urn:miot-spec-v2:property:status:00000007:roborock-s5:1",
+              format: "uint8",
+              access: ["read", "notify"],
+              valueList: [{ value: 1, description: "Idle" }],
+            },
+          ],
+          actions: [],
+        },
+        {
+          iid: 3,
+          type: "urn:miot-spec-v2:service:vacuum-extend:00007810:roborock-s5:1",
+          properties: [],
+          actions: [
+            { iid: 1, type: "urn:miot-spec-v2:action:start-sweep:00002804:roborock-s5:1" },
+          ],
+        },
+      ],
+    };
+    const secondaryKind = MiotSynthesizer.buildDeviceKind("vac-ext", secondaryStart, new Map([["vac-ext.2.1", 1]]));
+    assert.equal(secondaryKind?.kind, "vacuum");
+    if (secondaryKind?.kind === "vacuum") assert.notEqual(secondaryKind.actionsWritable, false);
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "vacuumAction", entityId: "miot:vac-ext:2", action: "start" }, secondaryStart),
+      { kind: "action", call: { did: "vac-ext", siid: 3, aiid: 1, inputs: [] } },
+    );
+
     const partialLight: MiotDeviceSpec = {
       type: "urn:miot-spec-v2:device:light:0000A001:trusted:1",
       services: [

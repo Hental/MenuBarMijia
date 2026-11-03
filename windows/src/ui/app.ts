@@ -6218,7 +6218,12 @@ export class MenuMijiaWindowsApp {
       }
       const dev = this.devices.find((d) => d.id === press?.id);
       const isExpanded = dev ? (this.expandedDeviceId === dev.id || this.tileSize(dev) === "panel") : false;
-      const canDim = this.skin !== "classic" && !isExpanded && dev?.kind.kind === "light" && dev.isOnline;
+      const canDim =
+        this.skin !== "classic" &&
+        !isExpanded &&
+        dev?.kind.kind === "light" &&
+        dev.isOnline &&
+        dev.kind.brightnessWritable !== false;
       if (!press.dimming && moved > 8) {
         window.clearTimeout(press.timer);
         if (canDim && Math.abs(dx) > Math.abs(dy)) press.dimming = true; else { press = null; return; }
@@ -6277,7 +6282,7 @@ export class MenuMijiaWindowsApp {
         const dev = this.devices.find((d) => d.id === finished.id);
         const percent = this.dimPreview.percent;
         this.dimPreview = null;
-        if (dev && dev.kind.kind === "light") {
+        if (dev && dev.kind.kind === "light" && dev.kind.brightnessWritable !== false) {
           void this.executeSingleCommand(dev, { kind: "setLightBrightness", entityId: dev.kind.entityId, percent }, t("已将{name}亮度设为 {percent}%", { name: dev.name, percent: percent }), { targetId: dev.id, operation: { kind: "brightness", percent } });
         }
       }
