@@ -161,6 +161,8 @@ public actor MiAccountsProvider: HomeProvider {
             if !snapshots.isEmpty {
                 publishSnapshot()
             }
+        case .sessionExpired(let session):
+            continuation?.yield(.sessionExpired(session))
         case .snapshotUpdated(let home):
             snapshots[accountId] = home
             if home.closesAwayGap {

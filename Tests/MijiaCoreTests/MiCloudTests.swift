@@ -1010,6 +1010,10 @@ actor EventLog {
         events.compactMap { if case .statusChanged(let s) = $0 { return s } else { return nil } }
     }
 
+    var expiredSessions: [MiSession] {
+        events.compactMap { if case .sessionExpired(let s) = $0 { return s } else { return nil } }
+    }
+
     /// Polls until `predicate` holds or ~3 s pass.
     func wait(until predicate: @Sendable (EventLog) async -> Bool) async -> Bool {
         for _ in 0..<300 {
@@ -1181,6 +1185,47 @@ struct MiCloudProviderTests {
         let (log2, t2) = consume(expired)
         defer { t2.cancel() }
         #expect(await log2.wait { await $0.statuses.contains(.disconnected("米家登录已过期，请重新扫码")) })
+    }
+
+    @Test("A cloud rejection emits the expired session once")
+    func sessionRejectionEmitsExpiredSession() async {
+        let api = StubMiCloudAPI(devices: [], rooms: [], values: [:], failure: .sessionExpired)
+        let provider = MiCloudProvider(sessionLoader: { fakeSession }, apiFactory: { _ in api }, specSource: StubSpecSource())
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        #expect(await log.wait { await $0.expiredSessions == [fakeSession] })
+        #expect(await log.wait { await $0.statuses.contains(.disconnected("米家登录已过期，请重新扫码")) })
+        #expect(await log.expiredSessions == [fakeSession])
+        await provider.shutdown()
+    }
+
+    @Test("A relaunch with an already-expired stored session makes no cloud call")
+    func expiredStoredSessionSkipsCloud() async {
+        let api = StubMiCloudAPI(
+            devices: [MiotFixtures.lightRecord],
+            rooms: [MiRoom(id: "r1", name: "书房", dids: ["123"])],
+            values: MiotFixtures.lightValues
+        )
+        let expiredSession = MiSession(
+            userId: fakeSession.userId,
+            cUserId: fakeSession.cUserId,
+            ssecurity: fakeSession.ssecurity,
+            serviceToken: fakeSession.serviceToken,
+            expiresAt: Date(timeIntervalSinceNow: -60)
+        )
+        let provider = MiCloudProvider(
+            sessionLoader: { expiredSession },
+            apiFactory: { _ in api },
+            specSource: StubSpecSource()
+        )
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        #expect(await log.wait { await $0.statuses.contains(.disconnected("米家登录已过期，请重新扫码")) })
+        #expect(await api.deviceListCalls == 0)
+        #expect(await log.expiredSessions.isEmpty)
+        await provider.shutdown()
     }
 
     @MainActor

@@ -92,7 +92,8 @@ extension HomeStore {
     }
 
     public var menuBarSymbolName: String {
-        activeDeviceCount > 0 ? "house.fill" : "house"
+        if miSessionShowsExpired { return "house.slash" }
+        return activeDeviceCount > 0 ? "house.fill" : "house"
     }
 
     public var menuBarText: String? {

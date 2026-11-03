@@ -22,13 +22,23 @@ public struct MiSession: Codable, Equatable, Sendable {
     public var ssecurity: String
     public var serviceToken: String
     public var region: String
+    /// The absolute end the login response carried (or the last server rejection time); nil means undated.
+    public var expiresAt: Date?
 
-    public init(userId: String, cUserId: String, ssecurity: String, serviceToken: String, region: String = "cn") {
+    public init(
+        userId: String,
+        cUserId: String,
+        ssecurity: String,
+        serviceToken: String,
+        region: String = "cn",
+        expiresAt: Date? = nil
+    ) {
         self.userId = userId
         self.cUserId = cUserId
         self.ssecurity = ssecurity
         self.serviceToken = serviceToken
         self.region = region
+        self.expiresAt = expiresAt
     }
 
     /// `12****89` style mask so the UI can show which account is signed in without exposing the full id.
@@ -141,13 +151,14 @@ public struct MiAccountLogin: Sendable {
                 continue
             }
         }
-        let token = try await fetchServiceToken(location: scanned!.location)
+        let serviceToken = try await fetchServiceToken(location: scanned!.location)
         return MiSession(
             userId: scanned!.userId,
             cUserId: scanned!.cUserId,
             ssecurity: scanned!.ssecurity,
-            serviceToken: token,
-            region: region
+            serviceToken: serviceToken.token,
+            region: region,
+            expiresAt: serviceToken.expiresAt
         )
     }
 
@@ -174,14 +185,14 @@ public struct MiAccountLogin: Sendable {
         )
     }
 
-    private func fetchServiceToken(location: URL) async throws -> String {
+    private func fetchServiceToken(location: URL) async throws -> (token: String, expiresAt: Date?) {
         var url = location
         for _ in 0..<5 {
             var req = URLRequest(url: url)
             req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             let (_, http) = try await redirectlessTransport.send(req)
-            if let token = Self.cookie(named: "serviceToken", in: http, url: url) {
-                return token
+            if let cookie = Self.cookie(named: "serviceToken", in: http, url: url) {
+                return (cookie.value, cookie.expiresDate)
             }
             guard (300...399).contains(http.statusCode),
                   let next = http.value(forHTTPHeaderField: "Location").flatMap({ URL(string: $0, relativeTo: url) }) else {
@@ -192,13 +203,13 @@ public struct MiAccountLogin: Sendable {
         throw MiLoginError.missingServiceToken
     }
 
-    static func cookie(named name: String, in response: HTTPURLResponse, url: URL) -> String? {
+    static func cookie(named name: String, in response: HTTPURLResponse, url: URL) -> HTTPCookie? {
         var fields: [String: String] = [:]
         for (k, v) in response.allHeaderFields {
             if let ks = k as? String, let vs = v as? String { fields[ks] = vs }
         }
         return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
-            .first { $0.name == name && !$0.value.isEmpty }?.value
+            .first { $0.name == name && !$0.value.isEmpty }
     }
 }
 
@@ -268,6 +279,22 @@ public enum MiSessionStore {
     }
 
     @discardableResult
+    public static func save(
+        _ session: MiSession,
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> Bool {
+        upsert(session, defaults: defaults, vault: vault)
+    }
+
+    public static func load(
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> MiSession? {
+        loadAccounts(defaults: defaults, vault: vault).first?.session
+    }
+
+    @discardableResult
     public static func upsert(
         _ session: MiSession,
         defaults: UserDefaults = .standard,
@@ -295,6 +322,25 @@ public enum MiSessionStore {
             return false
         }
         return saveAccounts(accounts.filter { $0.id != accountID }, defaults: defaults, vault: vault)
+    }
+
+    /// Records a server-classified rejection as the stored session's end. Compare before write: when the
+    /// stored credential is no longer the rejected one (`userId` or `serviceToken` changed), a late
+    /// failure must not condemn a newer scan. The updated session is returned even if the store refuses
+    /// the write, so the running UI still reflects the rejection.
+    public static func markRejected(
+        _ rejected: MiSession,
+        at date: Date = Date(),
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> MiSession? {
+        var accounts = loadAccounts(defaults: defaults, vault: vault)
+        guard let index = accounts.firstIndex(where: {
+            $0.session.userId == rejected.userId && $0.session.serviceToken == rejected.serviceToken
+        }) else { return nil }
+        accounts[index].session.expiresAt = date
+        saveAccounts(accounts, defaults: defaults, vault: vault)
+        return accounts[index].session
     }
 
     @discardableResult
