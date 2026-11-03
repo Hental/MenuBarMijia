@@ -967,6 +967,54 @@ struct MenuBarPanelControllerTests {
         #expect(panel.level.rawValue > NSWindow.Level.statusBar.rawValue)
     }
 
+    @Test("Closing the camera mini-window hides it at once and releases the stream")
+    func cameraLivePanelCloseReleasesStreamImmediately() async throws {
+        _ = NSApplication.shared
+        let suite = "MenuBarPanelTests-camera-close-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let mock = MockHomeProvider(snapshot: DemoHomeProvider.defaultHome())
+        let store = HomeStore(provider: mock, defaultsSuiteName: suite)
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let camera = try #require(store.devices.first(where: {
+            if case .camera = $0.kind { return true }
+            return false
+        }))
+
+        let cameraController = CameraLivePanelController.shared
+        cameraController.presentsActively = false
+        cameraController.install(with: store)
+        defer { cameraController.closePanel() }
+
+        store.openCameraLiveView(camera.id)
+        let panel = try #require(cameraController.panelWindow)
+        #expect(panel.isVisible)
+        #expect(panel.canBecomeKey)
+
+        panel.cancelOperation(nil)
+        #expect(cameraController.isVisible == false)
+        #expect(cameraController.videoPlayer == nil)
+
+        var stopped = false
+        for _ in 0..<40 {
+            if await mock.stoppedCameraIDs.contains(camera.id) {
+                stopped = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(stopped)
+    }
+
+    @Test("Picture in Picture reports a valid endless live time range")
+    func cameraPictureInPictureLiveRangeIsValid() {
+        let range = CameraPictureInPicture.livePlaybackTimeRange()
+        #expect(range.isValid)
+        #expect(CMTimeCompare(range.start, .zero) == 0)
+        #expect(range.duration.isPositiveInfinity)
+    }
+
 
     @Test("TileResizeGestureMath maps 30pt horizontal and vertical translations across half, full, and panel (#115)")
     func tileResizeGestureMathThresholds() {

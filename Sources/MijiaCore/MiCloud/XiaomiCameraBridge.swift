@@ -17,7 +17,8 @@ public protocol XiaomiCameraBridging: Sendable {
         devicePublic: String,
         sign: String,
         vendor: String,
-        uid: String?
+        uid: String?,
+        quality: XiaomiCameraStreamQuality
     ) async throws -> XiaomiCameraStreamEndpoints
 
     func stopBridge(did: String) async
@@ -67,7 +68,8 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         devicePublic: String,
         sign: String,
         vendor: String,
-        uid: String?
+        uid: String?,
+        quality: XiaomiCameraStreamQuality
     ) async throws -> XiaomiCameraStreamEndpoints {
         let trimmedIP = localIP.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let ipv4 = Self.parsePrivateOrLoopbackIPv4(trimmedIP) else {
@@ -96,7 +98,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
             sign: sign,
             vendor: vendor,
             model: model,
-            quality: .sd,
+            quality: quality,
             uid: uid
         )
         let xiaomiURL = "xiaomi://127.0.0.1:\(relayPort)?\(query)"
@@ -416,7 +418,6 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         String(did.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "_" })
     }
 
-    /// Query string for the `xiaomi://` source go2rtc dials through the local relay.
     public static func xiaomiStreamQuery(
         clientPublic: String,
         clientPrivate: String,
@@ -427,8 +428,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         quality: XiaomiCameraStreamQuality,
         uid: String?
     ) -> String {
-        let subtype = "sd"
-        _ = quality.subtypeQueryValue
+        let subtype = quality.subtypeQueryValue
         var query = [
             "client_public=\(urlEncode(clientPublic))",
             "client_private=\(urlEncode(clientPrivate))",

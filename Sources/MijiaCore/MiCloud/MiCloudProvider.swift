@@ -449,6 +449,10 @@ public actor MiCloudProvider: HomeProvider {
     // MARK: Camera Live Stream Resolution
 
     public func resolveCameraStream(for device: SmartDevice) async throws -> CameraStreamSource {
+        try await resolveCameraStream(for: device, quality: .hd)
+    }
+
+    public func resolveCameraStream(for device: SmartDevice, quality: XiaomiCameraStreamQuality) async throws -> CameraStreamSource {
         guard case .camera(let cameraSpec) = device.kind else {
             throw MiotCommandError.unsupported("camera")
         }
@@ -541,7 +545,8 @@ public actor MiCloudProvider: HomeProvider {
                             devicePublic: vendor.devicePublicKey,
                             sign: vendor.sign,
                             vendor: vendor.vendorName,
-                            uid: vendor.p2pId
+                            uid: vendor.p2pId,
+                            quality: quality
                         )
                     } catch {
                         if Task.isCancelled || error is CancellationError {

@@ -7,13 +7,25 @@ import SwiftUI
 
 // MARK: - Floating Live Camera Window Controller (#97)
 
-/// Borderless, resizable floating `NSPanel` that stays visible across Spaces and full-screen apps
-/// without stealing focus when clicked unless a text field inside it asks for key status.
+/// Borderless, resizable floating `NSPanel` that stays visible across Spaces and full-screen apps.
 final class CameraFloatingPanel: NSPanel {
-    var allowsKeyStatus = false
+    var onCancel: (() -> Void)?
 
-    override var canBecomeKey: Bool { allowsKeyStatus }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
+    }
+
+    /// A nonactivating panel ignores the click that would make it key, so the first click on
+    /// the close button never reached the SwiftUI action.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, !isKeyWindow {
+            makeKey()
+        }
+        super.sendEvent(event)
+    }
 }
 
 @Observable
@@ -53,7 +65,7 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
     private var snapshotLoopTask: Task<Void, Never>?
     private var mjpegSession: URLSession?
     private var closeReleaseTask: Task<Void, Never>?
-    private static let hotKeepAliveDuration: Duration = .seconds(120)
+    private var isClosing = false
     private let snapshotSession: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.connectionProxyDictionary = [:]
@@ -130,22 +142,24 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
     }
 
     public func closePanel() {
+        guard !isClosing else { return }
+        isClosing = true
+        defer { isClosing = false }
+
+        closeReleaseTask?.cancel()
         setURLFieldActive(false)
         if let frame = panelWindow?.frame {
             UserDefaults.standard.set(NSStringFromRect(frame), forKey: Self.frameStorageKey)
         }
+        let deviceId = activeDeviceId
+        let store = self.store
+        stopStreamTasks()
         panelWindow?.orderOut(nil)
 
-        closeReleaseTask?.cancel()
-        let keepAlive = Self.hotKeepAliveDuration
         closeReleaseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: keepAlive)
-            guard !Task.isCancelled, let self, !self.isVisible, !self.isPictureInPictureActive else { return }
-            let oldId = self.activeDeviceId
-            self.stopStreamTasks()
-            if let oldId, let store = self.store {
-                await store.stopCameraStream(for: oldId)
-            }
+            guard !Task.isCancelled, let deviceId, let store else { return }
+            await store.stopCameraStream(for: deviceId)
+            self?.closeReleaseTask = nil
         }
     }
 
@@ -168,6 +182,9 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
     // MARK: - Picture in Picture
 
     public func togglePictureInPicture() {
+        if pictureInPicture == nil, let player = videoPlayer {
+            setUpPictureInPicture(for: player)
+        }
         guard let pictureInPicture else { return }
         if isPictureInPictureActive {
             pictureInPicture.stop()
@@ -192,6 +209,9 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
                 }
                 self.panelWindow?.orderOut(nil)
             }
+        }
+        pip.onPlaybackPaused = { [weak player] paused in
+            player?.setPlaybackPaused(paused)
         }
         pip.onRestore = { [weak self] in
             self?.panelWindow?.orderFrontRegardless()
@@ -227,7 +247,6 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
     }
 
     public func setURLFieldActive(_ active: Bool) {
-        panelWindow?.allowsKeyStatus = active
         if active, presentsActively {
             panelWindow?.makeKeyAndOrderFront(nil)
             NSApp.activate()
@@ -317,7 +336,6 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         }
         videoPlayer = player
         hasLiveVideoFrame = false
-        setUpPictureInPicture(for: player)
 
         snapshotLoopTask = Task { @MainActor [weak self] in
             var failedAttempts = 0
@@ -526,6 +544,9 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = self
         panel.contentView = nil
+        panel.onCancel = { [weak self] in
+            self?.closePanel()
+        }
         return panel
     }
 
@@ -776,8 +797,8 @@ struct CameraLivePanelView: View {
                 ) {
                     controller.togglePictureInPicture()
                 }
-                .disabled(!controller.isPictureInPicturePossible && !controller.isPictureInPictureActive)
-                .opacity(controller.isPictureInPicturePossible || controller.isPictureInPictureActive ? 1 : 0.4)
+                .disabled(!controller.hasLiveVideoFrame && !controller.isPictureInPictureActive)
+                .opacity(controller.hasLiveVideoFrame || controller.isPictureInPictureActive ? 1 : 0.4)
             }
 
             hudIconButton(
@@ -1070,6 +1091,19 @@ struct CameraLivePanelView: View {
                     }
                     .buttonStyle(PillActionButtonStyle(isSelected: !spec.isOn, tintColor: .cyan))
 
+                    if store.homeBackend == .xiaomiCloud,
+                       (store.cameraCustomStreamURL(for: device?.id ?? "") ?? "").isEmpty,
+                       let deviceId = device?.id {
+                        ForEach(XiaomiCameraStreamQuality.allCases, id: \.self) { quality in
+                            let selected = store.cameraStreamQuality(for: deviceId) == quality
+                            Button(Self.qualityTitle(quality)) {
+                                store.setCameraStreamQuality(quality, for: deviceId)
+                                controller.reloadStream()
+                            }
+                            .buttonStyle(PillActionButtonStyle(isSelected: selected, tintColor: .cyan))
+                        }
+                    }
+
                     if spec.motionDetectionEntityId != nil {
                         let motionOn = spec.isMotionDetectionOn ?? false
                         Button {
@@ -1128,6 +1162,15 @@ struct CameraLivePanelView: View {
         if controller.isLoadingStream { return .orange }
         if controller.streamSource != nil { return .green }
         return .orange
+    }
+
+    private static func qualityTitle(_ quality: XiaomiCameraStreamQuality) -> String {
+        switch quality {
+        case .auto: return L10n.tr("自动", "Auto")
+        case .sd: return L10n.tr("流畅", "SD")
+        case .hd: return L10n.tr("高清", "HD")
+        case .max: return L10n.tr("超清", "Ultra")
+        }
     }
 
     private static func timestampString(tick: Int) -> String {

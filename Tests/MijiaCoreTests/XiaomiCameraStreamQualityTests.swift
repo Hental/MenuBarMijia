@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import MijiaCore
 
@@ -42,5 +43,28 @@ struct XiaomiCameraStreamQualityTests {
             uid: nil
         )
         #expect(smooth.contains("subtype=sd"))
+        #expect(XiaomiCameraStreamQuality.storageDefault == .hd)
+    }
+
+    @MainActor
+    @Test("HomeStore saves the chosen camera quality and passes it when resolving the stream")
+    func homeStorePassesSavedQuality() async throws {
+        let suite = "camera-quality-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let mock = MockHomeProvider(snapshot: DemoHomeProvider.defaultHome())
+        let store = HomeStore(provider: mock, defaultsSuiteName: suite)
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let camera = try #require(store.devices.first(where: { if case .camera = $0.kind { return true }; return false }))
+        #expect(store.cameraStreamQuality(for: camera.id) == .hd)
+        store.setCameraStreamQuality(.max, for: camera.id)
+        let reloaded = HomeStore(provider: mock, defaultsSuiteName: suite)
+        for _ in 0..<50 where reloaded.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reloaded.cameraStreamQuality(for: camera.id) == .max)
+        _ = try await reloaded.resolveCameraStream(for: camera.id)
+        #expect(await mock.requestedCameraQualities == [.max])
     }
 }

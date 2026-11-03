@@ -9,6 +9,8 @@ public actor MockHomeProvider: HomeProvider {
     /// Every polling context the store sent, in order (#26).
     public private(set) var pollingContexts: [PollingContext] = []
     public var shouldFailCommands: Bool = false
+    public private(set) var requestedCameraQualities: [XiaomiCameraStreamQuality] = []
+    public private(set) var stoppedCameraIDs: [String] = []
 
     public init(snapshot: SynthesizedHome = .init()) {
         self.snapshot = snapshot
@@ -80,6 +82,15 @@ public actor MockHomeProvider: HomeProvider {
             return source
         }
         return .demo(deviceId: device.id)
+    }
+
+    public func resolveCameraStream(for device: SmartDevice, quality: XiaomiCameraStreamQuality) async throws -> CameraStreamSource {
+        requestedCameraQualities.append(quality)
+        return try await resolveCameraStream(for: device)
+    }
+
+    public func stopCameraStream(for device: SmartDevice) async {
+        stoppedCameraIDs.append(device.id)
     }
 }
 
