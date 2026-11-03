@@ -1021,7 +1021,6 @@ describe("Update notice (#39)", () => {
   it("installs an update directly in-app when a verified installer asset is present", async () => {
     localStorage.removeItem("menumijia.windows.update.v1");
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-    const sha = "b".repeat(64);
     const expectedAsset = JSON.parse(
       readFileSync(new URL("./fixtures/windows-installer-asset.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
@@ -1035,7 +1034,10 @@ describe("Update notice (#39)", () => {
           browser_download_url:
             "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe",
           size: 3145728,
-          digest: `sha256:${sha}`,
+        },
+        {
+          name: "MenuBarMijia-9.9.9.update.json",
+          size: 526,
         },
       ],
     });

@@ -4,13 +4,8 @@ name: Finalize Release
 #
 # 为什么分开：应用内更新用离线 Ed25519 私钥签名，私钥必须留在维护者的可信机器上，绝不进入 GitHub。
 # 本工作流只持有**公钥**（编译在 Sources/MijiaCore/UpdateChecker.swift 里），因此它无法伪造签名，
-# 只能验证签名确实对应草稿里的那份 DMG——这正是独立信任链要保证的：GitHub 被攻破也发不出能通过
+# 只能验证签名确实对应草稿里的那份发布清单——这正是独立信任链要保证的：GitHub 被攻破也发不出能通过
 # 校验的更新包。
-#
-# 前置条件（在可信机器上完成）：
-#   1. .github/workflows/release.yml 跑完，生成了 ${RELEASE_TAG} 的草稿（6 个附件）
-#   2. 下载草稿里的 DMG/EXE/MSI，用离线私钥签名，并把 3 个 .ed25519.sig 上传回同一草稿
-#   3. 手动触发本工作流，输入同一个 tag
 #
 # 本工作流不重新编译、不覆盖已发布的 release：签名必须对应草稿里的那份二进制。
 on:
@@ -86,7 +81,7 @@ jobs:
           fi
           echo "✅ ${RELEASE_TAG} 是未发布的草稿"
 
-      - name: Download the 9 draft assets
+      - name: Download the 8 draft assets
         env:
           RELEASE_VERSION: ${{ steps.check.outputs.version }}
         run: |
@@ -95,12 +90,10 @@ jobs:
           exe="MenuBarMijia-${RELEASE_VERSION}-windows-x64-setup.exe"
           msi="MenuBarMijia-${RELEASE_VERSION}-windows-x64.msi"
           required_sigs=(
-            "${dmg}.ed25519.sig"
-            "${exe}.ed25519.sig"
-            "${msi}.ed25519.sig"
+            "MenuBarMijia-${RELEASE_VERSION}.update.json"
+            "MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"
           )
 
-          # 先看草稿里有没有全部 3 个离线签名：缺任何一个都属于“还没走完第二阶段”，要和“签名不对”区分开。
           mapfile -t draft_assets < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r')
           missing_sigs=()
           for sig in "${required_sigs[@]}"; do
@@ -116,10 +109,13 @@ jobs:
               echo '```bash'
               echo "gh release download ${RELEASE_TAG} --pattern \"MenuBarMijia-${RELEASE_VERSION}*\" --dir dist"
               echo "MENUBARMIJIA_UPDATE_SIGNING_KEY=\"<离线私钥>\" swift scripts/sign_update.swift \\"
+              echo "  --min-from <x.y.z> \\"
               echo "  dist/$dmg \\"
               echo "  dist/$exe \\"
               echo "  dist/$msi"
-              echo "gh release upload ${RELEASE_TAG} dist/*.ed25519.sig"
+              echo "gh release upload ${RELEASE_TAG} \\"
+              echo "  dist/MenuBarMijia-${RELEASE_VERSION}.update.json \\"
+              echo "  dist/MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"
               echo '```'
               echo "上传签名后重新触发本工作流。"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -127,14 +123,12 @@ jobs:
             exit 1
           fi
 
-          # 从草稿本身下载，而不是重新编译：签名只对草稿里那份安装包有效。
           gh release download "${RELEASE_TAG}" --dir dist
           ls -l dist
 
-          # 附件集合必须严格是这 9 个；缺任何一个（含 .sha256 与三份 .ed25519.sig）或出现多余文件都失败。
           if ! bash scripts/check_release.sh assets "${RELEASE_VERSION}" dist; then
-            echo "❌ 草稿附件不完整，或 Ed25519 签名与草稿里的 DMG/EXE/MSI 不匹配。" >&2
-            echo "   常见原因：安装包被重新构建后仍挂着旧签名。请在可信机器上用当前安装包重新签名并覆盖 .sig 后重试。" >&2
+            echo "❌ 草稿附件不完整，或清单签名与草稿里的更新清单不匹配。" >&2
+            echo "   常见原因：安装包被重新构建后仍挂着旧清单。请在可信机器上用当前安装包重新签名并覆盖清单后重试。" >&2
             exit 1
           fi
 
@@ -161,7 +155,7 @@ jobs:
               exit 1
             fi
           done < "$RUNNER_TEMP/remote-assets.txt"
-          echo "✅ 9 个附件与服务端摘要一致"
+          echo "✅ 8 个附件与服务端摘要一致"
 
       - name: Publish the draft (no rebuild, no asset overwrite)
         run: |
@@ -183,7 +177,7 @@ jobs:
           {
             echo "### 已发布 ${RELEASE_TAG}"
             echo "- 提交：${{ steps.check.outputs.commit }}"
-            echo "- 附件：DMG/EXE/MSI + 各自 .ed25519.sig + .sha256（共 9 个）"
-            echo "- Ed25519：使用 UpdateChecker.swift 内置公钥验证，签名对应的就是草稿里的这份 DMG/EXE/MSI"
+            echo "- 附件：DMG/EXE/MSI + 各自 .sha256 + 更新清单与清单签名（共 8 个）"
+            echo "- Ed25519：使用 UpdateChecker.swift 内置公钥验证清单签名，check-fields 再把清单和三个安装包对上"
             echo "- 私钥：未进入 GitHub；CI 全程只做验证"
           } >> "$GITHUB_STEP_SUMMARY"

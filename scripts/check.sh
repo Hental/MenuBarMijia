@@ -150,6 +150,7 @@ for path, pat in files.items():
 if len(set(keys.values())) != 1:
     sys.exit(f"❌ 双端 Ed25519 更新公钥不一致：{keys}")
 PY
+    python3 scripts/update_manifest.py self-test
 fi
 
 if [ "$LINT_ONLY" = "1" ]; then
