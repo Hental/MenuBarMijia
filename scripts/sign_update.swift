@@ -156,8 +156,11 @@ func main() throws {
 
     let encoder = Process()
     encoder.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    let manifestTool = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("update_manifest.py")
     encoder.arguments = [
-        "python3", "scripts/update_manifest.py", "encode",
+        "python3", manifestTool.path, "encode",
         "--min-from", minFrom,
         "--dmg", dmgURL.path,
         "--exe", exeURL.path,

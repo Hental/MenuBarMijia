@@ -23,9 +23,16 @@ def public_key() -> str:
     return match.group(1)
 
 
+def version_key(text: str) -> tuple[int, int, int]:
+    major, minor, patch = text.split(".")
+    return int(major), int(minor), int(patch)
+
+
 def canonical_bytes(version: str, min_from: str, key_id: str, digests: tuple[str, str, str]) -> bytes:
     if not VERSION_RE.fullmatch(version) or not VERSION_RE.fullmatch(min_from):
         raise SystemExit("版本必须是 x.y.z")
+    if version_key(min_from) > version_key(version):
+        raise SystemExit("min_from 不能高于 version")
     for digest in digests:
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise SystemExit("SHA-256 必须是 64 位小写十六进制")
@@ -139,6 +146,13 @@ def self_test() -> None:
         raise SystemExit(
             f"canonical_bytes 与黄金清单不一致：生成 {len(golden_body)} 字节，文件 {len(golden)} 字节"
         )
+    try:
+        canonical_bytes("1.2.3", "9.9.9", public_key(), ("a" * 64, "b" * 64, "c" * 64))
+    except SystemExit as error:
+        if "min_from" not in str(error):
+            raise
+    else:
+        raise SystemExit("min_from 高于 version 时 canonical_bytes 仍成功")
     with tempfile.TemporaryDirectory() as tmp:
         directory = pathlib.Path(tmp)
         version = "1.2.3"
