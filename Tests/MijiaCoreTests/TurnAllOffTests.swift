@@ -76,8 +76,8 @@ struct TurnAllOffTests {
     @MainActor
     func limitedToSelectedRoom() async throws {
         let (store, _) = try await makeStore()
-        store.selectedRoomId = "study"
-        #expect(store.allOffRoomName == "书房")
+        store.selectRoom("study")
+        #expect(store.allOffScopeName == "书房")
         #expect(store.allOffTargets.map(\.id) == ["light_study"])
         store.turnAllOff()
         #expect(!isOn(store, "light_study"))

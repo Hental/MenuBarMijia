@@ -1022,17 +1022,6 @@ public enum DeviceSynthesizer {
     }
 
     private static func kindPriority(_ kind: DeviceKind) -> Int {
-        switch kind {
-        case .climate: return 1
-        case .light: return 2
-        case .plug: return 3
-        case .fan: return 4
-        case .vacuum: return 5
-        case .fridge: return 6
-        case .speaker: return 7
-        case .tv: return 8
-        case .camera: return 9
-        case .sensor: return 10
-        }
+        kind.tag.rank
     }
 }

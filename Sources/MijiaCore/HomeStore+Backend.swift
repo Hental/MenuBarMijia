@@ -619,7 +619,7 @@ extension HomeStore {
             userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         }
         selectedMiHomeId = id
-        selectedRoomId = nil
+        selectRoom(nil)
         refreshNow()
     }
 

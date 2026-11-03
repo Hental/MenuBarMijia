@@ -70,12 +70,35 @@ extension HomeStore {
         }
     }
 
+    /// Nil for `.all` and `.kind`. A kind cut stays on the all-rooms page so
+    /// layout, badges, favorites, and groups keep their existing meaning.
+    public var selectedRoomId: String? {
+        if case .room(let id) = listCut { return id }
+        return nil
+    }
+
+    /// Stores `.room` or `.all`. False when that cut is already stored.
+    /// Nil while a kind is selected stores `.all`.
+    @discardableResult
+    public func selectRoom(_ roomId: String?) -> Bool {
+        let next: DeviceListCut = roomId.map(DeviceListCut.room) ?? .all
+        guard listCut != next else { return false }
+        listCut = next
+        return true
+    }
+
+    /// Stores `.kind`. A second call with the same tag does not clear it.
+    public func selectKind(_ tag: DeviceKindTag) {
+        guard listCut != .kind(tag) else { return }
+        listCut = .kind(tag)
+    }
+
     public func cycleRoom(delta: Int = 1) {
         let options: [String?] = [nil] + rooms.map { Optional($0.id) }
         guard options.count > 1 else { return }
         let curIdx = options.firstIndex(where: { $0 == selectedRoomId }) ?? 0
         let nextIdx = (curIdx + delta + options.count) % options.count
-        selectedRoomId = options[nextIdx]
+        selectRoom(options[nextIdx])
     }
 
     // MARK: - User Actions & Optimistic State Mutations
