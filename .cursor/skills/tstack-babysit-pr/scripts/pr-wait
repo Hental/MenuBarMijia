@@ -90,15 +90,32 @@ query($owner: String!, $name: String!, $number: Int!) {
       reviews(last: 100) {
         nodes { id url state body commit { oid } author { login __typename } }
       }
-      reviewThreads(last: 100) {
-        nodes {
-          isResolved path line
-          comments(first: 100) { nodes { id url body author { login __typename } } }
-        }
-      }
     }
   }
 }
+"""
+
+def threads_query(cursor: str | None) -> str:
+    """One page of review threads. The first page omits `after` so gh does not send an empty cursor."""
+    after = ""
+    if cursor:
+        if not re.fullmatch(r"[A-Za-z0-9+/=_-]+", cursor):
+            raise GhError("review thread cursor was not a cursor", False)
+        after = f', after: "{cursor}"'
+    return f"""
+query($owner: String!, $name: String!, $number: Int!) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
+      reviewThreads(first: 100{after}) {{
+        pageInfo {{ hasNextPage endCursor }}
+        nodes {{
+          isResolved path line
+          comments(first: 100) {{ nodes {{ id url body author {{ login __typename }} }} }}
+        }}
+      }}
+    }}
+  }}
+}}
 """
 
 Json = dict[str, Any]
@@ -305,6 +322,27 @@ class Watcher:
         pr["viewer"] = data["viewer"]["login"]
         return pr
 
+    def fetch_threads(self) -> list[Json]:
+        """Every review thread, not only the latest page."""
+        threads: list[Json] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        while True:
+            proc = gh([
+                "api", "graphql", "-f", f"query={threads_query(cursor)}",
+                "-f", f"owner={self.owner}", "-f", f"name={self.name}", "-F", f"number={self.pr}",
+            ])
+            connection = json.loads(proc.stdout)["data"]["repository"]["pullRequest"]["reviewThreads"]
+            threads.extend(connection["nodes"] or [])
+            page = connection["pageInfo"]
+            if not page["hasNextPage"]:
+                return threads
+            nxt = page.get("endCursor")
+            if not nxt or nxt in seen:
+                raise GhError("review thread pagination did not advance", False)
+            seen.add(nxt)
+            cursor = nxt
+
     def fetch_checks(self) -> dict[str, Json]:
         # gh pr checks exits 8 while checks are pending and 1 when one failed.
         # Those are states, not errors: read the JSON and ignore the exit code.
@@ -359,7 +397,7 @@ class Watcher:
         mine = {who(pr)[0], pr["viewer"]}
         comments = pr["comments"]["nodes"]
         reviews = pr["reviews"]["nodes"]
-        threads = pr["reviewThreads"]["nodes"]
+        threads = self.fetch_threads()
         self.events = 0
 
         # Required checks. With no required checks configured, every CI check

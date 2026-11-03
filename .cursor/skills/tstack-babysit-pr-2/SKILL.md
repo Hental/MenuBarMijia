@@ -6,8 +6,7 @@ description: >-
 ---
 # tstack babysit-pr (Grok Bot)
 
-Source: https://github.com/t3dotgg/tstack (skill `babysit-pr`). Local copy: `/home/box/agent-data/workflows/tstack-babysit-pr/` with `scripts/pr-wait`.
-Also mirror: [tstack babysit-pr](sand-workflow:tstack-babysit-pr) folder under workflows.
+Source: https://github.com/t3dotgg/tstack (skill `babysit-pr`). The watcher in this repo is `.cursor/skills/tstack-babysit-pr/scripts/pr-wait`.
 
 ## MenuBarMijia merge gate (overrides tstack Greptile default)
 
@@ -23,7 +22,7 @@ Do **not** wait for Greptile or Macroscope unless the repo actually uses them.
 Never write your own sleep poller. Use one watcher per PR:
 
 ```bash
-/home/box/agent-data/workflows/tstack-babysit-pr/scripts/pr-wait <pr> --repo jryang1997/MenuBarMijia --until green
+.cursor/skills/tstack-babysit-pr/scripts/pr-wait <pr> --repo jryang1997/MenuBarMijia --until green
 ```
 
 Then verify the Codex tip review via GitHub tools. For MenuBarMijia prefer `green` + Codex, not tstack's default `ready` (Greptile).
@@ -32,7 +31,7 @@ pstack alternative: poteto-mode Babysit playbook. Prefer one watcher stack per P
 
 ## Reviews
 
-Only act on checks/comments newer than the latest push. Verify bot findings against source. Fix real issues; dismiss false positives with a written reason. Comment tone: `/home/box/agent-data/workflows/tstack-leaving-pr-comments/SKILL.md`.
+Only act on checks/comments newer than the latest push. Verify bot findings against source. Fix real issues; dismiss false positives with a written reason. Comment tone: `.cursor/skills/tstack-leaving-pr-comments/SKILL.md`.
 
 ## Merge
 
