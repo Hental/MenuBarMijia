@@ -50,6 +50,8 @@ public struct LightSpec: Equatable, Sendable {
     public var maxKelvin: Int
     public var currentEffect: String?
     public var availableEffects: [String]
+    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
+    public var controlsWritable: Bool
 
     public init(
         entityId: String,
@@ -59,7 +61,8 @@ public struct LightSpec: Equatable, Sendable {
         minKelvin: Int = 2700,
         maxKelvin: Int = 6500,
         currentEffect: String? = nil,
-        availableEffects: [String] = []
+        availableEffects: [String] = [],
+        controlsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -69,6 +72,7 @@ public struct LightSpec: Equatable, Sendable {
         self.maxKelvin = maxKelvin
         self.currentEffect = currentEffect
         self.availableEffects = availableEffects
+        self.controlsWritable = controlsWritable
     }
 }
 
@@ -86,6 +90,8 @@ public struct ClimateSpec: Equatable, Sendable {
     public var availableFanModes: [String]
     public var swingMode: String?
     public var availableSwingModes: [String]
+    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
+    public var controlsWritable: Bool
 
     public init(
         entityId: String,
@@ -100,7 +106,8 @@ public struct ClimateSpec: Equatable, Sendable {
         fanMode: String? = nil,
         availableFanModes: [String] = [],
         swingMode: String? = nil,
-        availableSwingModes: [String] = []
+        availableSwingModes: [String] = [],
+        controlsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -115,6 +122,7 @@ public struct ClimateSpec: Equatable, Sendable {
         self.availableFanModes = availableFanModes
         self.swingMode = swingMode
         self.availableSwingModes = availableSwingModes
+        self.controlsWritable = controlsWritable
     }
 }
 
@@ -130,6 +138,8 @@ public struct FanSpec: Equatable, Sendable {
     public var temperature: Double?
     public var humidity: Double?
     public var filterLifePercent: Int?
+    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
+    public var controlsWritable: Bool
 
     public init(
         entityId: String,
@@ -142,7 +152,8 @@ public struct FanSpec: Equatable, Sendable {
         airQuality: String? = nil,
         temperature: Double? = nil,
         humidity: Double? = nil,
-        filterLifePercent: Int? = nil
+        filterLifePercent: Int? = nil,
+        controlsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -155,6 +166,7 @@ public struct FanSpec: Equatable, Sendable {
         self.temperature = temperature
         self.humidity = humidity
         self.filterLifePercent = filterLifePercent
+        self.controlsWritable = controlsWritable
     }
 }
 
@@ -165,6 +177,8 @@ public struct PlugSpec: Equatable, Sendable {
     public var energyKwh: Double?
     public var childLockEntityId: String?
     public var isChildLocked: Bool
+    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
+    public var controlsWritable: Bool
 
     public init(
         switchEntityId: String,
@@ -172,7 +186,8 @@ public struct PlugSpec: Equatable, Sendable {
         powerWatts: Double? = nil,
         energyKwh: Double? = nil,
         childLockEntityId: String? = nil,
-        isChildLocked: Bool = false
+        isChildLocked: Bool = false,
+        controlsWritable: Bool = true
     ) {
         self.switchEntityId = switchEntityId
         self.isOn = isOn
@@ -180,6 +195,7 @@ public struct PlugSpec: Equatable, Sendable {
         self.energyKwh = energyKwh
         self.childLockEntityId = childLockEntityId
         self.isChildLocked = isChildLocked
+        self.controlsWritable = controlsWritable
     }
 }
 
@@ -329,6 +345,8 @@ public struct CameraSpec: Equatable, Sendable {
     public var isMotionDetectionOn: Bool?
     public var streamEntityId: String?
     public var snapshotPath: String?
+    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
+    public var controlsWritable: Bool
 
     public init(
         entityId: String,
@@ -338,7 +356,8 @@ public struct CameraSpec: Equatable, Sendable {
         motionDetectionEntityId: String? = nil,
         isMotionDetectionOn: Bool? = nil,
         streamEntityId: String? = nil,
-        snapshotPath: String? = nil
+        snapshotPath: String? = nil,
+        controlsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -348,6 +367,7 @@ public struct CameraSpec: Equatable, Sendable {
         self.isMotionDetectionOn = isMotionDetectionOn
         self.streamEntityId = streamEntityId
         self.snapshotPath = snapshotPath
+        self.controlsWritable = controlsWritable
     }
 }
 
@@ -401,6 +421,18 @@ public enum DeviceKind: Equatable, Sendable {
         default: return 3
         }
     }
+
+    /// Verified specs and Home Assistant devices stay writable. A read-only MIoT fallback is false (#154).
+    public var acceptsControlWrites: Bool {
+        switch self {
+        case .light(let spec): return spec.controlsWritable
+        case .climate(let spec): return spec.controlsWritable
+        case .fan(let spec): return spec.controlsWritable
+        case .plug(let spec): return spec.controlsWritable
+        case .camera(let spec): return spec.controlsWritable
+        case .fridge, .vacuum, .speaker, .tv, .sensor: return true
+        }
+    }
 }
 
 // MARK: - Unified SmartDevice
@@ -435,7 +467,9 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     /// Whether this device can be toggled on/off with a single primary click
     public var isPrimaryToggleable: Bool {
         switch kind {
-        case .light, .climate, .fan, .plug, .vacuum, .tv, .camera:
+        case .light, .climate, .fan, .plug, .camera:
+            return kind.acceptsControlWrites
+        case .vacuum, .tv:
             return true
         case .speaker, .fridge, .sensor:
             return false
@@ -469,10 +503,16 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     /// Whether this device has an expandable secondary control drawer
     public var hasDetailDrawer: Bool {
         switch kind {
-        case .light, .climate, .fan, .fridge, .vacuum, .speaker, .tv, .camera:
+        case .light, .climate, .camera:
+            return kind.acceptsControlWrites
+        case .fan(let spec):
+            let hasReadings = spec.pm25Density != nil || spec.airQuality != nil
+                || spec.temperature != nil || spec.humidity != nil || spec.filterLifePercent != nil
+            return spec.controlsWritable || hasReadings
+        case .fridge, .vacuum, .speaker, .tv:
             return true
         case .plug(let s):
-            return s.powerWatts != nil || s.energyKwh != nil || s.childLockEntityId != nil
+            return s.powerWatts != nil || s.energyKwh != nil || (s.controlsWritable && s.childLockEntityId != nil)
         case .sensor:
             return false
         }

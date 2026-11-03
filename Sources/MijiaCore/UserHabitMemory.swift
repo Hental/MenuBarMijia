@@ -703,6 +703,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
 
     /// Devices whose `.power` op is a real toggle the assistant can apply (#113).
     static func isPowerToggleable(_ device: SmartDevice) -> Bool {
+        guard device.kind.acceptsControlWrites else { return false }
         switch device.kind {
         case .light, .climate, .fan, .plug, .camera, .tv: return true
         case .vacuum, .speaker, .fridge, .sensor: return false
@@ -825,7 +826,8 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         if case .activateScene = intent.operation {
             return scenes.contains { $0.id == intent.targetId }
         }
-        guard let dev = devices.first(where: { $0.id == intent.targetId && $0.isOnline }) else {
+        guard let dev = devices.first(where: { $0.id == intent.targetId && $0.isOnline }),
+              dev.kind.acceptsControlWrites else {
             return false
         }
         switch intent.operation {

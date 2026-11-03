@@ -78,6 +78,7 @@ import {
   type SmartDevice,
   allOffTargets,
   cloudRefreshDue,
+  deviceAcceptsControlWrites,
   deviceEnvironmentReading,
   deviceStatusSummary,
   environmentReadingPriority,
@@ -3415,7 +3416,18 @@ export class MenuMijiaWindowsApp {
     const kind = dev.kind.kind;
     const palette = this.devicePaletteClass(dev);
     const svg = this.deviceSvgIcon(dev);
-    const hasDrawer = kind === "light" || kind === "climate" || kind === "fan" || kind === "fridge" || kind === "camera";
+    const writable = deviceAcceptsControlWrites(dev);
+    const fanReadings =
+      dev.kind.kind === "fan" &&
+      (dev.kind.pm25Density != null ||
+        dev.kind.airQuality != null ||
+        dev.kind.temperature != null ||
+        dev.kind.humidity != null ||
+        dev.kind.filterLifePercent != null);
+    const hasDrawer =
+      kind === "fridge" ||
+      (writable && (kind === "light" || kind === "climate" || kind === "fan" || kind === "camera")) ||
+      (!writable && fanReadings);
     const subtitle =
       this.selectedRoom === "全部"
         ? `${dev.roomName} · ${deviceStatusSummary(dev)}`
@@ -3431,7 +3443,9 @@ export class MenuMijiaWindowsApp {
         ${fill > 0 ? `<span class="cc-tile-fill" style="width:${fill}%"></span>` : ""}
         ${badge}
         <div class="cc-tile-header">
-          <button
+          ${
+            writable
+              ? `<button
             class="cc-tile-orb"
             data-toggle-device="${this.escapeHtml(dev.id)}"
             title="${kind === "sensor" ? dev.name : t("点击直接切换开关")}"
@@ -3439,7 +3453,9 @@ export class MenuMijiaWindowsApp {
             aria-pressed="${isOn}"
           >
             ${svg}
-          </button>
+          </button>`
+              : `<span class="cc-tile-orb" title="${this.escapeHtml(dev.name)}" aria-hidden="true">${svg}</span>`
+          }
 
           <button
             class="cc-tile-body"
@@ -3532,7 +3548,8 @@ export class MenuMijiaWindowsApp {
     badge: string,
   ): string {
     const running = dev.isOnline && k.isOn && k.hvacMode !== "off";
-    const open = forceOpen || this.expandedDeviceId === dev.id;
+    const writable = deviceAcceptsControlWrites(dev);
+    const open = writable && (forceOpen || this.expandedDeviceId === dev.id);
     const id = this.escapeHtml(dev.id);
     const modeLabel: Record<string, string> = { cool: t("制冷"), heat: t("制热"), dry: t("除湿"), fan_only: t("送风"), auto: t("自动") };
     const status = running
@@ -3546,23 +3563,33 @@ export class MenuMijiaWindowsApp {
     const subtitle = this.selectedRoom === "全部" ? `${dev.roomName} · ${status}` : status;
     const span = Math.max(k.maxTemp - k.minTemp, 1);
     const progress = Math.min(Math.max((k.targetTemperature - k.minTemp) / span, 0), 1) * 100;
-    const modes = (k.availableModes.length > 0 ? k.availableModes : ["cool", "heat", "dry", "fan_only"]).filter((m) => m !== "off");
+    const modes = writable
+      ? (k.availableModes.length > 0 ? k.availableModes : ["cool", "heat", "dry", "fan_only"]).filter((m) => m !== "off")
+      : [];
     const unit = getTemperatureUnit();
     const temp = formatTemperatureValue(k.targetTemperature);
+    const power = writable
+      ? `<button class="cc-climate-power ${running ? "is-on" : ""}" data-toggle-device="${id}" title="${running ? t("关闭空调") : t("打开空调")}" aria-label="${running ? t("关闭 {name}", { name: this.escapeHtml(dev.name) }) : t("打开 {name}", { name: this.escapeHtml(dev.name) })}" aria-pressed="${running}">
+            <span aria-hidden="true" ${k.hvacMode === "heat" ? "" : "hidden"}>🔥</span><span aria-hidden="true" ${k.hvacMode === "heat" ? "hidden" : ""}>${SF_ICONS.snowflake}</span>
+          </button>`
+      : `<span class="cc-climate-power ${running ? "is-on" : ""}" aria-hidden="true">
+            <span ${k.hvacMode === "heat" ? "" : "hidden"}>🔥</span><span ${k.hvacMode === "heat" ? "hidden" : ""}>${SF_ICONS.snowflake}</span>
+          </span>`;
+    const steps = writable
+      ? `<button class="cc-climate-step" data-acstep="${id}:-1" title="${t("降低温度")}" aria-label="${t("降低目标温度")}">−</button>
+          <span class="cc-climate-temp" aria-label="${t("目标温度 {temp}", { temp: formatTemperature(k.targetTemperature) })}">${temp}<small>${temperatureSymbol(unit)}</small></span>
+          <button class="cc-climate-step" data-acstep="${id}:1" title="${t("升高温度")}" aria-label="${t("升高目标温度")}">＋</button>`
+      : `<span class="cc-climate-temp" aria-label="${t("目标温度 {temp}", { temp: formatTemperature(k.targetTemperature) })}">${temp}<small>${temperatureSymbol(unit)}</small></span>`;
     return `
       <div class="cc-tile cc-climate ${running ? "is-active" : ""} ${dev.isOnline ? "" : "is-offline"} ${motion}" ${attrs}>
         ${badge}
         <div class="cc-climate-strip">
-          <button class="cc-climate-power ${running ? "is-on" : ""}" data-toggle-device="${id}" title="${running ? t("关闭空调") : t("打开空调")}" aria-label="${running ? t("关闭 {name}", { name: this.escapeHtml(dev.name) }) : t("打开 {name}", { name: this.escapeHtml(dev.name) })}" aria-pressed="${running}">
-            <span aria-hidden="true" ${k.hvacMode === "heat" ? "" : "hidden"}>🔥</span><span aria-hidden="true" ${k.hvacMode === "heat" ? "hidden" : ""}>${SF_ICONS.snowflake}</span>
-          </button>
-          <button class="cc-climate-name" data-expand-device="${id}" aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(subtitle)}" aria-expanded="${open}">
+          ${power}
+          <button class="cc-climate-name" ${writable ? `data-expand-device="${id}"` : ""} aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(subtitle)}" aria-expanded="${open}">
             <span class="cc-tile-name">${this.escapeHtml(dev.name)}</span>
-            <span class="cc-tile-status">${this.escapeHtml(subtitle)} ${forceOpen ? "" : `<i class="cc-mini-caret ${open ? "is-open" : ""}">${SF_ICONS.chevronDown}</i>`}</span>
+            <span class="cc-tile-status">${this.escapeHtml(subtitle)} ${!writable || forceOpen ? "" : `<i class="cc-mini-caret ${open ? "is-open" : ""}">${SF_ICONS.chevronDown}</i>`}</span>
           </button>
-          <button class="cc-climate-step" data-acstep="${id}:-1" title="${t("降低温度")}" aria-label="${t("降低目标温度")}">−</button>
-          <span class="cc-climate-temp" aria-label="${t("目标温度 {temp}", { temp: formatTemperature(k.targetTemperature) })}">${temp}<small>${temperatureSymbol(unit)}</small></span>
-          <button class="cc-climate-step" data-acstep="${id}:1" title="${t("升高温度")}" aria-label="${t("升高目标温度")}">＋</button>
+          ${steps}
         </div>
         <div class="cc-climate-gauge" role="progressbar" aria-label="${t("目标温度进度")}" aria-valuemin="${k.minTemp}" aria-valuemax="${k.maxTemp}" aria-valuenow="${k.targetTemperature}"><span style="width:${progress}%"></span></div>
         ${
@@ -3676,6 +3703,7 @@ export class MenuMijiaWindowsApp {
   private renderDeviceDrawer(dev: SmartDevice): string {
     const k = dev.kind;
     if (k.kind === "light") {
+      if (!deviceAcceptsControlWrites(dev)) return "";
       const bri = k.brightnessPercent ?? 80;
       const ct = k.colorTempKelvin ?? 4000;
       return `
@@ -3709,6 +3737,7 @@ export class MenuMijiaWindowsApp {
       `;
     }
     if (k.kind === "climate") {
+      if (!deviceAcceptsControlWrites(dev)) return "";
       const modes: ReadonlyArray<{ readonly code: string; readonly label: string }> = [
         { code: "cool", label: t("制冷") },
         { code: "heat", label: t("制热") },
@@ -3740,10 +3769,12 @@ export class MenuMijiaWindowsApp {
       `;
     }
     if (k.kind === "fan") {
-      const modes =
-        k.availablePresetModes.length > 0
+      const writable = deviceAcceptsControlWrites(dev);
+      const modes = writable
+        ? k.availablePresetModes.length > 0
           ? k.availablePresetModes
-          : ["Level 1", "Level 2", "Level 3", "Level 4"];
+          : ["Level 1", "Level 2", "Level 3", "Level 4"]
+        : [];
       const telemetryParts: string[] = [];
       if (k.pm25Density !== undefined && k.pm25Density !== null) {
         const aq = localizeAirQuality(k.airQuality, k.pm25Density);
@@ -3770,7 +3801,7 @@ export class MenuMijiaWindowsApp {
               : ""
           }
           ${
-            k.percentage !== null
+            writable && k.percentage !== null
               ? `<div class="cc-slider-group">
                   <div class="cc-slider-label">
                     <span>${t("风速")}</span>
@@ -3780,7 +3811,9 @@ export class MenuMijiaWindowsApp {
                 </div>`
               : ""
           }
-          <div class="cc-segmented-pills">
+          ${
+            modes.length > 0 || (writable && k.isOscillating !== null)
+              ? `<div class="cc-segmented-pills">
             ${modes
               .map(
                 (preset) => `
@@ -3791,17 +3824,20 @@ export class MenuMijiaWindowsApp {
               )
               .join("")}
             ${
-              k.isOscillating !== null
+              writable && k.isOscillating !== null
                 ? `<button class="cc-seg-pill ${k.isOscillating ? "is-active" : ""}" data-fanosc="${this.escapeHtml(dev.id)}" aria-pressed="${k.isOscillating}">
                     摇头 ${k.isOscillating ? t("开") : t("关")}
                   </button>`
                 : ""
             }
-          </div>
+          </div>`
+              : ""
+          }
         </div>
       `;
     }
     if (k.kind === "camera") {
+      if (!deviceAcceptsControlWrites(dev)) return "";
       const id = this.escapeHtml(dev.id);
       const motionOn = Boolean(k.isMotionDetectionOn);
       return `
@@ -5242,7 +5278,7 @@ export class MenuMijiaWindowsApp {
 
     const toggleDeviceById = (id: string) => {
       const dev = this.devices.find((d) => d.id === id);
-      if (!dev || dev.kind.kind === "sensor") return;
+      if (!dev || dev.kind.kind === "sensor" || !deviceAcceptsControlWrites(dev)) return;
       if (dev.kind.kind === "fridge") {
         this.expandedDeviceId = this.expandedDeviceId === id ? null : id;
         this.render();
@@ -5280,15 +5316,18 @@ export class MenuMijiaWindowsApp {
         const dev = this.devices.find((d) => d.id === id);
         if (!dev) return;
         const k = dev.kind.kind;
+        const writable = deviceAcceptsControlWrites(dev);
         if (k === "camera") {
+          if (!writable) return;
           if (dev.isOnline && !dev.kind.isOn) {
             toggleDeviceById(id);
           }
           this.openCameraLiveView(id);
         } else if (k === "light" || k === "climate" || k === "fan" || k === "fridge") {
+          if (!writable && k !== "fan" && k !== "fridge") return;
           this.expandedDeviceId = this.expandedDeviceId === id ? null : id;
           this.render();
-        } else {
+        } else if (writable) {
           toggleDeviceById(id);
         }
       });

@@ -417,7 +417,8 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     assert.equal(purifierKind?.kind, "fan");
     if (purifierKind?.kind === "fan") {
       assert.equal(purifierKind.pm25Density, 18);
-      assert.deepEqual(purifierKind.availablePresetModes, ["Auto", "Sleep", "Favorite"]);
+      assert.deepEqual(purifierKind.availablePresetModes, []);
+      assert.equal(purifierKind.controlsWritable, false);
     }
 
     const cameraFallback = inferFallbackSpec({ model: "chuangmi.camera.061a01", name: "摄像机" });
@@ -427,6 +428,13 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       new Map<string, unknown>([["did_fb_cam.2.1", true]]),
     );
     assert.equal(cameraKind?.kind, "camera");
+    if (cameraKind?.kind === "camera") {
+      assert.equal(cameraKind.controlsWritable, false);
+      assert.deepEqual(cameraKind.availableNightShots, []);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setFanPower", entityId: "miot:did_fb_airp:2", isOn: false }, purifierFallback),
+    );
   });
 
   const lightSpec: MiotDeviceSpec = {
@@ -762,6 +770,13 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       const fallbackDev = fallbackHome.devices.find((d) => d.id === entry.did);
       assert.ok(fallbackDev, `Missing fallback device ${entry.model}`);
       assert.deepEqual(fallbackDev.kind, entry.expectedKind, `fallback kind mismatch on ${entry.model}`);
+      const rejected = (entry as { rejectedCommands?: Array<Parameters<typeof MiotCommandMapper.map>[0]> }).rejectedCommands ?? [];
+      for (const command of rejected) {
+        assert.throws(
+          () => MiotCommandMapper.map(command, parsedFallback),
+          `${entry.model} ${command.kind} must not write through a fallback spec`,
+        );
+      }
     }
   });
 

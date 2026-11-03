@@ -9,7 +9,7 @@ import { Window } from "happy-dom";
 import { installWindow } from "./dom.js";
 import { MenuMijiaWindowsApp } from "../src/ui/app.js";
 import { cloudFixture } from "./cloudFixture.js";
-import { MiCloudClient, MiotSynthesizer } from "../src/core/miCloudClient.js";
+import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
 import { MiCloudCrypto } from "../src/core/miCloudCrypto.js";
 
 let dom: Window;
@@ -838,6 +838,60 @@ describe("全关 (#23)", () => {
     await setImmediate();
     assert.doesNotMatch(tile("light.living_ceiling"), /已开启/);
     assert.match(tile("plug.entry_socket"), /供电中/);
+  });
+});
+
+describe("Unverified MIoT fallback controls (#154)", () => {
+  it("shows readings and hides power, preset, and setpoint controls", async () => {
+    const model = "zhimi.airp.fallback";
+    const spec = inferFallbackSpec({ model, name: "净化器" });
+    const fresh = MiotSynthesizer.synthesize(
+      [{ did: "fb-air", name: "净化器", model, isOnline: true, specType: null }],
+      [{ id: "r1", name: "客厅", dids: ["fb-air"] }],
+      { [model]: spec },
+      new Map<string, unknown>([
+        ["fb-air.2.1", true],
+        ["fb-air.2.4", 0],
+        ["fb-air.3.4", 12],
+      ]),
+    );
+    const verified = {
+      id: "real-light",
+      name: "书房灯",
+      roomId: "r1",
+      roomName: "书房",
+      model: "yeelink.light.ceiling22",
+      isOnline: true,
+      kind: {
+        kind: "light" as const,
+        entityId: "miot:real-light:2",
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [] as string[],
+      },
+    };
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [...fresh.devices, verified],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="fb-air"]'), null);
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanosc]"), null);
+    assert.ok(document.querySelector('[data-toggle-device="real-light"]'));
+    assert.match(tile("fb-air"), /PM2\.5 12/);
+
+    await click('[data-body-device="fb-air"]');
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanpercent]"), null);
+    assert.match(document.body.textContent ?? "", /PM2\.5 12/);
   });
 });
 

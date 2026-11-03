@@ -209,6 +209,7 @@ extension HomeStore {
 
     /// The command that switches `device` off, the one that brings it back, and the optimistic state.
     nonisolated static func allOffChange(for device: SmartDevice) -> (off: DeviceCommand, restore: DeviceCommand, kind: DeviceKind)? {
+        guard device.kind.acceptsControlWrites else { return nil }
         switch device.kind {
         case .light(var s):
             s.isOn = false

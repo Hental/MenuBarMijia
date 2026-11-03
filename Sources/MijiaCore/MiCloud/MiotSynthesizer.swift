@@ -208,6 +208,9 @@ public enum MiotSynthesizer {
         let ct = r.ref("color-temperature", in: s)
         let mode = r.ref("mode", in: s)
         let isLightGroup = r.did.hasPrefix("group.")
+        let effects = (!isLightGroup && mode?.property.isWritable == true)
+            ? (mode?.property.valueList?.map(\.description) ?? [])
+            : []
         return .light(LightSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: on?.value?.miotBool ?? false,
@@ -216,7 +219,8 @@ public enum MiotSynthesizer {
             minKelvin: ct?.property.rangeMin.map { Int($0) } ?? 2700,
             maxKelvin: ct?.property.rangeMax.map { Int($0) } ?? 6500,
             currentEffect: isLightGroup ? nil : mode?.valueDescription,
-            availableEffects: isLightGroup ? [] : (mode?.property.valueList?.map(\.description) ?? [])
+            availableEffects: effects,
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 
@@ -228,25 +232,33 @@ public enum MiotSynthesizer {
         let fanLevel = r.first("fan-level", in: r.spec.services(named: "fan-control") + [s])
 
         let isOn = on?.value?.miotBool ?? false
+        let onWritable = on?.property.isWritable == true
+        let modeWritable = mode?.property.isWritable == true
+        let exposeModes = modeWritable || (mode == nil && onWritable)
         var haModes: [String] = []
-        for item in mode?.property.valueList ?? [] {
-            if let m = hvacMode(forDescription: item.description), !haModes.contains(m) { haModes.append(m) }
+        if exposeModes {
+            for item in mode?.property.valueList ?? [] {
+                if let m = hvacMode(forDescription: item.description), !haModes.contains(m) { haModes.append(m) }
+            }
+            if haModes.isEmpty { haModes = [s.shortName == "air-conditioner" ? "cool" : "heat"] }
         }
-        if haModes.isEmpty { haModes = [s.shortName == "air-conditioner" ? "cool" : "heat"] }
-        let activeMode = mode?.valueDescription.flatMap(hvacMode(forDescription:)) ?? haModes[0]
+        let activeMode = mode?.valueDescription.flatMap(hvacMode(forDescription:))
+            ?? haModes.first
+            ?? (s.shortName == "air-conditioner" ? "cool" : "heat")
 
         return .climate(ClimateSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: isOn,
             hvacMode: isOn ? activeMode : "off",
-            availableModes: haModes + ["off"],
+            availableModes: exposeModes ? haModes + ["off"] : [],
             targetTemperature: target?.value?.doubleValue ?? 26,
             currentTemperature: current?.value?.doubleValue,
             minTemp: target?.property.rangeMin ?? 16,
             maxTemp: target?.property.rangeMax ?? 30,
             step: target?.property.rangeStep ?? 1,
             fanMode: fanLevel?.valueDescription,
-            availableFanModes: fanLevel?.property.valueList?.map(\.description) ?? []
+            availableFanModes: fanLevel?.property.isWritable == true ? (fanLevel?.property.valueList?.map(\.description) ?? []) : [],
+            controlsWritable: onWritable
         ))
     }
 
@@ -263,8 +275,9 @@ public enum MiotSynthesizer {
             isOn: on?.value?.miotBool ?? false,
             percentage: percentRef.flatMap { ref in ref.value?.doubleValue.map { percent(fromRaw: $0, property: ref.property) } },
             presetMode: presetRef?.valueDescription,
-            availablePresetModes: presetRef?.property.valueList?.map(\.description) ?? [],
-            isOscillating: swing?.value?.miotBool
+            availablePresetModes: presetRef?.property.isWritable == true ? (presetRef?.property.valueList?.map(\.description) ?? []) : [],
+            isOscillating: swing?.value?.miotBool,
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 
@@ -303,13 +316,14 @@ public enum MiotSynthesizer {
             isOn: on?.value?.miotBool ?? false,
             percentage: speedRef.flatMap { ref in ref.value?.doubleValue.map { speedPercent(fromRaw: $0, property: ref.property) } },
             presetMode: presetRef?.valueDescription,
-            availablePresetModes: presetRef?.property.valueList?.map(\.description) ?? [],
+            availablePresetModes: presetRef?.property.isWritable == true ? (presetRef?.property.valueList?.map(\.description) ?? []) : [],
             isOscillating: nil,
             pm25Density: pm25?.value?.intValue,
             airQuality: airQuality?.valueDescription,
             temperature: temp?.value?.doubleValue,
             humidity: hum?.value?.doubleValue,
-            filterLifePercent: filterLife?.value?.intValue
+            filterLifePercent: filterLife?.value?.intValue,
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 
@@ -325,7 +339,8 @@ public enum MiotSynthesizer {
             presetMode: mode?.valueDescription,
             availablePresetModes: mode?.property.isWritable == true ? mode?.property.valueList?.map(\.description) ?? [] : [],
             temperature: temperature?.value?.doubleValue,
-            humidity: humidity?.value?.doubleValue
+            humidity: humidity?.value?.doubleValue,
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 
@@ -387,7 +402,8 @@ public enum MiotSynthesizer {
             },
             energyKwh: energyKwh,
             childLockEntityId: lock.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
-            isChildLocked: lock?.value?.miotBool ?? false
+            isChildLocked: lock?.value?.miotBool ?? false,
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 
@@ -418,10 +434,11 @@ public enum MiotSynthesizer {
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: on?.value?.miotBool ?? false,
             nightShot: nightShot?.valueDescription,
-            availableNightShots: nightShot?.property.valueList?.map(\.description) ?? [],
-            motionDetectionEntityId: motion.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
+            availableNightShots: nightShot?.property.isWritable == true ? (nightShot?.property.valueList?.map(\.description) ?? []) : [],
+            motionDetectionEntityId: motion?.property.isWritable == true ? motion.map { MiotAddress.make(did: r.did, siid: $0.service.iid) } : nil,
             isMotionDetectionOn: motion?.value?.miotBool,
-            streamEntityId: streamService.map { MiotAddress.make(did: r.did, siid: $0.iid) }
+            streamEntityId: streamService.map { MiotAddress.make(did: r.did, siid: $0.iid) },
+            controlsWritable: on?.property.isWritable == true
         ))
     }
 

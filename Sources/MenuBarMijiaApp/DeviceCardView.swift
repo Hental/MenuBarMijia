@@ -269,7 +269,7 @@ public struct DeviceCardView: View {
                 }
             }
 
-            if case .camera = device.kind {
+            if case .camera = device.kind, device.kind.acceptsControlWrites {
                 Button {
                     store.openCameraLiveView(device.id)
                 } label: {
@@ -326,7 +326,7 @@ public struct DeviceCardView: View {
 
     private var bentoBody: some View {
         Button {
-            guard !isEditingLayout else { return }
+            guard !isEditingLayout, device.kind.acceptsControlWrites else { return }
             if case .camera(let cam) = device.kind {
                 if !cam.isOn {
                     withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
@@ -373,7 +373,9 @@ public struct DeviceCardView: View {
         }
         .buttonStyle(PressableCardButtonStyle(scaleAmount: 0.95))
         .accessibilityLabel(Text(accessibilitySummary))
-        .accessibilityHint(Text(L10n.tr("切换开关", "Toggle power")))
+        .accessibilityHint(Text(device.kind.acceptsControlWrites
+            ? L10n.tr("切换开关", "Toggle power")
+            : L10n.tr("只读状态", "Read only")))
     }
 
     // MARK: - Compact 2-Column Header (Left Icon Toggles, Right Area Expands)
@@ -381,7 +383,7 @@ public struct DeviceCardView: View {
     private var compactHeaderRow: some View {
         HStack(spacing: 8) {
             Button {
-                guard !isEditingLayout else { return }
+                guard !isEditingLayout, device.kind.acceptsControlWrites else { return }
                 withAnimation(AppleMotion.snappySpring) {
                     if case .camera(let cam) = device.kind {
                         if !cam.isOn {
@@ -397,25 +399,29 @@ public struct DeviceCardView: View {
                 iconBadge
             }
             .buttonStyle(PressableCardButtonStyle())
-            .accessibilityLabel(Text(L10n.tr("\(device.name) 开关", "\(device.name) power")))
+            .accessibilityLabel(Text(device.kind.acceptsControlWrites
+                ? L10n.tr("\(device.name) 开关", "\(device.name) power")
+                : accessibilitySummary))
             .panelHelp(
-                isCameraDevice
-                    ? L10n.tr("点击打开摄像头实时小窗", "Click to open live camera window")
-                    : L10n.tr("点击直接切换开关", "Click to toggle power")
+                device.kind.acceptsControlWrites
+                    ? (isCameraDevice
+                        ? L10n.tr("点击打开摄像头实时小窗", "Click to open live camera window")
+                        : L10n.tr("点击直接切换开关", "Click to toggle power"))
+                    : L10n.tr("只读状态", "Read only")
             )
 
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
-                    if case .camera(let cam) = device.kind {
-                        if !cam.isOn {
+                    if case .camera = device.kind, device.kind.acceptsControlWrites {
+                        if case .camera(let cam) = device.kind, !cam.isOn {
                             _ = store.togglePrimary(device)
                         }
                         store.openCameraLiveView(device.id)
                         if device.isOnline { SoundFeedback.playSuccess() }
                     } else if device.hasDetailDrawer {
                         store.toggleExpanded(device.id)
-                    } else {
+                    } else if device.kind.acceptsControlWrites {
                         _ = store.togglePrimary(device)
                         if device.isOnline { SoundFeedback.playSuccess() }
                     }
@@ -464,16 +470,18 @@ public struct DeviceCardView: View {
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
-                    if case .camera(let cam) = device.kind {
-                        if !cam.isOn {
+                    if case .camera = device.kind, device.kind.acceptsControlWrites {
+                        if case .camera(let cam) = device.kind, !cam.isOn {
                             _ = store.togglePrimary(device)
                         }
                         store.openCameraLiveView(device.id)
-                    } else {
+                    } else if device.kind.acceptsControlWrites {
                         _ = store.togglePrimary(device)
+                    } else if device.hasDetailDrawer {
+                        store.toggleExpanded(device.id)
                     }
                 }
-                if device.isOnline { SoundFeedback.playSuccess() }
+                if device.isOnline, device.kind.acceptsControlWrites { SoundFeedback.playSuccess() }
             } label: {
                 HStack(spacing: 10) {
                     iconBadge
@@ -515,14 +523,16 @@ public struct DeviceCardView: View {
             }
             .buttonStyle(PressableCardButtonStyle())
             .accessibilityLabel(Text(accessibilitySummary))
-            .accessibilityHint(Text(L10n.tr("切换开关", "Toggle power")))
+            .accessibilityHint(Text(device.kind.acceptsControlWrites
+                ? L10n.tr("切换开关", "Toggle power")
+                : L10n.tr("只读状态", "Read only")))
 
             // Quick Index Pill + Favorite Star + Drawer Chevron
             HStack(spacing: 4) {
                 if let quickIndex, shouldShowQuickBadge {
                     quickIndexPill(quickIndex)
                 }
-                if case .camera = device.kind {
+                if case .camera = device.kind, device.kind.acceptsControlWrites {
                     Button {
                         guard !isEditingLayout else { return }
                         store.openCameraLiveView(device.id)
@@ -859,7 +869,7 @@ public struct DeviceCardView: View {
                 }
             }
 
-            if let pct = spec.percentage {
+            if spec.controlsWritable, let pct = spec.percentage {
                 let speedVal = Double(max(1, min(100, pct)))
                 LiquidGlassSlider(
                     value: Binding(
@@ -883,7 +893,7 @@ public struct DeviceCardView: View {
                 .disabled(!device.isOnline)
             }
 
-            if !spec.availablePresetModes.isEmpty {
+            if spec.controlsWritable, !spec.availablePresetModes.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     AdaptiveGlassContainer(spacing: 6) {
                         HStack(spacing: 6) {
@@ -969,7 +979,7 @@ public struct DeviceCardView: View {
 
                 Spacer()
 
-                if spec.childLockEntityId != nil {
+                if spec.controlsWritable, spec.childLockEntityId != nil {
                     Toggle(
                         L10n.tr("按键锁", "Child Lock"),
                         isOn: Binding(

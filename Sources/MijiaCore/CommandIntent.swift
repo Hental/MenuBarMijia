@@ -184,6 +184,7 @@ public enum IntentValidator {
 
     /// Returns the operation adjusted to the device's limits, or nil when the device cannot perform it.
     public static func normalize(_ operation: IntentOperation, for device: SmartDevice) -> IntentOperation? {
+        guard device.kind.acceptsControlWrites else { return nil }
         switch (operation, device.kind) {
         case (.power(let on), .plug(let s)):
             if s.switchEntityId.hasPrefix("button."), !on {
@@ -399,7 +400,7 @@ public struct IntentCatalog: Sendable {
         var index = 0
         for device in devices {
             let category = IntentDeviceCategory(device)
-            guard category.isAssistantControllable else { continue }
+            guard category.isAssistantControllable, device.kind.acceptsControlWrites else { continue }
             index += 1
             let alias = "d\(index)"
             let summary = Self.stateSummary(device)

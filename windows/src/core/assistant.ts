@@ -9,7 +9,7 @@ import type {
   IntentPlan,
   SmartDevice,
 } from "./models.js";
-import { isDeviceActiveOn } from "./models.js";
+import { deviceAcceptsControlWrites, isDeviceActiveOn } from "./models.js";
 
 // MARK: - Spoken Delay & Undo Phrases
 
@@ -109,6 +109,7 @@ export const UndoPhrase = {
 
 export const IntentValidator = {
   normalize(op: IntentOperation, device: SmartDevice): IntentOperation | null {
+    if (!deviceAcceptsControlWrites(device)) return null;
     const k = device.kind;
     switch (op.kind) {
       case "power": {
@@ -248,6 +249,7 @@ export const IntentValidator = {
   },
 
   commandsForIntent(intent: DeviceIntent, device: SmartDevice): DeviceCommand[] {
+    if (!deviceAcceptsControlWrites(device)) return [];
     const k = device.kind;
     const op = intent.operation;
     switch (op.kind) {
@@ -772,7 +774,7 @@ export const LocalIntentParser = {
 
       candidates = devices.filter((d) => {
         const cat = deviceCategory(d);
-        if (!d.isOnline || !isAssistantControllable(cat)) return false;
+        if (!d.isOnline || !isAssistantControllable(cat) || !deviceAcceptsControlWrites(d)) return false;
         if (onlyActive && !isDeviceActiveOn(d)) return false;
         if (matchedRooms.length > 0 && !matchedRooms.includes(d.roomName)) return false;
         if (effectiveWanted && !effectiveWanted.has(cat)) return false;
@@ -989,7 +991,7 @@ export const LocalIntentParser = {
       const onlyActive = ops.every(isRelativeOp);
       candidates = devices.filter((dev) => {
         const cat = deviceCategory(dev);
-        if (!dev.isOnline || !isAssistantControllable(cat)) return false;
+        if (!dev.isOnline || !isAssistantControllable(cat) || !deviceAcceptsControlWrites(dev)) return false;
         if (onlyActive && !isDeviceActiveOn(dev)) return false;
         if (matchedRoomKeys.length > 0 && !roomDeviceIds.has(dev.id)) return false;
         if (wanted && !wanted.has(cat)) return false;
@@ -1629,7 +1631,7 @@ export function habitActionable(
   const op = intent.operation;
   if (op.kind === "activateScene") return scenes.some((s) => s.id === intent.targetId);
   const dev = devices.find((d) => d.id === intent.targetId && d.isOnline);
-  if (!dev) return false;
+  if (!dev || !deviceAcceptsControlWrites(dev)) return false;
   const k = dev.kind;
   switch (op.kind) {
     case "power":
@@ -1658,7 +1660,10 @@ export function habitActionable(
 /** Devices whose `power` op is a real toggle the assistant can apply (#113). */
 function isPowerToggleable(device: SmartDevice): boolean {
   const k = device.kind.kind;
-  return k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera";
+  return (
+    deviceAcceptsControlWrites(device) &&
+    (k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera")
+  );
 }
 
 function habitSuggestionTitle(
