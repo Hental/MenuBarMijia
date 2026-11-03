@@ -503,6 +503,17 @@ public enum RoomPrefs {
         }.map(\.element)
     }
 
+    /// Room ids in display order: the order the strip draws and Tab/Shift-Tab traverse. Rooms the
+    /// saved order does not know yet follow the ranked ones.
+    public static func displayIds(order: [String], rooms: [RoomArea]) -> [String] {
+        apply(order: order, to: rooms).map(\.id)
+    }
+
+    /// The saved room order in `defaults`; empty when the user has not reordered.
+    public static func storedOrder(from defaults: UserDefaults = .standard) -> [String] {
+        decodeOrder(defaults.string(forKey: orderKey) ?? "[]")
+    }
+
     /// Saved order seeded with every currently visible room, so a move never drops an id that
     /// belongs to a room which is temporarily missing from the snapshot.
     public static func seededOrder(_ order: [String], rooms: [RoomArea]) -> [String] {

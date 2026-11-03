@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import MijiaCore
 @testable import MenuBarMijiaApp
@@ -83,6 +84,28 @@ struct RoomPrefsTests {
         #expect(RoomPrefs.apply(order: order, to: returned).map(\.id) == ["bedroom", "ghost", "living", "study"])
         #expect(RoomPrefs.decodeOrder(orderRaw) == ["bedroom", "ghost", "living"])
         #expect(RoomPrefs.alias(for: "ghost", in: aliases) == "旧房间")
+    }
+
+    @Test("Display ids follow the saved order and append rooms the order does not know")
+    func displayIdsFollowSavedOrder() {
+        let input = rooms()
+        #expect(RoomPrefs.displayIds(order: ["study", "living"], rooms: input) == ["study", "living", "bedroom"])
+        #expect(RoomPrefs.displayIds(order: [], rooms: input) == ["living", "bedroom", "study"])
+        // Unknown ids are ignored and every visible room still follows in its incoming order.
+        #expect(RoomPrefs.displayIds(order: ["ghost"], rooms: input) == ["living", "bedroom", "study"])
+    }
+
+    @Test("Stored order reads the same defaults key the panel observes")
+    func storedOrderReadsDefaults() throws {
+        let suite = "test.roomprefs.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        #expect(RoomPrefs.storedOrder(from: defaults) == [])
+        defaults.set(RoomPrefs.encodeOrder(["study", "living"]), forKey: RoomPrefs.orderKey)
+        #expect(RoomPrefs.storedOrder(from: defaults) == ["study", "living"])
+        defaults.set("not json", forKey: RoomPrefs.orderKey)
+        #expect(RoomPrefs.storedOrder(from: defaults) == [])
     }
 
     @Test("Reset clears aliases and order so the default room strip returns")

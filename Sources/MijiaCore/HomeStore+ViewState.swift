@@ -88,8 +88,14 @@ extension HomeStore {
         listCut = .kind(tag)
     }
 
-    public func cycleRoom(delta: Int = 1) {
-        let options: [String?] = [nil] + rooms.map { Optional($0.id) }
+    /// Cycles the room filter (nil = All, then each room). `order` is the display order the panel
+    /// shows; ids that no longer match a room are ignored, and without `order` the provider order
+    /// is used. Keeping one implementation means Tab follows the visible pills.
+    public func cycleRoom(delta: Int = 1, order: [String]? = nil) {
+        let known = Set(rooms.map(\.id))
+        var seen = Set<String>()
+        let ids = (order ?? rooms.map(\.id)).filter { known.contains($0) && seen.insert($0).inserted }
+        let options: [String?] = [nil] + ids
         guard options.count > 1 else { return }
         let curIdx = options.firstIndex(where: { $0 == selectedRoomId }) ?? 0
         let nextIdx = (curIdx + delta + options.count) % options.count
