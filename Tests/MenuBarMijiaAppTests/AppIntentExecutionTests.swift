@@ -64,12 +64,14 @@ struct AppIntentExecutionTests {
                 try await Task.sleep(for: .milliseconds(5))
             }
             #expect(await provider.commandCount == 1)
-            #expect(store.devices.first?.isActiveOn == true)
+            #expect(store.waitingDeviceIds.contains("test-lamp"))
+            #expect(store.devices.first?.isActiveOn == false)
             #expect(!returned)
             await provider.complete(failing: true)
             let message = try await invocation.value
-            #expect(message == "Test lamp failed to respond; rolled back")
+            #expect(message == "Test lamp failed to respond")
             #expect(store.devices.first?.isActiveOn == false)
+            #expect(store.waitingDeviceIds.isEmpty)
         }
     }
 

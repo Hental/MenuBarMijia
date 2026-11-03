@@ -91,6 +91,9 @@ extension HomeStore {
     }
 
     public var menuBarText: String? {
+        if deviceValuesAreStale {
+            return L10n.tr("可能过期", "Possibly stale")
+        }
         let sensorReading = { (prefix: String) -> EnvironmentReading? in
             guard self.menuBarTargetId.hasPrefix(prefix) else { return nil }
             let sensorId = String(self.menuBarTargetId.dropFirst(prefix.count))

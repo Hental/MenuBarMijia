@@ -9,6 +9,10 @@ public actor MockHomeProvider: HomeProvider {
     /// Every polling context the store sent, in order (#26).
     public private(set) var pollingContexts: [PollingContext] = []
     public var shouldFailCommands: Bool = false
+    /// Set before `execute` to pause inside the call so a test can observe the waiting card.
+    private var holdNext = false
+    private var executeWaiter: CheckedContinuation<Void, Never>?
+    public private(set) var executeStarted = 0
     public private(set) var requestedCameraQualities: [XiaomiCameraStreamQuality] = []
     public private(set) var stoppedCameraIDs: [String] = []
 
@@ -38,11 +42,32 @@ public actor MockHomeProvider: HomeProvider {
         cont.yield(.snapshotUpdated(snapshot))
     }
 
+    public func holdNextExecute() {
+        holdNext = true
+    }
+
+    public func releaseExecute() {
+        executeWaiter?.resume()
+        executeWaiter = nil
+    }
+
     public func execute(_ command: DeviceCommand) async throws {
+        executeStarted += 1
+        if holdNext {
+            holdNext = false
+            await withCheckedContinuation { executeWaiter = $0 }
+        }
         if shouldFailCommands {
             throw HomeProviderError.serviceCallFailed(500, "模拟网络失败")
         }
         executedCommands.append(command)
+        snapshot = DemoHomeProvider.applying(command, to: snapshot)
+        continuation?.yield(.snapshotUpdated(snapshot))
+    }
+
+    public func readBack(deviceId: String) async -> ControlReadBack {
+        continuation?.yield(.snapshotUpdated(snapshot))
+        return .published
     }
 
     public func refreshNow() async {
@@ -125,6 +150,11 @@ public actor DemoHomeProvider: HomeProvider {
         executedCommands.append(command)
         snapshot = Self.applying(command, to: snapshot)
         continuation?.yield(.snapshotUpdated(snapshot))
+    }
+
+    public func readBack(deviceId: String) async -> ControlReadBack {
+        continuation?.yield(.snapshotUpdated(snapshot))
+        return .published
     }
 
     public func refreshNow() async {

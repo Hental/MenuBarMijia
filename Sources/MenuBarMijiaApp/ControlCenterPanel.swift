@@ -1171,7 +1171,11 @@ public struct ControlCenterPanel: View {
         } ?? store.preferredEnvironmentReading
         let watts = store.totalPowerWatts
 
-        if let reading, reading.temperature != nil || reading.humidity != nil || watts >= 1 {
+        if store.deviceValuesAreStale {
+            Text(L10n.tr("可能过期", "Possibly stale"))
+                .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                .foregroundStyle(.secondary)
+        } else if let reading, reading.temperature != nil || reading.humidity != nil || watts >= 1 {
             HStack(spacing: 6) {
                 Button {
                     handleEnvironmentChipTap(reading)

@@ -611,6 +611,7 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     await withTimeout(heldRead.started, "Cloud refresh did not reach the stale response gate");
     await click('[data-toggle-device="fixture-light"]');
     await waitFor(() => cloud.writes.filter((write) => write.piid === 1).length === 1);
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
     assert.match(tile("fixture-light"), /已关闭/);
 
     heldRead.release();
@@ -620,11 +621,42 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
 
     await click('[data-toggle-device="fixture-light"]');
     await waitFor(() => cloud.writes.filter((write) => write.piid === 1).length === 2);
+    await waitFor(() => tile("fixture-light").includes("已开启"));
     assert.match(tile("fixture-light"), /已开启/);
     assert.deepEqual(
       cloud.writes.filter((write) => write.piid === 1).map((write) => write.value),
       [false, true],
     );
+  });
+
+  it("shows waiting until the power write is read back and ignores a second tap", async () => {
+    const { cloud } = await readyCloudApp();
+    const held = cloud.holdNextWrite();
+    void click('[data-toggle-device="fixture-light"]');
+    await withTimeout(held.started, "Power write did not start");
+    assert.match(tile("fixture-light"), /等待中/);
+    assert.doesNotMatch(tile("fixture-light"), /已关闭/);
+    await click('[data-toggle-device="fixture-light"]');
+    assert.equal(cloud.writes.filter((write) => write.piid === 1).length, 0);
+    held.release();
+    await withTimeout(held.finished, "Power write did not finish");
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
+    assert.equal(cloud.writes.filter((write) => write.piid === 1).length, 1);
+    assert.equal(cloud.writes.find((write) => write.piid === 1)?.value, false);
+  });
+
+  it("keeps the last device values and marks them possibly stale when a property read fails", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp();
+    assert.match(tile("fixture-light"), /已开启/);
+    cloud.failNextGets(1);
+    triggerRefresh();
+    await waitFor(() => tile("fixture-light").includes("可能过期"));
+    assert.doesNotMatch(tile("fixture-light"), /已开启/);
+    assert.doesNotMatch(tile("fixture-light"), /50%/);
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      cachedXiaomiDevices?: Array<{ kind: { isOn?: boolean } }>;
+    };
+    assert.equal(saved.cachedXiaomiDevices?.[0]?.kind.isOn, true);
   });
 
   it("patches dynamic values without replacing the focused device control", async () => {

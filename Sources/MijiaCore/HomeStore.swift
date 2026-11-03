@@ -45,7 +45,9 @@ public struct UndoBanner: Equatable, Sendable {
 public final class HomeStore {
     public static let shared = HomeStore()
 
-    public internal(set) var connectionStatus: ConnectionStatus = .connecting
+    public internal(set) var connectionStatus: ConnectionStatus = .connecting {
+        didSet { updateValueFreshness() }
+    }
     public internal(set) var rooms: [RoomArea] = []
     /// Mi Home 家庭 list from the cloud backend; empty elsewhere.
     public internal(set) var homes: [HomeOption] = []
@@ -54,6 +56,13 @@ public final class HomeStore {
     public internal(set) var environmentReadings: [EnvironmentReading] = []
     public internal(set) var scenes: [HomeScene] = []
     public internal(set) var hasReceivedInitialSnapshot = false
+    /// Devices whose primary toggle is waiting for a property read-back.
+    public internal(set) var waitingDeviceIds: Set<String> = []
+    /// True after the cloud drops once a snapshot has been shown. Cleared only by a later connect.
+    /// A retry that is still `.connecting` leaves this set, so the last reading stays unmarked as current.
+    public internal(set) var deviceValuesAreStale = false
+    /// Bumped on every snapshot so a toggle can tell a read-back from the row it already had.
+    var snapshotGeneration: UInt64 = 0
 
     public var selectedRoomId: String? = nil // nil = 全部 / 常用
     public var expandedDeviceId: String? = nil
@@ -192,6 +201,7 @@ public final class HomeStore {
         didSet {
             userDefaults.set(homeBackend.rawValue, forKey: "home_backend")
             syncSensorHistoryScope()
+            if homeBackend == .demo { deviceValuesAreStale = false }
         }
     }
 
@@ -420,6 +430,19 @@ public final class HomeStore {
     }
 
     // MARK: - Command Execution & Optimistic Locks
+
+    /// A disconnected cloud after real data is stale. Connecting does not clear it.
+    /// Connected does. Demo mode never marks the virtual home stale.
+    func updateValueFreshness() {
+        switch connectionStatus {
+        case .disconnected where hasReceivedInitialSnapshot && homeBackend != .demo:
+            deviceValuesAreStale = true
+        case .connected:
+            deviceValuesAreStale = false
+        case .connecting, .disconnected:
+            break
+        }
+    }
 
     func executeDeviceCommand(_ command: DeviceCommand) async throws {
         if LGWebOSProtocol.isLGEntity(command.targetEntityId), let lgClient = lgWebOSClient {

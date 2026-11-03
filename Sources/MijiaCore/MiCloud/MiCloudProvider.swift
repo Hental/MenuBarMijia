@@ -119,12 +119,15 @@ public actor MiCloudProvider: HomeProvider {
             continuation?.yield(.statusChanged(.connecting))
             do {
                 try await discover(api)
+                // Connected means a poll just succeeded. Marking it earlier shows the previous
+                // snapshot as live while the cloud is still catching up.
+                try await poll(api, dids: nil)
                 continuation?.yield(.statusChanged(.connected))
                 backoff = 2
-                var polls = 0
+                var polls = 1
                 while !Task.isCancelled {
-                    try await poll(api, dids: nil)
                     try await waitForNextPoll()
+                    try await poll(api, dids: nil)
                     polls += 1
                     if polls % deviceRefreshEveryPolls == 0 {
                         try await refreshDeviceList(api)
@@ -435,6 +438,17 @@ public actor MiCloudProvider: HomeProvider {
         Task {
             try? await Task.sleep(for: delay)
             await self.followUpPoll(did: did)
+        }
+    }
+
+    public func readBack(deviceId: String) async -> ControlReadBack {
+        guard let api else { return .failed }
+        do {
+            try await poll(api, dids: [deviceId])
+            return .published
+        } catch {
+            report(error)
+            return .failed
         }
     }
 

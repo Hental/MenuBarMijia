@@ -41,6 +41,15 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
   const writes: Array<{ piid: number; value: unknown; accepted: boolean }> = [];
   const rejectedValues = new Map<number, unknown>([[2, 80]]);
   let completedReads = 0;
+  let failGets = 0;
+  let writeGate: {
+    readonly promise: Promise<void>;
+    readonly started: Promise<void>;
+    readonly finished: Promise<void>;
+    readonly release: () => void;
+    readonly resolveStarted: () => void;
+    readonly resolveFinished: () => void;
+  } | null = null;
   let readGate: {
     readonly promise: Promise<void>;
     readonly started: Promise<void>;
@@ -61,6 +70,17 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     } else if (url.includes("homeroom/")) {
       result = { homelist: [{ id: "fixture-home", name: "测试家庭", roomlist: roomRecords }] };
     } else if (url.includes("miotspec/prop/")) {
+      if (!url.includes("/set") && failGets > 0) {
+        failGets -= 1;
+        return { status: 500, headers: {}, body: "" };
+      }
+      if (url.includes("/set") && writeGate) {
+        const gate = writeGate;
+        writeGate = null;
+        gate.resolveStarted();
+        await gate.promise;
+        gate.resolveFinished();
+      }
       assert.equal(typeof args.body, "string");
       const fields = new URLSearchParams(String(args.body));
       const nonce = fields.get("_nonce");
@@ -115,6 +135,19 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     writes,
     completedReads: () => completedReads,
     /** Captures the next property read's values, then waits until the test releases the response. */
+    failNextGets: (count = 1) => {
+      failGets = count;
+    },
+    holdNextWrite: () => {
+      let release!: () => void;
+      let resolveStarted!: () => void;
+      let resolveFinished!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+      const finished = new Promise<void>((resolve) => { resolveFinished = resolve; });
+      writeGate = { promise, release, started, finished, resolveStarted, resolveFinished };
+      return { started, finished, release };
+    },
     holdNextRead: () => {
       let release!: () => void;
       let resolveStarted!: () => void;

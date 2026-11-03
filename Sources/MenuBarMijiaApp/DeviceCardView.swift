@@ -91,7 +91,9 @@ public struct DeviceCardView: View {
     }
 
     /// On the bright platter, system `primary` would turn white and disappear; text flips to ink.
-    private var onPlatter: Bool { device.isActiveOn && device.isOnline }
+    private var onPlatter: Bool { store.presentsAsActive(device) }
+
+    private var shownStatus: String { store.presentedStatus(for: device) }
 
     /// One presentation state drives text ink: lit white platter vs quiet well vs tinted glass.
     private var surface: TileSurface {
@@ -104,11 +106,19 @@ public struct DeviceCardView: View {
 
     /// One spoken sentence for the whole card: name, power state and the detail subtitle (#41).
     private var accessibilitySummary: String {
+        switch store.readout(for: device.id) {
+        case .waiting:
+            return L10n.tr("\(device.name)，等待中", "\(device.name), waiting")
+        case .possiblyStale:
+            return L10n.tr("\(device.name)，可能过期", "\(device.name), possibly stale")
+        case .live:
+            break
+        }
         guard device.isOnline else {
             return L10n.tr("\(device.name)，离线", "\(device.name), offline")
         }
         let state = device.isActiveOn ? L10n.tr("已开启", "on") : L10n.tr("已关闭", "off")
-        let subtitle = device.statusSubtitle.replacingOccurrences(of: " · ", with: L10n.tr("，", ", "))
+        let subtitle = shownStatus.replacingOccurrences(of: " · ", with: L10n.tr("，", ", "))
         let off = L10n.tr("已关闭", "Off")
         let on = L10n.tr("已开启", "On")
         if subtitle == off || subtitle == on || subtitle.isEmpty {
@@ -363,7 +373,7 @@ public struct DeviceCardView: View {
                     .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
                     .foregroundStyle(nameColor)
                     .lineLimit(1)
-                Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? device.statusSubtitle.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
+                Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? shownStatus.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
                     .font(.system(size: DesignTokens.TypeSize.caption, weight: device.isActiveOn ? .semibold : .regular))
                     .monospacedDigit()
                     .foregroundStyle(statusColor)
@@ -442,7 +452,7 @@ public struct DeviceCardView: View {
                             .foregroundStyle(nameColor)
                             .lineLimit(1)
 
-                        Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? device.statusSubtitle.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
+                        Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? shownStatus.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
                             .font(.system(size: DesignTokens.TypeSize.caption, weight: device.isActiveOn ? .semibold : .regular))
                             .monospacedDigit()
                             .foregroundStyle(statusColor)
@@ -518,7 +528,7 @@ public struct DeviceCardView: View {
                             }
                         }
 
-                        Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? device.statusSubtitle.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
+                        Text(dragBrightness.map { L10n.tr("亮度 \(Int($0 * 100))%", "Brightness \(Int($0 * 100))%") } ?? shownStatus.replacingOccurrences(of: " · ", with: L10n.tr("，", ", ")))
                             .font(.system(size: DesignTokens.TypeSize.caption, weight: device.isActiveOn ? .semibold : .regular))
                             .monospacedDigit()
                             .foregroundStyle(statusColor)

@@ -29,6 +29,17 @@ public enum ConnectionStatus: Equatable, Sendable {
     }
 }
 
+/// What a provider can say after a power write.
+///
+/// `published` means a snapshot with the device's own properties was emitted.
+/// `unavailable` means this provider has no property read (the accepted command is the result).
+/// `failed` means a read was attempted and did not produce a snapshot.
+public enum ControlReadBack: Sendable {
+    case published
+    case unavailable
+    case failed
+}
+
 public enum HomeProviderEvent: Sendable {
     case statusChanged(ConnectionStatus)
     case snapshotUpdated(SynthesizedHome)
@@ -68,6 +79,9 @@ public protocol HomeProvider: Sendable {
 extension HomeProvider {
     /// Push-based providers (Home Assistant) have nothing to slow down.
     public func setPollingContext(_ context: PollingContext) async {}
+
+    /// After a power write, publish the device's own properties. The default has no read.
+    public func readBack(deviceId: String) async -> ControlReadBack { .unavailable }
     public func fetchSensorHistory(deviceId: String, window: SensorHistoryWindow, now: Date) async -> [SensorHistorySample] { [] }
     public func resolveCameraStream(for device: SmartDevice) async throws -> CameraStreamSource {
         throw HomeProviderError.serviceCallFailed(501, L10n.tr("当前数据源暂未返回该摄像头的实时画面流", "Current backend did not return a live stream for this camera"))

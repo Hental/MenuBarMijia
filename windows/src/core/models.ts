@@ -530,6 +530,15 @@ export function localizeAirQuality(raw: string | null | undefined, pm25?: number
   return t("严重污染");
 }
 
+export type DeviceReadout = "live" | "waiting" | "possiblyStale";
+
+/** A tap in flight wins over a stale cloud. A live card is neither. */
+export function deviceReadout(isWaiting: boolean, valuesAreStale: boolean): DeviceReadout {
+  if (isWaiting) return "waiting";
+  if (valuesAreStale) return "possiblyStale";
+  return "live";
+}
+
 export function deviceStatusSummary(device: SmartDevice): string {
   if (!device.isOnline) return t("离线");
   const k = device.kind;

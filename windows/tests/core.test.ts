@@ -69,6 +69,7 @@ import {
   CLOUD_REFRESH_VISIBLE_MS,
   type DeviceIntent,
   type ScheduledCommand,
+  deviceReadout,
   deviceStatusSummary,
   type SmartDevice,
 } from "../src/core/models.js";
@@ -3390,5 +3391,14 @@ describe("Partial undo sequence context preservation", () => {
     memory.unrecord(secondReceipt);
     assert.equal(memory.lastAction?.targetId, "dev_b");
     assert.equal(memory.lastAction?.operationKey, "power:on");
+  });
+});
+
+describe("device readout", () => {
+  it("shows waiting ahead of a stale cloud", () => {
+    assert.equal(deviceReadout(false, false), "live");
+    assert.equal(deviceReadout(true, false), "waiting");
+    assert.equal(deviceReadout(false, true), "possiblyStale");
+    assert.equal(deviceReadout(true, true), "waiting");
   });
 });
