@@ -1019,6 +1019,47 @@ function readProbability(raw: unknown): number | null {
   return Math.min(Math.max(value, 0), 1);
 }
 
+type ConfirmationHazard =
+  | { readonly kind: "anyChangeExceptOff" }
+  | { readonly kind: "anyPower" }
+  | { readonly kind: "powerOn" }
+  | { readonly kind: "powerOnOrHotter"; readonly setpoint: number };
+
+function confirmationHazard(dev: SmartDevice): ConfirmationHazard | null {
+  switch (deviceCategory(dev)) {
+    case "heater":
+      return { kind: "anyChangeExceptOff" };
+    case "plug":
+    case "camera":
+      return { kind: "anyPower" };
+    case "vacuum":
+      return { kind: "powerOn" };
+    case "climate":
+      if (dev.kind.kind !== "climate" || !dev.name.includes("热水器")) return null;
+      return { kind: "powerOnOrHotter", setpoint: dev.kind.targetTemperature };
+    default:
+      return null;
+  }
+}
+
+function confirmationHazardMatches(hazard: ConfirmationHazard, operation: IntentOperation): boolean {
+  switch (hazard.kind) {
+    case "anyChangeExceptOff":
+      if (operation.kind === "power") return operation.isOn;
+      if (operation.kind === "hvacMode") return operation.mode !== "off";
+      return true;
+    case "anyPower":
+      return operation.kind === "power";
+    case "powerOn":
+      return operation.kind === "power" && operation.isOn;
+    case "powerOnOrHotter":
+      if (operation.kind === "power") return operation.isOn;
+      if (operation.kind === "hvacMode") return operation.mode !== "off";
+      if (operation.kind === "targetTemperature") return operation.celsius > hazard.setpoint;
+      return false;
+  }
+}
+
 /** Mirrors MijiaCore.ModelActionPolicy: guesses below 80% and risky actions wait for a tap. */
 export const ModelActionPolicy = {
   AUTO_RUN_THRESHOLD: 0.8,
@@ -1035,24 +1076,12 @@ export const ModelActionPolicy = {
     return readProbability(answer["confidence"]) ?? 0;
   },
 
-  /** Heater on, any plug switch, or a vacuum start needs a tap even when the model is sure. */
+  /** A heater change other than off, any plug or camera power change, a vacuum start, or turning a 热水器 on or hotter needs a tap even when the model is sure. */
   needsConfirmation(intent: DeviceIntent, devices: readonly SmartDevice[]): boolean {
     const dev = devices.find((d) => d.id === intent.targetId);
     if (!dev) return false;
-    const op = intent.operation;
-    switch (deviceCategory(dev)) {
-      case "heater":
-        if (op.kind === "power") return op.isOn;
-        if (op.kind === "hvacMode") return op.mode !== "off";
-        return true;
-      case "plug":
-      case "camera":
-        return op.kind === "power";
-      case "vacuum":
-        return op.kind === "power" && op.isOn;
-      default:
-        return false;
-    }
+    const hazard = confirmationHazard(dev);
+    return hazard !== null && confirmationHazardMatches(hazard, intent.operation);
   },
 
   partition(

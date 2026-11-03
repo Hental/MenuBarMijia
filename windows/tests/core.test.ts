@@ -1245,6 +1245,237 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
   });
 });
 
+type ConfirmationDeviceKind = "light" | "climate" | "fan" | "plug" | "vacuum" | "camera" | "sensor";
+
+interface ConfirmationFixtureDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly model: string;
+  readonly kind: ConfirmationDeviceKind;
+  readonly targetTemperature: number | null;
+}
+
+interface ConfirmationFixtureRow {
+  readonly id: string;
+  readonly device: ConfirmationFixtureDevice | null;
+  readonly operation: DeviceIntent["operation"];
+  readonly confirm: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isConfirmationDeviceKind(kind: string): kind is ConfirmationDeviceKind {
+  return (
+    kind === "light" ||
+    kind === "climate" ||
+    kind === "fan" ||
+    kind === "plug" ||
+    kind === "vacuum" ||
+    kind === "camera" ||
+    kind === "sensor"
+  );
+}
+
+function parseConfirmationOperation(raw: unknown, rowId: string): DeviceIntent["operation"] {
+  if (!isRecord(raw) || typeof raw.kind !== "string") throw new Error(`${rowId} operation`);
+  switch (raw.kind) {
+    case "power":
+      if (typeof raw.isOn !== "boolean") throw new Error(`${rowId} power`);
+      return { kind: "power", isOn: raw.isOn };
+    case "hvacMode":
+      if (typeof raw.mode !== "string") throw new Error(`${rowId} hvacMode`);
+      return { kind: "hvacMode", mode: raw.mode };
+    case "targetTemperature":
+      if (typeof raw.celsius !== "number") throw new Error(`${rowId} targetTemperature`);
+      return { kind: "targetTemperature", celsius: raw.celsius };
+    case "brightness":
+      if (typeof raw.percent !== "number") throw new Error(`${rowId} brightness`);
+      return { kind: "brightness", percent: raw.percent };
+    case "fanSpeed":
+      if (typeof raw.speed !== "string") throw new Error(`${rowId} fanSpeed`);
+      return { kind: "fanSpeed", speed: raw.speed };
+    default:
+      throw new Error(`${rowId} unknown operation ${raw.kind}`);
+  }
+}
+
+function parseConfirmationDevice(raw: unknown, rowId: string): ConfirmationFixtureDevice {
+  if (!isRecord(raw)) throw new Error(`${rowId} device`);
+  const id = raw.id;
+  const name = raw.name;
+  const model = raw.model;
+  const kind = raw.kind;
+  if (typeof id !== "string" || typeof name !== "string" || typeof model !== "string" || typeof kind !== "string") {
+    throw new Error(`${rowId} device fields`);
+  }
+  if (!isConfirmationDeviceKind(kind)) throw new Error(`${rowId} kind ${kind}`);
+  const hasSetpoint = Object.prototype.hasOwnProperty.call(raw, "targetTemperature");
+  if (kind === "climate") {
+    if (!hasSetpoint || typeof raw.targetTemperature !== "number") {
+      throw new Error(`${rowId} climate must include targetTemperature`);
+    }
+    return { id, name, model, kind, targetTemperature: raw.targetTemperature };
+  }
+  if (hasSetpoint) throw new Error(`${rowId} ${kind} must omit targetTemperature`);
+  return { id, name, model, kind, targetTemperature: null };
+}
+
+function parseConfirmationRows(raw: string): ConfirmationFixtureRow[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !Array.isArray(parsed.rows)) throw new Error("confirmation rows");
+  return parsed.rows.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") throw new Error(`row ${index} id`);
+    const id = entry.id;
+    if (entry.role !== "pin" && entry.role !== "new") throw new Error(`${id} role`);
+    if (!Object.prototype.hasOwnProperty.call(entry, "device")) throw new Error(`${id} device`);
+    if (typeof entry.confirm !== "boolean") throw new Error(`${id} confirm`);
+    return {
+      id,
+      device: entry.device === null ? null : parseConfirmationDevice(entry.device, id),
+      operation: parseConfirmationOperation(entry.operation, id),
+      confirm: entry.confirm,
+    };
+  });
+}
+
+function smartDeviceFromConfirmation(device: ConfirmationFixtureDevice): SmartDevice {
+  const common = {
+    id: device.id,
+    name: device.name,
+    roomId: "room",
+    roomName: "房间",
+    model: device.model,
+    isOnline: true,
+  };
+  switch (device.kind) {
+    case "light":
+      return {
+        ...common,
+        kind: {
+          kind: "light",
+          entityId: "e",
+          isOn: false,
+          brightnessPercent: null,
+          colorTempKelvin: null,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+        },
+      };
+    case "climate": {
+      if (device.targetTemperature === null) throw new Error(`${device.id} climate setpoint`);
+      return {
+        ...common,
+        kind: {
+          kind: "climate",
+          entityId: "e",
+          isOn: false,
+          hvacMode: "off",
+          availableModes: ["off", "heat", "cool", "auto"],
+          targetTemperature: device.targetTemperature,
+          currentTemperature: null,
+          minTemp: 16,
+          maxTemp: 80,
+          step: 1,
+          fanMode: null,
+          availableFanModes: [],
+        },
+      };
+    }
+    case "fan":
+      return {
+        ...common,
+        kind: {
+          kind: "fan",
+          entityId: "e",
+          isOn: false,
+          percentage: null,
+          presetMode: null,
+          availablePresetModes: [],
+          isOscillating: null,
+          pm25Density: null,
+          airQuality: null,
+          temperature: null,
+          humidity: null,
+          filterLifePercent: null,
+        },
+      };
+    case "plug":
+      return {
+        ...common,
+        kind: {
+          kind: "plug",
+          switchEntityId: "e",
+          isOn: false,
+          powerWatts: null,
+          childLockEntityId: null,
+          isChildLocked: false,
+        },
+      };
+    case "vacuum":
+      return {
+        ...common,
+        kind: {
+          kind: "vacuum",
+          entityId: "e",
+          status: "idle",
+          battery: null,
+          modeEntityId: null,
+          currentMode: null,
+          availableModes: [],
+        },
+      };
+    case "camera":
+      return {
+        ...common,
+        kind: {
+          kind: "camera",
+          entityId: "e",
+          isOn: false,
+          nightShot: null,
+          availableNightShots: [],
+          motionDetectionEntityId: null,
+          isMotionDetectionOn: null,
+          streamEntityId: null,
+        },
+      };
+    case "sensor":
+      return {
+        ...common,
+        kind: {
+          kind: "sensor",
+          temperature: null,
+          humidity: null,
+          battery: null,
+          statusText: null,
+        },
+      };
+    default: {
+      const unreachable: never = device.kind;
+      return unreachable;
+    }
+  }
+}
+
+it("matches the shared confirmation table in confirmation_golden.json", () => {
+  const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/confirmation_golden.json"), "utf8");
+  const rows = parseConfirmationRows(raw);
+  assert.equal(rows.length, 50);
+  assert.equal(new Set(rows.map((row) => row.id)).size, rows.length);
+  for (const row of rows) {
+    if (row.device) assert.equal(row.device.id, row.id, row.id);
+    const devices = row.device ? [smartDeviceFromConfirmation(row.device)] : [];
+    const intent: DeviceIntent = { targetId: row.device?.id ?? "missing", operation: row.operation };
+    assert.equal(ModelActionPolicy.needsConfirmation(intent, devices), row.confirm, row.id);
+    if (row.device?.kind === "sensor") {
+      assert.deepEqual(IntentValidator.sanitize([intent], devices, []), [], row.id);
+    }
+  }
+});
+
 describe("AI provider detection and key transport (#19)", () => {
   const studyLight: SmartDevice = {
     id: "dev_ceiling",
@@ -1378,17 +1609,6 @@ describe("AI guesses below 80% and risky actions wait for a tap (#21)", () => {
     assert.equal(ModelActionPolicy.probabilityOf({ confidence: 50 }, "a"), 0.5);
     assert.equal(ModelActionPolicy.probabilityOf({ choice: "a" }, "a"), 0);
     assert.equal(ModelActionPolicy.probabilityOf(undefined, "a"), 0);
-  });
-
-  it("flags heater on but not heater off", () => {
-    const needs = (isOn: boolean) =>
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_heater", operation: { kind: "power", isOn } }, devices);
-    assert.equal(needs(true), true);
-    assert.equal(needs(false), false);
-    assert.equal(
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_light", operation: { kind: "power", isOn: true } }, devices),
-      false
-    );
   });
 
   it("turns a 60% System One answer into a chip instead of running it", async () => {
