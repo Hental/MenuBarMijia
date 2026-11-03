@@ -2,16 +2,6 @@
 import CryptoKit
 import Foundation
 
-// 发布清单离线签名工具（issue #17 / #163）。
-//
-// 用法：
-//   MENUBARMIJIA_UPDATE_SIGNING_KEY="<私钥>" swift scripts/sign_update.swift \
-//     --min-from <x.y.z> <DMG> <EXE> <MSI>
-//
-// 输出（写在 DMG 旁边，再次执行会覆盖这两个文件）：
-//   MenuBarMijia-<version>.update.json
-//   MenuBarMijia-<version>.update.json.ed25519.sig
-//
 // 私钥格式（MENUBARMIJIA_UPDATE_SIGNING_KEY，二选一）：
 //   1. 32 字节 raw seed 的 base64（推荐；44 字符）
 //   2. PKCS#8 PEM（OpenSSL 导出的私钥；从 DER 尾部取 32 字节）
@@ -166,9 +156,10 @@ func main() throws {
         "--exe", exeURL.path,
         "--msi", msiURL.path,
     ]
-    var environment = ProcessInfo.processInfo.environment
-    // The encoder reads the public key from source. It must not see the private key.
-    environment.removeValue(forKey: "MENUBARMIJIA_UPDATE_SIGNING_KEY")
+    var environment: [String: String] = [:]
+    if let path = ProcessInfo.processInfo.environment["PATH"] {
+        environment["PATH"] = path
+    }
     encoder.environment = environment
     let encoderError = Pipe()
     encoder.standardError = encoderError

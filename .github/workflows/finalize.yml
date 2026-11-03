@@ -7,11 +7,6 @@ name: Finalize Release
 # 只能验证签名确实对应草稿里的那份发布清单——这正是独立信任链要保证的：GitHub 被攻破也发不出能通过
 # 校验的更新包。
 #
-# 前置条件（在可信机器上完成）：
-#   1. .github/workflows/release.yml 跑完，生成了 ${RELEASE_TAG} 的草稿（6 个附件）
-#   2. 下载草稿里的 DMG/EXE/MSI，用离线私钥签发布清单，并把清单和清单签名上传回同一草稿
-#   3. 手动触发本工作流，输入同一个 tag
-#
 # 本工作流不重新编译、不覆盖已发布的 release：签名必须对应草稿里的那份二进制。
 on:
   workflow_dispatch:
@@ -99,7 +94,6 @@ jobs:
             "MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"
           )
 
-          # 先看草稿里有没有清单和清单签名：缺任何一个都属于“还没走完第二阶段”，要和“签名不对”区分开。
           mapfile -t draft_assets < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r')
           missing_sigs=()
           for sig in "${required_sigs[@]}"; do
@@ -129,11 +123,9 @@ jobs:
             exit 1
           fi
 
-          # 从草稿本身下载，而不是重新编译：清单签名只对草稿里那份清单有效。
           gh release download "${RELEASE_TAG}" --dir dist
           ls -l dist
 
-          # 附件集合必须严格是这 8 个；缺清单、清单签名、安装包或 .sha256，或出现旧的安装包签名，都失败。
           if ! bash scripts/check_release.sh assets "${RELEASE_VERSION}" dist; then
             echo "❌ 草稿附件不完整，或清单签名与草稿里的更新清单不匹配。" >&2
             echo "   常见原因：安装包被重新构建后仍挂着旧清单。请在可信机器上用当前安装包重新签名并覆盖清单后重试。" >&2

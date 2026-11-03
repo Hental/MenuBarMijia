@@ -435,8 +435,6 @@ jobs:
           path: dist
 
       - name: Validate the 6 unsigned-draft assets
-        # 只校验“待签名的 6 个附件”（DMG / EXE / MSI + 各自 .sha256）。
-        # 这不是签名校验的降级替代：真正发布前的 assets 模式仍然要求 8 个，且清单签名必须匹配。
         run: bash scripts/check_release.sh draft-assets "${RELEASE_VERSION}" dist
 
       - name: Verify the remote tag still points at the built commit
@@ -474,7 +472,6 @@ jobs:
             exit 1
           fi
 
-          # 草稿可以留下清单和清单签名。旧的安装包 .ed25519.sig 必须由维护者先删掉；这里不删 GitHub 附件。
           mapfile -t expected < <(cd dist && ls -1 | sort)
           mapfile -t actual < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort)
           for name in "${actual[@]:-}"; do

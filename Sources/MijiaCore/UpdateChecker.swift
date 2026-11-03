@@ -250,7 +250,6 @@ public struct UpdateChecker: Sendable {
     public static let releasesPage = URL(string: "https://github.com/jryang1997/MenuBarMijia/releases")!
 
     /// Ed25519 public key (32-byte raw, base64) that the release manifest must be signed with.
-    /// The private key should stay offline; see `scripts/sign_update.swift` and ADR-0005.
     public static let updateSigningPublicKeyBase64 = "rLwWXuP0sOZvgd/KusLTTmBXN9DAZ9EzPBNhFSn9yUo="
 
     public let currentVersion: String
@@ -919,7 +918,6 @@ public struct AppUpdater: Sendable {
     /// The pinned leaf certificate hash itself is the anchor. `anchor apple generic` is not
     /// assumed because the release certificate is self-signed and would never satisfy it;
     /// missing or malformed pins fail closed, including local development builds.
-    /// The signed update manifest is independently mandatory.
     public static func codeSigningRequirement(bundleIdentifier: String, certificateSHA1: String?) -> String {
         let base = "identifier \"\(bundleIdentifier)\""
         guard let raw = certificateSHA1?.trimmingCharacters(in: .whitespacesAndNewlines) else {

@@ -3,12 +3,6 @@ import Foundation
 
 // MARK: - Update Signature
 
-/// Detached Ed25519 signatures for the release manifest (issue #17, #163).
-///
-/// The release workflow signs `MenuBarMijia-<version>.update.json` with an offline private key.
-/// The matching public key is compiled into the app, so a compromised GitHub account cannot
-/// publish an installable update: replacing the manifest requires the private key, and the
-/// signed version cannot be replayed as a newer release.
 public enum UpdateSignature {
     /// Verifies a base64 detached Ed25519 signature over `data`.
     ///

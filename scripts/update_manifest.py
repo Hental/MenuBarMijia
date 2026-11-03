@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Encode and check the signed release manifest."""
 
 import argparse
 import hashlib

@@ -326,7 +326,6 @@ struct InstallerAssetPayload {
     manifest_url: String,
 }
 
-/// Validates a GitHub release download URL for a MenuBarMijia release asset.
 pub(crate) fn validated_release_asset_url(raw: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(raw.trim()).map_err(|_| "更新包下载地址无效".to_string())?;
     if url.scheme() != "https"

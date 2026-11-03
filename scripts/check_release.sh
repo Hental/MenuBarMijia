@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # 发布门禁（#32）：校验标签/版本/提交，以及两端发布附件是否完整。
 #
-# 用法：
-#   scripts/check_release.sh tag <tag>              # 校验 VERSION、tag、HEAD 与 Windows 版本元数据
-#   scripts/check_release.sh assets <version> <dir> # 校验 8 个附件、SHA-256、清单签名与字段
-#
 # `tag` 在 GitHub Actions 中会把 version/tag/commit 写入 $GITHUB_OUTPUT。
 # `assets` 需要 openssl（Ed25519 校验）与 python3；发布工作流在 ubuntu-latest 上执行。
 set -euo pipefail
@@ -270,7 +266,6 @@ verify_ed25519() {
 }
 
 release_assets() {
-    # 草稿是 6 个安装包和校验文件。发布再加清单和清单签名，一共 8 个。
     local version="$1"
     local with_signature="$2"
     printf '%s\n' \
@@ -316,8 +311,7 @@ check_asset_set() {
 }
 
 validate_assets() {
-    # assets：严格 8 个附件。Ed25519 只验证清单，再由 check-fields 把清单和三个安装包对上。
-    # draft-assets：只要求 6 个待签附件，供 CI 阶段产出草稿时自检；绝不替代签名验证。
+    # draft-assets 只点名 6 个待签附件，不代替发布时的清单签名校验。
     local mode="$1"
     [ "$#" -eq 3 ] || usage
     local version="$2"
