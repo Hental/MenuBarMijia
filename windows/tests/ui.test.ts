@@ -11,6 +11,7 @@ import { MenuMijiaWindowsApp } from "../src/ui/app.js";
 import { cloudFixture } from "./cloudFixture.js";
 import { MiCloudClient, MiotSynthesizer } from "../src/core/miCloudClient.js";
 import { MiCloudCrypto } from "../src/core/miCloudCrypto.js";
+import type { SmartDevice } from "../src/core/models.js";
 
 let dom: Window;
 
@@ -404,6 +405,26 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
       assert.match(textOf(".cc-env-strip"), new RegExp(`${24 + i}\\.0`));
       assert.ok(element(".cc-popover") === popover, "order-only refresh rebuilt the panel");
     }
+  });
+
+  it("drops a card that goes offline while 只显示在线设备 is on", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      fixture.deviceRecords.push(fixture.sensorRecord("sensor-bedroom", "主卧温湿度计"));
+    });
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+    await click("#btn-toggle-hide-offline");
+    assert.ok(document.querySelector('[data-tile-id="sensor-bedroom"]'));
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = false;
+    const held = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(held.started, "Polling did not request properties");
+    held.release();
+    await withTimeout(held.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-tile-id="sensor-bedroom"]') === null);
+    assert.ok(document.querySelector('[data-tile-id="fixture-light"]'));
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
   });
 
   it("appends new devices, removes missing devices and retains a partial custom order", async () => {
@@ -2442,5 +2463,118 @@ describe("GrokBall side attachment (#114)", () => {
     new MenuMijiaWindowsApp(element("#app"));
     await waitFor(() => !!document.querySelector("[data-ha-error]"));
     assert.equal(element(".cc-grok-ball").dataset.emotion, "34");
+  });
+});
+
+describe("只显示在线设备 (#158)", () => {
+  function light(id: string, room: string, isOnline: boolean): SmartDevice {
+    return {
+      id,
+      name: id,
+      roomId: room,
+      roomName: room,
+      model: "yeelink.light.ceiling22",
+      isOnline,
+      kind: {
+        kind: "light",
+        entityId: `miot:${id}:2`,
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [],
+      },
+    };
+  }
+
+  function tileIds(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId ?? "").sort();
+  }
+
+  function startCached(extra: Record<string, unknown> = {}): void {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [
+        light("online-living", "客厅", true),
+        light("offline-living", "客厅", false),
+        light("offline-study", "书房", false),
+      ],
+      ...extra,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+  }
+
+  it("stays off by default, hides offline cards and 全关 targets, and survives a restart", async () => {
+    startCached();
+    const toggle = element("#btn-toggle-hide-offline");
+    assert.equal(element("#btn-toggle-grid").nextElementSibling, toggle);
+    assert.equal(toggle.getAttribute("aria-label"), "只显示在线设备");
+    assert.equal(toggle.getAttribute("aria-pressed"), "false");
+    assert.equal(toggle.getAttribute("title"), "点击隐藏未通电/离线设备");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
+    assert.match(element("#btn-all-off").textContent ?? "", /全关 \(3\)/);
+
+    await click("#btn-toggle-hide-offline");
+    const enabled = element("#btn-toggle-hide-offline");
+    assert.equal(enabled.getAttribute("aria-pressed"), "true");
+    assert.equal(enabled.classList.contains("is-selected"), true);
+    assert.equal(enabled.getAttribute("title"), "当前只显示在线设备（点击显示全部）");
+    assert.deepEqual(tileIds(), ["online-living"]);
+    assert.match(element("#btn-all-off").textContent ?? "", /全关 \(1\)/);
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(stored.hideOfflineDevices, true);
+
+    document.body.innerHTML = '<div id="app"></div>';
+    new MenuMijiaWindowsApp(element("#app"));
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
+    assert.deepEqual(tileIds(), ["online-living"]);
+
+    await click("#btn-toggle-hide-offline");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
+    const cleared = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(cleared.hideOfflineDevices, false);
+  });
+
+  it("offers 显示离线设备 when the selected room has no online device", async () => {
+    startCached({ hideOfflineDevices: true });
+    await click('[data-room="书房"]');
+    assert.deepEqual(tileIds(), []);
+    assert.equal(element(".cc-empty-title").textContent, "该房间暂无通电在线的设备");
+    await click("#btn-show-offline");
+    assert.deepEqual(tileIds(), ["offline-study"]);
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "false");
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as { hideOfflineDevices?: boolean };
+    assert.equal(stored.hideOfflineDevices, false);
+  });
+
+  it("follows the settings checkbox and the macOS English copy", async () => {
+    startCached({ interfaceLanguage: "en" });
+    const toggle = element("#btn-toggle-hide-offline");
+    assert.equal(toggle.getAttribute("aria-label"), "Show online devices only");
+    assert.equal(toggle.getAttribute("title"), "Hide offline/unplugged devices");
+
+    await click("#btn-settings");
+    const box = document.querySelector<HTMLInputElement>("#settings-hide-offline");
+    assert.ok(box);
+    assert.equal(element("label[for='settings-hide-offline']").textContent, "Hide Offline / Unpowered Devices");
+    assert.equal(box.checked, false);
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await setImmediate();
+    assert.deepEqual(tileIds(), ["online-living"]);
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("title"), "Showing online devices only (click to show all)");
+
+    await click('[data-room="书房"]');
+    assert.equal(element("#btn-show-offline").textContent, "Show Offline Devices");
+    assert.equal(element(".cc-empty-title").textContent, "No online devices in this room");
+  });
+
+  it("treats a non-boolean stored value as off", () => {
+    startCached({ hideOfflineDevices: "yes" });
+    assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "false");
+    assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
   });
 });
