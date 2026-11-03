@@ -238,7 +238,7 @@ export class MenuMijiaWindowsApp {
   private isShowingAssistantBar = true;
   private activeSheet: "none" | "onboarding" | "settings" = "none";
   private onboardingStep = 0;
-  private replyBanner: ReplyBannerState | null = null;
+  public replyBanner: ReplyBannerState | null = null;
   private haConnectionError: string | null = null;
   private waitingDeviceIds = new Set<string>();
   /** A Xiaomi refresh failed after devices were already on screen. */
@@ -4060,60 +4060,7 @@ export class MenuMijiaWindowsApp {
       });
     });
 
-    this.root.querySelector("#btn-close-camera-live")?.addEventListener("click", () => {
-      this.cameraLive.hideCameraLiveView();
-    });
-
-    this.root.querySelector("#btn-reload-camera-live")?.addEventListener("click", () => {
-      this.cameraLive.reconnectCameraLiveView();
-    });
-
-    this.root.querySelectorAll<HTMLElement>("[data-cameraquality]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const deviceId = btn.dataset.cameraquality ?? "";
-        const dev = this.devices.find((d) => d.id === deviceId);
-        if (!dev || dev.kind.kind !== "camera") return;
-        const quality = normalizeCameraStreamQuality(btn.dataset.cameraqualityValue);
-        if (quality === (this.cameraLive.cameraStreamQualities[deviceId] ?? DEFAULT_CAMERA_STREAM_QUALITY)) return;
-        this.cameraLive.setCameraStreamQuality(deviceId, quality);
-        this.cameraLive.reconnectCameraLiveView();
-      });
-    });
-
-    this.cameraLive.attachLiveMedia();
-
-    this.root.querySelectorAll<HTMLElement>("#btn-toggle-camera-url").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        this.cameraLive.liveCameraShowingURLInput = !this.cameraLive.liveCameraShowingURLInput;
-        this.render();
-      });
-    });
-
-    this.root.querySelector("#btn-copy-camera-diag")?.addEventListener("click", () => {
-      const dev = this.devices.find((d) => d.id === this.cameraLive.activeLiveCameraId);
-      if (!dev || dev.kind.kind !== "camera") return;
-      const redact = (raw: string) =>
-        raw
-          .replace(/https?:\/\/[^\s"'<>]+/gi, "<redacted-url>")
-          .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<redacted-ip>")
-          .replace(/\b[0-9a-fA-F]{24,}\b/g, "<redacted-token>");
-      const report = [
-        "MenuBarMijia Camera Diagnostics (Windows)",
-        `model: ${dev.model}`,
-        `online: ${dev.isOnline}`,
-        `isOn: ${dev.kind.isOn}`,
-        `connectionMode: ${this.settings.connectionMode}`,
-        `hasCustomURL: ${Boolean(this.cameraLive.cameraStreamURLs[dev.id])}`,
-        `error: ${redact(this.cameraLive.liveCameraError ?? "none")}`,
-      ].join("\n");
-      void navigator.clipboard?.writeText(report).catch(() => {});
-      this.replyBanner = { text: t("已复制脱敏诊断信息"), source: t("摄像机诊断") };
-      this.render();
-    });
-
-    this.root.querySelector("#btn-save-camera-url")?.addEventListener("click", () => {
-      void this.cameraLive.commitCameraStreamUrl();
-    });
+    this.cameraLive.bindEvents();
 
     this.root.querySelector("#btn-cloud-allow")?.addEventListener("click", () => {
       const pending = this.pendingCloudConsent;

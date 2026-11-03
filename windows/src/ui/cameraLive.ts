@@ -23,6 +23,7 @@ export interface CameraLiveHost {
   readonly transport: HttpTransport;
   readonly specResolver: MiotSpecResolver;
   readonly endpointSubmission: Promise<unknown>;
+  replyBanner: { text: string; source: string; isError?: boolean } | null;
   render(): void;
   escapeHtml(value: string): string;
   saveSettings(): void;
@@ -815,4 +816,62 @@ export class CameraLiveController {
   }
 
   // MARK: Layout editing
+
+  bindEvents(): void {
+    this.host.root.querySelector("#btn-close-camera-live")?.addEventListener("click", () => {
+      this.hideCameraLiveView();
+    });
+
+    this.host.root.querySelector("#btn-reload-camera-live")?.addEventListener("click", () => {
+      this.reconnectCameraLiveView();
+    });
+
+    this.host.root.querySelectorAll<HTMLElement>("[data-cameraquality]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const deviceId = btn.dataset.cameraquality ?? "";
+        const dev = this.host.devices.find((d) => d.id === deviceId);
+        if (!dev || dev.kind.kind !== "camera") return;
+        const quality = normalizeCameraStreamQuality(btn.dataset.cameraqualityValue);
+        if (quality === (this.cameraStreamQualities[deviceId] ?? DEFAULT_CAMERA_STREAM_QUALITY)) return;
+        this.setCameraStreamQuality(deviceId, quality);
+        this.reconnectCameraLiveView();
+      });
+    });
+
+    this.attachLiveMedia();
+
+    this.host.root.querySelectorAll<HTMLElement>("#btn-toggle-camera-url").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.liveCameraShowingURLInput = !this.liveCameraShowingURLInput;
+        this.host.render();
+      });
+    });
+
+    this.host.root.querySelector("#btn-copy-camera-diag")?.addEventListener("click", () => {
+      const dev = this.host.devices.find((d) => d.id === this.activeLiveCameraId);
+      if (!dev || dev.kind.kind !== "camera") return;
+      const redact = (raw: string) =>
+        raw
+          .replace(/https?:\/\/[^\s"'<>]+/gi, "<redacted-url>")
+          .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<redacted-ip>")
+          .replace(/\b[0-9a-fA-F]{24,}\b/g, "<redacted-token>");
+      const report = [
+        "MenuBarMijia Camera Diagnostics (Windows)",
+        `model: ${dev.model}`,
+        `online: ${dev.isOnline}`,
+        `isOn: ${dev.kind.isOn}`,
+        `connectionMode: ${this.host.settings.connectionMode}`,
+        `hasCustomURL: ${Boolean(this.cameraStreamURLs[dev.id])}`,
+        `error: ${redact(this.liveCameraError ?? "none")}`,
+      ].join("\n");
+      void navigator.clipboard?.writeText(report).catch(() => {});
+      this.host.replyBanner = { text: t("已复制脱敏诊断信息"), source: t("摄像机诊断") };
+      this.host.render();
+    });
+
+    this.host.root.querySelector("#btn-save-camera-url")?.addEventListener("click", () => {
+      void this.commitCameraStreamUrl();
+    });
+  }
+
 }
