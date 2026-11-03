@@ -286,6 +286,10 @@ public enum DeviceDeduplicator {
         home.activeBackends = activeBackends
         home.deviceBackends = deviceBackends
         home.pairedDeviceIDs = pairedDeviceIDs
+        let mergedIDs = Set(mergedDevices.map(\.id))
+        home.lightGroupOwners = (xiaomiCloud?.lightGroupOwners ?? [:]).filter {
+            mergedIDs.contains($0.key) && mergedIDs.contains($0.value)
+        }
 
         return DeviceMergeResult(
             home: home,
