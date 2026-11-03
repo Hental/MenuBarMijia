@@ -222,6 +222,8 @@ MenuBarMijia 是独立开源项目，并非小米官方客户端。米家云直�
 
 macOS 安装包尚未经过 Apple 公证，首次打开时可能需要在系统设置中允许；Windows 安装包可能触发 SmartScreen。macOS 应用内更新使用 Ed25519 公钥校验签名，私钥离线保管。更多连接方式说明见 [ADR-0007](docs/adr/0007-lan-direct-deferred.md)。
 
+私下报告漏洞的步骤写在英文的 [Security policy](SECURITY.md)。
+
 ---
 
 ## 参与开发与技术架构
