@@ -90,6 +90,14 @@ struct LightGroupFoldTests {
         #expect(ids(store.visibleDevices) == ["123", "456", "789", "999"])
     }
 
+    @Test("An offline group card never folds members even while offline devices are shown")
+    func visibleOfflineGroupDoesNotFold() async throws {
+        let (store, _) = try await makeStore(makeHome(groupOnline: false))
+        #expect(!store.hideOfflineDevices)
+        #expect(ids(store.filteredDevices).contains("group.living"))
+        #expect(ids(store.visibleDevices) == ["group.living", "123", "456", "789", "999"])
+    }
+
     @Test("A room or kind cut that drops the group card keeps its members visible")
     func filteredGroupLeavesMembers() async throws {
         let (store, _) = try await makeStore(makeHome())

@@ -67,10 +67,13 @@ extension HomeStore {
     /// scenes, search and assistant targeting still see every member.
     public var foldedDeviceIds: Set<String> {
         guard hideGroupedLights, !lightGroupOwners.isEmpty else { return [] }
-        let visible = Set(filteredDevices.map(\.id))
+        let listed = Dictionary(filteredDevices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var folded: Set<String> = []
         for device in filteredDevices {
-            guard let groupDid = lightGroupOwners[device.id], visible.contains(groupDid) else { continue }
+            // An offline group card cannot drive its members, so never fold them behind it.
+            guard let groupDid = lightGroupOwners[device.id],
+                  let group = listed[groupDid],
+                  group.isOnline else { continue }
             folded.insert(device.id)
         }
         return folded
