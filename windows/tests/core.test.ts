@@ -68,6 +68,7 @@ import {
   CLOUD_REFRESH_VISIBLE_MS,
   type DeviceIntent,
   type ScheduledCommand,
+  deviceStatusSummary,
   type SmartDevice,
 } from "../src/core/models.js";
 
@@ -742,6 +743,10 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     }
     const dev2 = home.devices.find((d) => d.id === "did_panel.s2");
     assert.equal(dev2?.roomName, "客厅");
+    const lockState = home.devices.find((d) => d.id === "did_lock_state");
+    const lockBattery = home.devices.find((d) => d.id === "did_lock_battery");
+    assert.equal(lockState?.kind.kind === "sensor" ? lockState.kind.statusText : null, "已上锁");
+    assert.equal(lockBattery?.kind.kind === "sensor" ? lockBattery.kind.statusText : null, "锁状态未知");
 
     // Offline fallback specs are shared synthesis rules: the corpus pins the exact
     // spec inferFallbackSpec must produce, and both platforms assert synthesis (#98).
@@ -2250,6 +2255,166 @@ describe("Habit-aware ambient summary (#113)", () => {
       new Date(2026, 9, 16, 21, 30),
     );
     assert.match(summary, /^夜晚常做：关闭客厅吸顶灯\(3次\)。个人口头禅：/);
+  });
+});
+
+describe("Lock status without a fresh reading (#149)", () => {
+  function lockSpec(description: string, onDoorService: boolean) {
+    const door = {
+      iid: 1,
+      type: "urn:miot-spec-v2:property:door-state:00000001:test:1",
+      format: "uint8",
+      access: ["read", "notify"],
+      "value-list": [
+        { value: 1, description: "Locked" },
+        { value: 2, description: "Unlocked" },
+        { value: 3, description: description === "门未关" || description === "门虚掩解除" ? description : "Door Not Closed" },
+        { value: 4, description: "Ajar" },
+        { value: 5, description: "Child Lock Enabled" },
+      ],
+    };
+    const parsed = parseMiotDeviceSpec({
+      type: "urn:miot-spec-v2:device:lock:0000A038:test:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:lock:00007855:test:1",
+          properties: onDoorService ? [] : [door],
+        },
+        ...(onDoorService
+          ? [{ iid: 4, type: "urn:miot-spec-v2:service:door:00007856:test:1", properties: [door] }]
+          : []),
+      ],
+    });
+    assert.ok(parsed);
+    return parsed;
+  }
+
+  function synthesizeLock(spec: MiotDeviceSpec, value: { siid: number; value: number } | null, isOnline: boolean) {
+    const values = new Map<string, unknown>();
+    if (value) values.set(`lk.${value.siid}.1`, value.value);
+    return MiotSynthesizer.synthesize(
+      [{ did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline, specType: null }],
+      [],
+      { "xiaomi.lock.s2": spec },
+      values,
+    ).devices[0];
+  }
+
+  for (const item of [
+    { description: "Unlocked", value: 2, onDoorService: true, expected: "已开锁" },
+    { description: "Ajar", value: 4, onDoorService: false, expected: "门虚掩" },
+    { description: "门未关", value: 3, onDoorService: false, expected: "门未关" },
+    { description: "Child Lock Enabled", value: 5, onDoorService: false, expected: "锁状态未知" },
+    { description: "门虚掩解除", value: 3, onDoorService: false, expected: "锁状态未知" },
+  ]) {
+    it(`maps ${item.description} and never claims guarding`, () => {
+      const device = synthesizeLock(
+        lockSpec(item.description, item.onDoorService),
+        { siid: item.onDoorService ? 4 : 2, value: item.value },
+        true,
+      );
+      assert.equal(device?.kind.kind, "sensor");
+      if (device?.kind.kind === "sensor") {
+        assert.equal(device.kind.statusText, item.expected);
+        assert.notEqual(device.kind.statusText, "守护中");
+        assert.equal(deviceStatusSummary(device), item.expected);
+      }
+    });
+  }
+
+  it("treats a missing door-state read and an offline cached lock as unknown", () => {
+    const unread = synthesizeLock(lockSpec("Locked", false), null, true);
+    assert.equal(unread?.kind.kind === "sensor" ? unread.kind.statusText : null, "锁状态未知");
+    const stale = synthesizeLock(lockSpec("Locked", false), { siid: 2, value: 1 }, false);
+    assert.equal(stale?.kind.kind === "sensor" ? stale.kind.statusText : null, "锁状态未知");
+    assert.equal(stale ? deviceStatusSummary(stale) : null, "离线");
+    const online = synthesizeLock(lockSpec("Locked", false), { siid: 2, value: 1 }, true);
+    assert.equal(online ? deviceStatusSummary(online) : null, "已上锁");
+  });
+
+  it("Home Assistant locks follow the lock entity and ignore clock models", () => {
+    const batteryOnly = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "front", name: "入户门锁", model: "xiaomi.lock.s2" }],
+      entities: [{ entity_id: "sensor.front_battery", device_id: "front" }],
+      states: [{ entity_id: "sensor.front_battery", state: "80", attributes: { device_class: "battery" } }],
+    }).devices[0];
+    assert.equal(batteryOnly?.kind.kind, "sensor");
+    if (batteryOnly?.kind.kind === "sensor") {
+      assert.equal(batteryOnly.kind.statusText, "锁状态未知");
+      assert.equal(batteryOnly.kind.battery, 80);
+      assert.equal(batteryOnly.isOnline, true);
+    }
+
+    const locked = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "front", name: "入户门锁", model: "Aqara Lock" }],
+      entities: [
+        { entity_id: "lock.front", device_id: "front" },
+        { entity_id: "sensor.front_battery", device_id: "front" },
+      ],
+      states: [
+        { entity_id: "lock.front", state: "locked", attributes: {} },
+        { entity_id: "sensor.front_battery", state: "64", attributes: { device_class: "battery" } },
+      ],
+    }).devices[0];
+    assert.equal(locked?.kind.kind === "sensor" ? locked.kind.statusText : null, "已上锁");
+    assert.equal(locked?.kind.kind === "sensor" ? locked.kind.battery : null, 64);
+
+    const unavailable = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "front", name: "入户门锁", model: "xiaomi.lock.s2" }],
+      entities: [{ entity_id: "lock.front", device_id: "front" }],
+      states: [{ entity_id: "lock.front", state: "unavailable", attributes: {} }],
+    }).devices[0];
+    assert.equal(unavailable?.kind.kind === "sensor" ? unavailable.kind.statusText : null, "锁状态未知");
+    assert.equal(unavailable?.isOnline, false);
+
+    const clock = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "desk", name: "闹钟", model: "xiaomi.clock.watch" }],
+      entities: [{ entity_id: "sensor.clock_battery", device_id: "desk" }],
+      states: [{ entity_id: "sensor.clock_battery", state: "90", attributes: {} }],
+    });
+    assert.equal(clock.devices.length, 0);
+  });
+
+  it("prefers a lock entity over a companion switch", () => {
+    const withModel = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "front", name: "入户门锁", model: "lumi.lock.acn02" }],
+      entities: [
+        { entity_id: "lock.front", device_id: "front" },
+        { entity_id: "switch.front_door_relay", device_id: "front" },
+        { entity_id: "sensor.front_battery", device_id: "front" },
+      ],
+      states: [
+        { entity_id: "lock.front", state: "locked", attributes: {} },
+        { entity_id: "switch.front_door_relay", state: "on", attributes: {} },
+        { entity_id: "sensor.front_battery", state: "64", attributes: { device_class: "battery" } },
+      ],
+    }).devices[0];
+    assert.equal(withModel?.kind.kind, "sensor");
+    if (withModel?.kind.kind === "sensor") {
+      assert.equal(withModel.kind.statusText, "已上锁");
+      assert.equal(withModel.kind.battery, 64);
+    }
+
+    const byEntity = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "side", name: "侧门", model: "vendor.door.v1" }],
+      entities: [
+        { entity_id: "lock.side", device_id: "side" },
+        { entity_id: "switch.side_power", device_id: "side" },
+      ],
+      states: [
+        { entity_id: "lock.side", state: "unlocked", attributes: {} },
+        { entity_id: "switch.side_power", state: "on", attributes: {} },
+      ],
+    }).devices[0];
+    assert.equal(byEntity?.kind.kind, "sensor");
+    assert.equal(byEntity?.kind.kind === "sensor" ? byEntity.kind.statusText : null, "已开锁");
   });
 });
 
