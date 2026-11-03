@@ -719,6 +719,28 @@ public enum DeviceSynthesizer {
         let outletSwitch = primarySwitches.first {
             states[$0.entity_id]?.attributes["device_class"]?.stringValue == "outlet"
         }
+        // Companion switch.* entities (door relay, vendor power) must not hide lock.*.
+        if Self.isLockModel(model) || eids.contains(where: { $0.hasPrefix("lock.") }) {
+            let lockId = eids.first(where: { $0.hasPrefix("lock.") })
+            let lockSt = lockId.flatMap { states[$0] }
+            let batSt = batId.flatMap { states[$0] }
+            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
+            let online = (lockSt?.isAvailable == true) || (batSt?.isAvailable == true)
+            return SmartDevice(
+                id: deviceId,
+                name: name,
+                roomId: roomId,
+                roomName: roomName,
+                model: model,
+                isOnline: online,
+                kind: .sensor(
+                    SensorSpec(
+                        battery: bVal,
+                        statusText: Self.haLockStatusText(lockSt)
+                    )
+                )
+            )
+        }
         if model.contains("plug") || eids.contains(where: { $0.hasPrefix("switch.cuco") })
             || (!primarySwitches.isEmpty && (outletSwitch != nil || (tempId == nil && humId == nil))
                 && !eids.contains(where: { $0.hasPrefix("media_player.") })) {
@@ -845,28 +867,6 @@ public enum DeviceSynthesizer {
                         temperature: tVal,
                         humidity: hVal,
                         battery: bVal
-                    )
-                )
-            )
-        }
-
-        if Self.isLockModel(model) || eids.contains(where: { $0.hasPrefix("lock.") }) {
-            let lockId = eids.first(where: { $0.hasPrefix("lock.") })
-            let lockSt = lockId.flatMap { states[$0] }
-            let batSt = batId.flatMap { states[$0] }
-            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
-            let online = (lockSt?.isAvailable == true) || (batSt?.isAvailable == true)
-            return SmartDevice(
-                id: deviceId,
-                name: name,
-                roomId: roomId,
-                roomName: roomName,
-                model: model,
-                isOnline: online,
-                kind: .sensor(
-                    SensorSpec(
-                        battery: bVal,
-                        statusText: Self.haLockStatusText(lockSt)
                     )
                 )
             )

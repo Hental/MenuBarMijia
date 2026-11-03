@@ -2379,6 +2379,43 @@ describe("Lock status without a fresh reading (#149)", () => {
     });
     assert.equal(clock.devices.length, 0);
   });
+
+  it("prefers a lock entity over a companion switch", () => {
+    const withModel = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "front", name: "入户门锁", model: "lumi.lock.acn02" }],
+      entities: [
+        { entity_id: "lock.front", device_id: "front" },
+        { entity_id: "switch.front_door_relay", device_id: "front" },
+        { entity_id: "sensor.front_battery", device_id: "front" },
+      ],
+      states: [
+        { entity_id: "lock.front", state: "locked", attributes: {} },
+        { entity_id: "switch.front_door_relay", state: "on", attributes: {} },
+        { entity_id: "sensor.front_battery", state: "64", attributes: { device_class: "battery" } },
+      ],
+    }).devices[0];
+    assert.equal(withModel?.kind.kind, "sensor");
+    if (withModel?.kind.kind === "sensor") {
+      assert.equal(withModel.kind.statusText, "已上锁");
+      assert.equal(withModel.kind.battery, 64);
+    }
+
+    const byEntity = HomeAssistantSynthesizer.synthesize({
+      areas: [],
+      devices: [{ id: "side", name: "侧门", model: "vendor.door.v1" }],
+      entities: [
+        { entity_id: "lock.side", device_id: "side" },
+        { entity_id: "switch.side_power", device_id: "side" },
+      ],
+      states: [
+        { entity_id: "lock.side", state: "unlocked", attributes: {} },
+        { entity_id: "switch.side_power", state: "on", attributes: {} },
+      ],
+    }).devices[0];
+    assert.equal(byEntity?.kind.kind, "sensor");
+    assert.equal(byEntity?.kind.kind === "sensor" ? byEntity.kind.statusText : null, "已开锁");
+  });
 });
 
 describe("Home Assistant snapshot boundary", () => {

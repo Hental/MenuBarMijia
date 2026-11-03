@@ -364,6 +364,25 @@ function buildKind(
             : null,
     };
   } else if (
+    // Companion switch.* entities must not hide the real lock state.
+    isLockModel(model) ||
+    entities.some((entry) => text(entry.entity_id).startsWith("lock."))
+  ) {
+    const lockState = find("lock");
+    const battery = sensor("battery");
+    const batteryFresh = battery != null && battery.state !== "unknown" && battery.state !== "unavailable";
+    const lockFresh = lockState != null && lockState.state !== "unknown" && lockState.state !== "unavailable";
+    return {
+      kind: {
+        kind: "sensor",
+        temperature: null,
+        humidity: null,
+        battery: reading("battery"),
+        statusText: haLockStatusText(lockFresh ? lockState : undefined),
+      },
+      online: lockFresh || batteryFresh,
+    };
+  } else if (
     (state = find(
       "switch",
       (entry) =>
@@ -404,24 +423,6 @@ function buildKind(
         temperature: reading("temperature"),
         humidity: reading("humidity"),
         battery: reading("battery"),
-      };
-    } else if (
-      isLockModel(model) ||
-      entities.some((entry) => text(entry.entity_id).startsWith("lock."))
-    ) {
-      const lockState = find("lock");
-      const battery = sensor("battery");
-      const batteryFresh = battery != null && battery.state !== "unknown" && battery.state !== "unavailable";
-      const lockFresh = lockState != null && lockState.state !== "unknown" && lockState.state !== "unavailable";
-      return {
-        kind: {
-          kind: "sensor",
-          temperature: null,
-          humidity: null,
-          battery: reading("battery"),
-          statusText: haLockStatusText(lockFresh ? lockState : undefined),
-        },
-        online: lockFresh || batteryFresh,
       };
     } else {
       const primaryButtons = entities.filter((entry) => {
