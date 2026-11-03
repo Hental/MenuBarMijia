@@ -5,13 +5,16 @@
 # the next run that stamps the same unchanged files can skip them.
 # Requires a non-shallow checkout (fetch-depth: 0); a depth-1 clone reports
 # every file as introduced by HEAD.
+# `-m` lists the files a merge commit changed. Without it a merge keeps the
+# older stamp of a file it brought in, so a cached object from before the merge
+# looks current and the link fails on the new symbols it never built.
 set -euo pipefail
 python3 - << 'PY'
 import os
 import subprocess
 
 log = subprocess.check_output(
-    ["git", "log", "--pretty=format:COMMIT:%ct", "--name-only"],
+    ["git", "log", "-m", "--pretty=format:COMMIT:%ct", "--name-only"],
     text=True,
 )
 stamp = None
