@@ -46,22 +46,11 @@ import {
   normalizeMiCloudRegion,
 } from "../core/miCloudClient.js";
 import {
-  UPDATE_RELEASES_PAGE,
-  UPDATE_RELEASES_URL,
-  UPDATE_STORAGE_KEY,
-  checkForUpdate,
-  isNewerVersion,
-  parseUpdateState,
-  serializeUpdateState,
   type GitHubRelease,
   type UpdateState,
 } from "../core/updateChecker.js";
 import {
   CredentialVault,
-  credentialsFromSettings,
-  hasCredentials,
-  parseMiSession,
-  sanitizeSettingsForStorage,
   sessionWithoutPassToken,
 } from "../core/secureStore.js";
 import {
@@ -81,7 +70,6 @@ import {
   type ScheduledCommand,
   type SmartDevice,
   allOffTargets,
-  cloudRefreshDue,
   deviceEnvironmentReading,
   readMiotPower,
   environmentReadingPriority,
@@ -92,7 +80,6 @@ import {
   localizeAirQuality,
   localizeFanPreset,
   localizeFridgeMode,
-  partitionDueTimers,
 } from "../core/models.js";
 import {
   type AppAppearance,
@@ -120,10 +107,8 @@ import {
   localizeFanMode,
   moveInOrder,
   nextSize,
-  normalizeGlobalShortcut,
   pageSections,
   parsePanelPlacement,
-  recordShortcutFromKeyEvent,
   resolveAppearance,
   resolvedSize,
   scopedKey,
@@ -134,14 +119,11 @@ import {
 import {
   type AppLanguage,
   type LanguagePreference,
-  resolveLanguage,
-  setLanguage,
   speechLocale,
   t,
 } from "../core/i18n.js";
 import {
   type TemperatureUnitPreference,
-  applyTemperatureUnit,
   displayStep,
   formatTemperatureValue,
   getTemperatureUnit,
@@ -161,15 +143,16 @@ import {
 } from "./listCut.js";
 
 import { SpeechRecognitionInstance, type ConnectionMode, type LearnedShortcut, type LoadedSettings, type PersistedSettings, type ReplyBannerState, type UndoAction, type UndoStep } from "./appTypes.js";
-import { APP_VERSION, CAMERA_QUALITY_TITLES, CACHED_DEVICES_VERSION, LEGACY_STORAGE_KEY, SF_ICONS, STORAGE_KEY } from "./appConstants.js";
+import { CAMERA_QUALITY_TITLES, CACHED_DEVICES_VERSION, LEGACY_STORAGE_KEY, SF_ICONS, STORAGE_KEY } from "./appConstants.js";
 import { demoDevices, demoScenes } from "./demo.js";
 import { createTransport, invokeTauriVoid } from "./transport.js";
-import { loadSettings, stripCredentialFieldsFromStoredCopies, upgradeCachedDevices, writeSettingsForStorage } from "./settings.js";
+import { loadSettings, upgradeCachedDevices } from "./settings.js";
 import { CameraLiveController } from "./cameraLive.js";
 import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as renderEnvironmentStripView } from "./deviceViews.js";
 import { renderSettingsModal } from "./settingsViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
+import { applyGlobalHotkey, applyInterfaceLanguage, applyTemperatureSetting, bindGlobalKeys, checkForAppUpdate, hydrateCredentials, initializeCredentials, openSettingsSheet, openUpdatePage, osLanguages, persistCredentials, restoreUpdateState, saveSettings, saveUpdateState, startTimerLoop, startUpdateInstall, submitServiceEndpoints } from "./appLifecycle.js";
 import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
@@ -189,10 +172,10 @@ function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
 }
 
 export class MenuMijiaWindowsApp {
-  private readonly loadedSettings: LoadedSettings = loadSettings();
+  public readonly loadedSettings: LoadedSettings = loadSettings();
   public settings: PersistedSettings = this.loadedSettings.settings;
-  private readonly credentialVault = new CredentialVault();
-  private lastSubmittedEndpoints: string | null = null;
+  public readonly credentialVault = new CredentialVault();
+  public lastSubmittedEndpoints: string | null = null;
   // Assigned in the constructor, after the interface language is resolved: the demo home is
   // generated per language (#52), so a field initializer would freeze the module default.
   public devices: SmartDevice[];
@@ -264,11 +247,11 @@ export class MenuMijiaWindowsApp {
   public isResolvingIntent = false;
   public isSyncingCloud = false;
   private syncGeneration = 0;
-  private lastCloudRefreshAt: number | null = null;
+  public lastCloudRefreshAt: number | null = null;
   public localControlRevision = 0;
   public sourceRevision = 0;
   /** A silent cloud result that is waiting for the user to finish interacting. */
-  private pendingCloudRender = false;
+  public pendingCloudRender = false;
   public endpointSubmission: Promise<unknown> = Promise.resolve();
   public pointerIsDown = false;
   public isListeningVoice = false;
@@ -281,7 +264,7 @@ export class MenuMijiaWindowsApp {
   public isPollingQR = false;
   /** Latest GitHub release found by the daily check (#39); shown in settings and the tray menu. */
   public availableUpdate: GitHubRelease | null = null;
-  private updateState: UpdateState = { lastCheckedAtMs: null, release: null };
+  public updateState: UpdateState = { lastCheckedAtMs: null, release: null };
   public isCheckingUpdate = false;
   public isInstallingUpdate = false;
   public updateStatusMessage: { text: string; isError: boolean } | null = null;
@@ -361,367 +344,81 @@ export class MenuMijiaWindowsApp {
     void this.checkForAppUpdate(false);
   }
 
-  /**
-   * First run after this version: move the plaintext copy into the Windows Credential
-   * Manager, then rewrite localStorage without secrets (#28). Later runs read only the
-   * credential store, so an upgrade needs no QR login again.
-   */
   private initializeCredentials(): void {
-    if (this.loadedSettings.hasLegacyCredentials) {
-      // Rewrite the plaintext copy first so a credential-manager failure can never
-      // leave tokens in localStorage. The in-memory settings keep the login alive.
-      writeSettingsForStorage(this.settings);
-      stripCredentialFieldsFromStoredCopies();
-      void this.persistCredentials();
-      return;
-    }
-    // A stale pre-1.0 copy can still hold secrets even when the v2 copy is clean (#28).
-    stripCredentialFieldsFromStoredCopies();
-    void this.hydrateCredentials();
+    initializeCredentials(this);
   }
 
   private async hydrateCredentials(): Promise<void> {
-    try {
-      const credentials = await this.credentialVault.load();
-      if (!hasCredentials(credentials)) return;
-      const current = credentialsFromSettings(this.settings);
-      if (!current.miSession && credentials.miSession) this.settings.miSession = credentials.miSession;
-      if (current.haToken === "" && credentials.haToken !== "") this.settings.haToken = credentials.haToken;
-      if (current.assistantApiKey === "" && credentials.assistantApiKey !== "") {
-        this.settings.openRouterApiKey = credentials.assistantApiKey;
-        this.settings.assistantKeyEndpoint ??= assistantEndpointIdentity(this.settings.assistantBaseURL);
-      }
-      if (this.settings.miSession) {
-        this.settings.hasCompletedOnboarding = true;
-        this.settings.miCloudRegion = normalizeMiCloudRegion(this.settings.miSession.region);
-        if (this.activeSheet === "onboarding") this.activeSheet = "none";
-      }
-      this.submitServiceEndpoints();
-      writeSettingsForStorage(this.settings);
-      if (this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) {
-        void this.refreshDevices(true);
-      }
-      if (this.settings.connectionMode === "homeAssistant") {
-        const cache = this.settings.cachedHAHome;
-        if (cache?.identity === homeAssistantIdentity(this.settings.haBaseURL, this.settings.haToken)) {
-          this.devices = structuredClone(cache.home.devices);
-          this.scenes = structuredClone(cache.home.scenes);
-          this.environmentReadings = structuredClone(cache.home.environmentReadings);
-        }
-      }
-      this.render();
-      if (this.settings.connectionMode === "homeAssistant") void this.refreshHADevices();
-    } catch {
-      if (this.settings.connectionMode === "homeAssistant") {
-        this.haConnectionError = "Home Assistant credentials could not be loaded. Check Windows Credential Manager.";
-        this.render();
-      }
-    }
+    return hydrateCredentials(this);
   }
 
   private async persistCredentials(): Promise<void> {
-    try {
-      await this.credentialVault.persist(credentialsFromSettings(this.settings));
-    } catch {
-      // The credential manager refused the write; never fall back to plaintext storage.
-    }
+    return persistCredentials(this);
   }
 
   public saveSettings(forceSubmitEndpoints = false): void {
-    writeSettingsForStorage(this.settings);
-    this.submitServiceEndpoints(forceSubmitEndpoints);
-    void this.persistCredentials();
+    saveSettings(this, forceSubmitEndpoints);
   }
 
-  /** OS-preferred languages, read from the WebView's `window.navigator` (#52). */
   private static osLanguages(): string[] {
-    const languages = window.navigator.languages;
-    if (Array.isArray(languages) && languages.length > 0) return [...languages];
-    return window.navigator.language ? [window.navigator.language] : [];
+    return osLanguages();
   }
 
-  /** Picks the UI language from the saved preference plus the OS languages (#52). */
   public applyInterfaceLanguage(): void {
-    setLanguage(resolveLanguage(this.settings.interfaceLanguage, MenuMijiaWindowsApp.osLanguages()));
+    applyInterfaceLanguage(this);
   }
 
-  /** Resolves °C/°F from the saved preference plus the OS region; core values stay Celsius (#52). */
   public applyTemperatureSetting(): void {
-    const locale = MenuMijiaWindowsApp.osLanguages()[0] ?? "en";
-    applyTemperatureUnit(locale, this.settings.temperatureUnit);
+    applyTemperatureSetting(this);
   }
 
   private submitServiceEndpoints(force = false): void {
-    const assistantUrl = this.settings.assistantBaseURL.trim();
-    const haUrl = this.settings.haBaseURL.trim();
-    const serialized = `${assistantUrl}\n${haUrl}`;
-    if (!force && serialized === this.lastSubmittedEndpoints) return;
-    this.lastSubmittedEndpoints = serialized;
-    const invoke = window.__TAURI_INTERNALS__?.invoke;
-    if (!invoke) return;
-    this.endpointSubmission = invoke("set_service_endpoints", { assistantUrl, haUrl }).catch(() => undefined);
+    submitServiceEndpoints(this, force);
   }
 
-  /** Restores the last known release so an update found yesterday still shows after a restart. */
   private restoreUpdateState(): void {
-    try {
-      this.updateState = parseUpdateState(localStorage.getItem(UPDATE_STORAGE_KEY));
-    } catch {
-      this.updateState = { lastCheckedAtMs: null, release: null };
-    }
-    const release = this.updateState.release;
-    if (release && isNewerVersion(release.version, APP_VERSION)) {
-      this.availableUpdate = release;
-      invokeTauriVoid("set_update_available", { version: release.version });
-    }
+    restoreUpdateState(this);
   }
 
   private saveUpdateState(): void {
-    try {
-      localStorage.setItem(UPDATE_STORAGE_KEY, serializeUpdateState(this.updateState));
-    } catch {
-      // Quota errors only cost the "once per day" memory, never the check itself.
-    }
+    saveUpdateState(this);
   }
 
-  /**
-   * Automatic check is skipped outside Tauri (browser preview/tests) because the CSP only
-   * allows `native_http`. `manual` is an explicit user action, so it bypasses the daily
-   * limit and the auto-check switch (#39).
-   */
   public async checkForAppUpdate(manual: boolean): Promise<void> {
-    if (!manual && !window.__TAURI_INTERNALS__?.invoke) return;
-    if (this.isCheckingUpdate || this.isInstallingUpdate) return;
-    if (manual) {
-      this.isCheckingUpdate = true;
-      this.updateStatusMessage = null;
-      this.render();
-    }
-    const result = await checkForUpdate({
-      currentVersion: APP_VERSION,
-      enabled: manual || this.settings.autoCheckUpdates,
-      lastCheckedAtMs: this.updateState.lastCheckedAtMs,
-      nowMs: Date.now(),
-      force: manual,
-      requestLatest: () =>
-        this.transport({
-          url: UPDATE_RELEASES_URL,
-          method: "GET",
-          headers: {
-            Accept: "application/vnd.github+json",
-            "User-Agent": "MenuBarMijia-Windows",
-          },
-          timeoutMs: 8000,
-        }),
-    });
-    this.isCheckingUpdate = false;
-    if (!result.requested) return;
-
-    this.updateState = { lastCheckedAtMs: result.checkedAtMs, release: result.release };
-    this.saveUpdateState();
-    if (result.updateAvailable && result.release) {
-      this.availableUpdate = result.release;
-      this.updateStatusMessage = null;
-      invokeTauriVoid("set_update_available", { version: result.release.version });
-      this.render();
-    } else if (!result.failed && this.availableUpdate) {
-      // A successful check with no newer release retires yesterday's notice.
-      this.availableUpdate = null;
-      this.updateStatusMessage = manual
-        ? { text: t("已是最新版本 v{version}", { version: APP_VERSION }), isError: false }
-        : null;
-      invokeTauriVoid("set_update_available", { version: null });
-      this.render();
-    } else if (manual) {
-      const text = result.failed ? t("检查更新失败，请稍后再试") : t("已是最新版本 v{version}", { version: APP_VERSION });
-      this.updateStatusMessage = { text, isError: result.failed };
-      this.replyBanner = {
-        text,
-        source: t("检查更新"),
-        isError: result.failed,
-      };
-      this.render();
-    }
+    return checkForAppUpdate(this, manual);
   }
 
   public openSettingsSheet(): void {
-    this.activeSheet = "settings";
-    invokeTauriVoid("set_pin_popover", { pin: true });
-    this.syncPanelPlacement();
-    this.render();
-    void this.checkForAppUpdate(false);
+    openSettingsSheet(this);
   }
 
   public openUpdatePage(): void {
-    invokeTauriVoid("open_release_page", { url: this.availableUpdate?.htmlURL ?? UPDATE_RELEASES_PAGE });
+    openUpdatePage(this);
   }
 
   public async startUpdateInstall(): Promise<void> {
-    if (this.isInstallingUpdate || !this.availableUpdate) return;
-    const asset = this.availableUpdate.installerAsset;
-    if (!asset) {
-      this.openUpdatePage();
-      return;
-    }
-    const invoke = window.__TAURI_INTERNALS__?.invoke;
-    if (!invoke) {
-      this.openUpdatePage();
-      return;
-    }
-    this.isInstallingUpdate = true;
-    this.updateStatusMessage = {
-      text: t("正在下载并校验 v{version} 安装包，完成后将自动启动安装…", { version: this.availableUpdate.version }),
-      isError: false,
-    };
-    this.render();
-    try {
-      await invoke("install_update", { asset });
-      this.isInstallingUpdate = false;
-      this.render();
-    } catch (error) {
-      this.isInstallingUpdate = false;
-      const message =
-        typeof error === "string" && error.trim().length > 0
-          ? error
-          : error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : t("下载或校验更新包失败，请重试或手动下载");
-      this.updateStatusMessage = { text: message, isError: true };
-      this.render();
-    }
+    return startUpdateInstall(this);
   }
 
-  /**
-   * Synchronizes the Windows global shortcut registration with the current preference (#43),
-   * unregistering immediately when disabled (Coding Standard #3) and surfacing conflicts.
-   */
   public async applyGlobalHotkey(): Promise<void> {
-    const enabled = this.settings.enableGlobalHotkey;
-    const shortcut = normalizeGlobalShortcut(this.settings.globalHotkey);
-    this.settings.globalHotkey = shortcut;
-    if (!enabled) {
-      this.hotkeyRegistrationError = null;
-    }
-    const invoke = window.__TAURI_INTERNALS__?.invoke;
-    if (!invoke) {
-      this.hotkeyRegistrationError = null;
-      return;
-    }
-    try {
-      await invoke("set_global_shortcut", { enabled, shortcut });
-      this.hotkeyRegistrationError = null;
-    } catch {
-      this.hotkeyRegistrationError = enabled ? t("这个组合已被其他应用占用，换一个再试。") : null;
-    }
-    if (this.activeSheet === "settings") {
-      this.render();
-    }
+    return applyGlobalHotkey(this);
   }
 
   private bindGlobalKeys(): void {
-    window.addEventListener("keydown", (e) => {
-      if (this.isRecordingHotkey) {
-        e.preventDefault();
-        e.stopPropagation();
-        const outcome = recordShortcutFromKeyEvent(e);
-        if (outcome.kind === "cancel") {
-          this.isRecordingHotkey = false;
-          this.hotkeyNeedsHint = false;
-          this.render();
-        } else if (outcome.kind === "invalid") {
-          this.hotkeyNeedsHint = true;
-          this.render();
-        } else if (outcome.kind === "recorded") {
-          this.isRecordingHotkey = false;
-          this.hotkeyNeedsHint = false;
-          this.settings.globalHotkey = outcome.shortcut;
-          this.saveSettings();
-          void this.applyGlobalHotkey();
-          this.render();
-        }
-        return;
-      }
-
-      if (e.key === "Escape") {
-        if (this.isGrokBallStageExpanded) {
-          this.setGrokBallStageExpanded(false);
-          return;
-        }
-        if (this.cameraLive.activeLiveCameraId !== null) {
-          this.cameraLive.hideCameraLiveView();
-          return;
-        }
-        if (this.activeSheet !== "none") {
-          this.activeSheet = "none";
-          this.isRecordingHotkey = false;
-          this.hotkeyNeedsHint = false;
-          invokeTauriVoid("set_pin_popover", { pin: false });
-          this.render();
-        } else {
-          invokeTauriVoid("hide_panel");
-        }
-      } else if (e.key === "/" && document.activeElement?.tagName !== "INPUT") {
-        e.preventDefault();
-        this.isShowingAssistantBar = true;
-        this.render();
-        this.root.querySelector<HTMLInputElement>("#command-input")?.focus();
-      }
-    });
+    bindGlobalKeys(this);
   }
 
   private startTimerLoop(): void {
-    window.setInterval(() => {
-      if (this.pendingCloudRender && !this.hasBlockingPanelInteraction()) {
-        this.render();
-      }
-
-      this.maybeRefreshProactiveInBackground();
-
-      const now = Date.now();
-      this.syncGrokBallEmotion();
-      let changed = false;
-
-      if (this.lastUndoAction && this.lastUndoAction.expiresAtMs <= now) {
-        this.lastUndoAction = null;
-        changed = true;
-      }
-
-      // After sleep the interval resumes late; a timer more than a minute overdue is not run silently (#22).
-      const { run, missed, remaining } = partitionDueTimers(this.scheduledCommands, now);
-      if (run.length > 0 || missed.length > 0) {
-        this.scheduledCommands = remaining;
-        this.missedScheduledCommands.push(...missed);
-        changed = true;
-        for (const item of run) {
-          void this.handleNaturalCommand(item.command, true);
-        }
-      } else if (this.scheduledCommands.length > 0) {
-        changed = true;
-      }
-
-      if (changed) {
-        this.render();
-      }
-
-      if (
-        (this.settings.connectionMode === "homeAssistant" || this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession) &&
-        this.activeSheet === "none" &&
-        !this.isSyncingCloud &&
-        !this.isPollingQR &&
-        cloudRefreshDue(now, this.lastCloudRefreshAt, this.isPanelVisible())
-      ) {
-        void this.refreshDevices(true);
-      }
-    }, 1000);
+    startTimerLoop(this);
   }
 
   /** The tray popover hides when it loses focus, so focus means it is on screen. */
-  private isPanelVisible(): boolean {
+  public isPanelVisible(): boolean {
     return document.visibilityState !== "hidden" && document.hasFocus();
   }
 
   /** Background refreshes must not rebuild the panel while the user is mid-action. */
-  private hasBlockingPanelInteraction(): boolean {
+  public hasBlockingPanelInteraction(): boolean {
     return (
       this.activeSheet !== "none" ||
       this.pointerIsDown ||
@@ -1465,7 +1162,7 @@ export class MenuMijiaWindowsApp {
     return result;
   }
 
-  private syncGrokBallEmotion(): void {
+  public syncGrokBallEmotion(): void {
     const now = Date.now();
     this.grokBall.setEmotion(resolveGrokBallEmotion({
       timeBucket: timeBucketLabel(new Date(now).getHours()),
@@ -1513,7 +1210,7 @@ export class MenuMijiaWindowsApp {
    * time bucket or room climate changed, never blocks the panel, never asks for consent,
    * and keeps the previous cache when the request fails.
    */
-  private maybeRefreshProactiveInBackground(): void {
+  public maybeRefreshProactiveInBackground(): void {
     if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
     if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
     const signature = this.proactiveSignature();
@@ -2571,7 +2268,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Pulls the placement the backend persists so a drag shows up in the settings sheet (#204). */
-  private syncPanelPlacement(): void {
+  public syncPanelPlacement(): void {
     const invoke = window.__TAURI_INTERNALS__?.invoke;
     if (!invoke) return;
     const requested = this.panelAnchor;
