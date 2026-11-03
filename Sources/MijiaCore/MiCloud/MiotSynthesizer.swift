@@ -530,6 +530,7 @@ public enum MiotSynthesizer {
         let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
 
         var statusText: String?
+        var observations: [SensorObservation] = []
         if temp == nil && hum == nil {
             switch s.shortName {
             case "lock":
@@ -538,8 +539,13 @@ public enum MiotSynthesizer {
                 let motion = r.ref("motion-state", in: s) ?? r.ref("occupancy-status", in: s)
                 let lux = r.first("illumination", in: [s] + r.spec.services(named: "illumination-sensor"))
                 var parts: [String] = []
-                if let m = motion?.value?.miotBool {
-                    parts.append(m ? L10n.tr("有人移动", "Motion") : L10n.tr("无人移动", "Clear"))
+                if let moving = motion?.value?.miotBool {
+                    parts.append(moving ? L10n.tr("有人移动", "Motion") : L10n.tr("无人移动", "Clear"))
+                    observations.append(SensorObservation(
+                        sourceId: "\(r.did)#miot:\(s.iid)",
+                        kind: .motion,
+                        alarming: moving
+                    ))
                 } else {
                     parts.append(L10n.tr("移动监测", "Motion Sensor"))
                 }
@@ -549,8 +555,14 @@ public enum MiotSynthesizer {
                 statusText = parts.joined(separator: " · ")
             case "magnet-sensor":
                 let contact = r.ref("contact-state", in: s)
-                if let open = contact?.value?.miotBool {
-                    statusText = open ? L10n.tr("已闭合", "Closed") : L10n.tr("已打开", "Open")
+                if let closed = contact?.value?.miotBool {
+                    statusText = closed ? L10n.tr("已闭合", "Closed") : L10n.tr("已打开", "Open")
+                    // MIoT contact-state true means the magnet is closed.
+                    observations.append(SensorObservation(
+                        sourceId: "\(r.did)#miot:\(s.iid)",
+                        kind: .contact,
+                        alarming: !closed
+                    ))
                 } else {
                     statusText = L10n.tr("门窗监测", "Contact Sensor")
                 }
@@ -558,6 +570,11 @@ public enum MiotSynthesizer {
                 let sub = r.ref("submersion-state", in: s)
                 if let wet = sub?.value?.miotBool {
                     statusText = wet ? L10n.tr("浸水告警", "Leak Detected") : L10n.tr("正常", "Dry")
+                    observations.append(SensorObservation(
+                        sourceId: "\(r.did)#miot:\(s.iid)",
+                        kind: .leak,
+                        alarming: wet
+                    ))
                 } else {
                     statusText = L10n.tr("水浸监测", "Leak Sensor")
                 }
@@ -577,7 +594,8 @@ public enum MiotSynthesizer {
             temperature: temp?.value?.doubleValue,
             humidity: hum?.value?.doubleValue,
             battery: battery?.value?.intValue,
-            statusText: statusText
+            statusText: statusText,
+            observations: observations
         ))
     }
 
