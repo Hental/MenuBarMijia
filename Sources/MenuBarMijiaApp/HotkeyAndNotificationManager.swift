@@ -400,7 +400,12 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
             return true
         case kVK_Tab:
             let delta = event.modifierFlags.contains(.shift) ? -1 : 1
-            store.cycleRoom(delta: delta)
+            // #146: follow the same order the room strip shows, not the provider order.
+            let order = RoomPrefs.displayIds(
+                order: RoomPrefs.storedOrder(),
+                rooms: store.rooms
+            )
+            store.cycleRoom(delta: delta, order: order)
             return true
         case kVK_Escape:
             if store.isShowingAssistantBar {

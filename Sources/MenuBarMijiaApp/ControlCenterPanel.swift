@@ -28,6 +28,18 @@ public struct ControlCenterPanel: View {
     @AppStorage(GroupPrefs.collapsedKey) private var collapsedRaw: String = "[]"
     @State private var liveGroupMap: [String: String]?
     @AppStorage(GroupPrefs.aliasesKey) private var aliasesRaw: String = "{}"
+    // #146: room aliases and order, separate from device prefs so a room rename never touches devices.
+    @AppStorage(RoomPrefs.aliasesKey) private var roomAliasesRaw: String = "{}"
+    @AppStorage(RoomPrefs.orderKey) private var roomOrderRaw: String = "[]"
+    @State private var isEditingRooms = false
+    @State private var draggingRoomId: String?
+    @State private var roomDragLocation: CGPoint?
+    @State private var roomGrabOffset: CGFloat = 0
+    @State private var roomFrames: [String: CGRect] = [:]
+    @State private var lastRoomSwapAt: Date = .distantPast
+    @State private var lastRoomSwapTarget: String?
+    @State private var roomPressTask: Task<Void, Never>?
+    @State private var roomPressCancelled = false
     @State private var layoutUI = LayoutUIState.shared
     /// #60: type-to-search. The query lives outside `@State` because the app-wide key monitor
     /// (`PanelSearchKeyboard`) has to read and write it before AppKit dispatches the event.
@@ -112,13 +124,21 @@ public struct ControlCenterPanel: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.newGroupForDevice)
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingGroupId)
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingDeviceId)
+        .animation(.spring(response: 0.4, dampingFraction: 0.82), value: layoutUI.renamingRoomId)
         // #41: the context menu's "Edit Layout" replaces the 0.6 s long-press for keyboard/VoiceOver users.
         .onChange(of: layoutUI.isEditingLayoutRequested) { _, requested in
             guard requested else { return }
             layoutUI.isEditingLayoutRequested = false
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 store.expandedDeviceId = nil
+                isEditingRooms = false
                 isEditingLayout = true
+            }
+        }
+        // Room preferences survive a room disappearing; only the open prompt cannot.
+        .onChange(of: store.rooms.map(\.id)) { _, ids in
+            if let rid = layoutUI.renamingRoomId, !ids.contains(rid) {
+                layoutUI.renamingRoomId = nil
             }
         }
         .frame(width: Self.panelWidth, height: panelHeight)
@@ -163,7 +183,14 @@ public struct ControlCenterPanel: View {
         }
         // Leaving search puts the caret back on the panel, so Esc closes it instead of resigning the field.
         .onChange(of: search.isSearching) { _, searching in
-            if !searching { isSearchFieldFocused = false }
+            if searching {
+                // The query bar replaces the room strip; reordering underneath it would be invisible.
+                isEditingRooms = false
+                draggingRoomId = nil
+                roomDragLocation = nil
+            } else {
+                isSearchFieldFocused = false
+            }
         }
         // Mi cloud polls every 6 s only while the panel is on screen (#26).
         .onChange(of: isPresented) { _, visible in store.setPanelVisible(visible) }
@@ -519,8 +546,150 @@ public struct ControlCenterPanel: View {
             onCycleSize: { cycleSize(device) },
             onBeginResize: { beginResizeIfNeeded(device.id) },
             onResizeDrag: { translation in updateResize(device.id, translation: translation) },
-            onEndResize: { translation, samples in endResize(device.id, translation: translation, samples: samples) }
+            onEndResize: { translation, samples in endResize(device.id, translation: translation, samples: samples) },
+            onRename: { layoutUI.renamingDeviceId = device.id }
         )
+    }
+
+    // MARK: - Room Strip Editing (#146)
+
+    private enum RoomSpace {
+        static let name = "room_pills"
+    }
+
+    private var roomAliases: [String: String] { RoomPrefs.decodeAliases(roomAliasesRaw) }
+
+    /// Rooms with the saved order applied; saved ids for rooms that vanished are ignored.
+    private var displayRooms: [RoomArea] {
+        RoomPrefs.apply(order: RoomPrefs.decodeOrder(roomOrderRaw), to: store.rooms)
+    }
+
+    private func roomDisplayTitle(_ room: RoomArea) -> String {
+        RoomPrefs.alias(for: room.id, in: roomAliases) ?? L10n.displayRoomName(room.name)
+    }
+
+    /// The All-Off button names the selected room; a saved alias wins over the snapshot name.
+    private var allOffScopeDisplayName: String? {
+        guard case .room(let id) = store.listCut,
+              let room = store.rooms.first(where: { $0.id == id }) else {
+            return store.allOffScopeName
+        }
+        return roomDisplayTitle(room)
+    }
+
+    /// Saved order seeded with every visible room, so a move never drops an id whose room is
+    /// temporarily missing from the snapshot.
+    private var currentRoomOrder: [String] {
+        RoomPrefs.seededOrder(RoomPrefs.decodeOrder(roomOrderRaw), rooms: store.rooms)
+    }
+
+    private func roomId(at point: CGPoint) -> String? {
+        roomFrames.first { $0.value.contains(point) }?.key
+    }
+
+    private func roomPhase(_ id: String) -> Double {
+        Double(abs(id.hashValue % 97)) / 97 * .pi * 2
+    }
+
+    /// Long press enters room edit mode; while editing, a drag reorders rooms. Mirrors the tile
+    /// container gesture so both strips behave the same way.
+    private var roomStripGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(RoomSpace.name))
+            .onChanged { value in
+                guard !search.isSearching else { return }
+                let moved = hypot(value.translation.width, value.translation.height)
+                if isEditingRooms {
+                    if draggingRoomId == nil, moved > 3, let id = roomId(at: value.startLocation) {
+                        beginRoomDrag(id, at: value.startLocation)
+                    }
+                    if let id = draggingRoomId {
+                        roomDragLocation = value.location
+                        swapRoomIfNeeded(dragged: id, at: value.location)
+                    }
+                    return
+                }
+                if roomPressTask == nil, !roomPressCancelled, moved <= 8, let id = roomId(at: value.startLocation) {
+                    let start = value.startLocation
+                    roomPressTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard !Task.isCancelled else { return }
+                        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            isEditingLayout = false
+                            draggingId = nil
+                            activeResize = nil
+                            store.expandedDeviceId = nil
+                            isEditingRooms = true
+                        }
+                        beginRoomDrag(id, at: start)
+                    }
+                } else if moved > 8 {
+                    roomPressTask?.cancel()
+                    roomPressCancelled = true
+                }
+            }
+            .onEnded { _ in
+                roomPressTask?.cancel()
+                roomPressTask = nil
+                roomPressCancelled = false
+                lastRoomSwapTarget = nil
+                guard draggingRoomId != nil else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                    draggingRoomId = nil
+                    roomDragLocation = nil
+                }
+            }
+    }
+
+    private func beginRoomDrag(_ id: String, at start: CGPoint) {
+        let origin = roomFrames[id]?.minX ?? start.x
+        roomGrabOffset = start.x - origin
+        roomDragLocation = start
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { draggingRoomId = id }
+    }
+
+    /// Horizontal offset that keeps the picked-up pill under the pointer after a reorder.
+    private func roomDragOffset(for id: String) -> CGFloat {
+        guard draggingRoomId == id, let location = roomDragLocation, let frame = roomFrames[id] else { return 0 }
+        return location.x - roomGrabOffset - frame.minX
+    }
+
+    private func swapRoomIfNeeded(dragged: String, at location: CGPoint) {
+        guard Date().timeIntervalSince(lastRoomSwapAt) > 0.2 else { return }
+        guard let target = roomFrames.first(where: { $0.key != dragged && $0.value.contains(location) })?.key else { return }
+        let after = location.x > (roomFrames[target]?.midX ?? location.x)
+        let slot = "\(target)|\(after)"
+        guard slot != lastRoomSwapTarget else { return }
+        let order = RoomPrefs.move(currentRoomOrder, id: dragged, relativeTo: target, after: after)
+        guard order != currentRoomOrder else { return }
+        lastRoomSwapTarget = slot
+        lastRoomSwapAt = Date()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            roomOrderRaw = RoomPrefs.encodeOrder(order)
+        }
+    }
+
+    /// "Move Left" / "Move Right" for a room pill's context menu.
+    private func moveRoom(_ id: String, by delta: Int) {
+        let order = RoomPrefs.shift(
+            currentRoomOrder,
+            id: id,
+            by: delta,
+            visible: Set(store.rooms.map(\.id))
+        )
+        guard order != currentRoomOrder else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            roomOrderRaw = RoomPrefs.encodeOrder(order)
+        }
+    }
+
+    private func resetRoomPrefs() {
+        let cleared = RoomPrefs.reset()
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            roomAliasesRaw = cleared.aliases
+            roomOrderRaw = cleared.order
+            layoutUI.renamingRoomId = nil
+        }
     }
 
     // MARK: - Page Sections (favorites, custom groups, ungrouped)
@@ -743,6 +912,34 @@ public struct ControlCenterPanel: View {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { layoutUI.renamingDeviceId = nil }
                 }
             }
+        } else if let rid = layoutUI.renamingRoomId, let room = store.rooms.first(where: { $0.id == rid }) {
+            let currentAliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+            let originalName = room.name
+            promptBackdrop {
+                GroupNamePrompt(
+                    title: L10n.tr("重命名房间", "Rename Room"),
+                    name: RoomPrefs.alias(for: rid, in: currentAliases) ?? L10n.displayRoomName(originalName),
+                    placeholder: L10n.displayRoomName(originalName),
+                    onReset: currentAliases[rid] != nil ? {
+                        var aliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+                        aliases.removeValue(forKey: rid)
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                            roomAliasesRaw = RoomPrefs.encodeAliases(aliases)
+                            layoutUI.renamingRoomId = nil
+                        }
+                    } : nil
+                ) { name in
+                    var aliases = RoomPrefs.decodeAliases(roomAliasesRaw)
+                    // Saving the original room name clears the alias.
+                    aliases[rid] = name == L10n.displayRoomName(originalName) ? nil : name
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                        roomAliasesRaw = RoomPrefs.encodeAliases(aliases)
+                        layoutUI.renamingRoomId = nil
+                    }
+                } onCancel: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { layoutUI.renamingRoomId = nil }
+                }
+            }
         } else if let gid = layoutUI.renamingGroupId, let group = groups.first(where: { $0.id == gid }) {
             promptBackdrop {
                 GroupNamePrompt(title: L10n.tr("重命名分组", "Rename Group"), name: group.name) { name in
@@ -774,6 +971,7 @@ public struct ControlCenterPanel: View {
                             layoutUI.newGroupForDevice = nil
                             layoutUI.renamingGroupId = nil
                             layoutUI.renamingDeviceId = nil
+                            layoutUI.renamingRoomId = nil
                         }
                     }
                 }
@@ -812,6 +1010,7 @@ public struct ControlCenterPanel: View {
                             NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                 store.expandedDeviceId = nil
+                                isEditingRooms = false
                                 isEditingLayout = true
                             }
                             beginDrag(id, at: start)
@@ -1002,8 +1201,11 @@ public struct ControlCenterPanel: View {
         Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 isEditingLayout = false
+                isEditingRooms = false
                 draggingId = nil
                 activeResize = nil
+                draggingRoomId = nil
+                roomDragLocation = nil
             }
         } label: {
             Text(L10n.tr("完成", "Done")).font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
@@ -1204,14 +1406,14 @@ public struct ControlCenterPanel: View {
                 .accessibilityHint(Text(L10n.tr("用一句话控制设备", "Control devices with natural language")))
                 .panelHelp(L10n.tr("AI 指令：用一句话控制设备（快捷键 /）", "AI command: control devices with natural language (shortcut /)"))
 
-                if isEditingLayout {
+                if isEditingLayout || isEditingRooms {
                     doneEditingButton
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
                 } else if !store.allOffTargets.isEmpty {
                     // The label says what will be switched off (#23); a hold confirms.
                     let count = store.allOffTargets.count
                     HoldToConfirmButton(
-                        title: store.allOffScopeName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
+                        title: allOffScopeDisplayName.map { L10n.tr("全关 \($0)", "All Off \($0)") } ?? L10n.tr("全关", "All Off"),
                         count: count,
                         onConfirm: {
                             withAnimation(AppleMotion.snappySpring) { store.turnAllOff() }
@@ -1394,6 +1596,9 @@ public struct ControlCenterPanel: View {
     }
 
     private var statusSummaryText: String {
+        if isEditingRooms {
+            return L10n.tr("拖动房间排序，点铅笔图标改名", "Drag rooms to reorder, tap the pencil to rename")
+        }
         if isEditingLayout {
             return L10n.tr("拖动卡片排序，点右下角圆弧手柄改大小", "Drag to reorder, drag or tap the corner handle to resize")
         }
@@ -1475,11 +1680,49 @@ public struct ControlCenterPanel: View {
     private var roomPillsRow: some View {
         HStack(spacing: 5) {
             roomPill(title: L10n.tr("全部", "All"), roomId: nil)
-            ForEach(store.rooms) { room in
-                roomPill(title: L10n.displayRoomName(room.name), roomId: room.id)
-                    .id(room.id)
+            ForEach(displayRooms) { room in
+                roomPillRowItem(room)
+            }
+            if isEditingRooms {
+                Button {
+                    resetRoomPrefs()
+                } label: {
+                    Label(L10n.tr("重置", "Reset"), systemImage: "arrow.counterclockwise")
+                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        .lineLimit(1)
+                }
+                .buttonStyle(PillActionButtonStyle())
+                .accessibilityHint(Text(L10n.tr("清除房间名称和顺序", "Clears room names and order")))
+                .panelHelp(L10n.tr("恢复房间原名与默认顺序", "Restore original room names and order"))
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
             }
         }
+        .animation(AppleMotion.snappySpring, value: displayRooms.map(\.id))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isEditingRooms)
+    }
+
+    private func roomPillRowItem(_ room: RoomArea) -> some View {
+        roomPill(title: roomDisplayTitle(room), roomId: room.id)
+            .id(room.id)
+            .offset(x: roomDragOffset(for: room.id))
+            // Measured outside the drag offset and the jiggle, like device cards: those transforms
+            // would otherwise feed back into `roomDragOffset` (the reported frame would already
+            // include the offset) and the pill would jump.
+            .background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named(RoomSpace.name))
+                    Color.clear.preference(
+                        key: RoomFramesKey.self,
+                        value: [room.id: CGRect(
+                            x: frame.minX.rounded(),
+                            y: frame.minY.rounded(),
+                            width: frame.width.rounded(),
+                            height: frame.height.rounded()
+                        )]
+                    )
+                }
+            }
+            .zIndex(draggingRoomId == room.id ? 2 : 0)
     }
 
     private func scrollRoomStrip(using proxy: ScrollViewProxy, roomId: String?, animated: Bool) {
@@ -1608,6 +1851,11 @@ public struct ControlCenterPanel: View {
                         roomPillsRow
                             .padding(.vertical, 3)
                             .padding(.horizontal, 4)
+                            .coordinateSpace(name: RoomSpace.name)
+                            .simultaneousGesture(roomStripGesture)
+                            .onPreferenceChange(RoomFramesKey.self) { frames in
+                                if frames != roomFrames { roomFrames = frames }
+                            }
                     }
                     .horizontalWheelScroll()
                 }
@@ -1735,28 +1983,86 @@ public struct ControlCenterPanel: View {
         let isSelected = roomId == nil
             ? store.listCut == .all
             : store.selectedRoomId == roomId
+        let isEditable = isEditingRooms && roomId != nil
         // The selected pill is a lit tile of its own, so its label takes the tile's ink: a dark
         // capsule in dark mode would otherwise keep the light-mode platter ink.
         let surface = TileSurface(isActive: true, scheme: effectiveScheme)
-        return Button {
-            selectRoom(roomId, animation: AppleMotion.snappySpring)
-        } label: {
+        let content = HStack(spacing: 4) {
             Text(title)
                 .font(.system(size: DesignTokens.TypeSize.caption, weight: isSelected ? .semibold : .medium))
                 .foregroundStyle(isSelected ? surface.ink : Color.secondary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background {
-                    if isSelected {
-                        Capsule(style: .continuous)
-                            .fill(surface.fill)
-                            .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
-                    }
+            if isEditable, let roomId {
+                // #146: an explicit pencil so the edit-mode pill never doubles as "rename" on a
+                // long-press release.
+                Button {
+                    layoutUI.renamingRoomId = roomId
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: DesignTokens.TypeSize.micro, weight: .semibold))
+                        .foregroundStyle(isSelected ? surface.ink : Color.secondary)
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
                 }
-                .contentShape(Capsule(style: .continuous))
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(L10n.tr("重命名房间", "Rename Room")))
+                .panelHelp(L10n.tr("重命名这个房间", "Rename this room"))
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 5)
+        .background {
+            if isSelected {
+                Capsule(style: .continuous)
+                    .fill(surface.fill)
+                    .shadow(color: .black.opacity(effectiveScheme == .dark ? 0.28 : 0.10), radius: 2, y: 1)
+            }
+        }
+        .contentShape(Capsule(style: .continuous))
+
+        Group {
+            if roomId == nil || !isEditingRooms {
+                Button {
+                    selectRoom(roomId, animation: AppleMotion.snappySpring)
+                } label: {
+                    content
+                }
+                .buttonStyle(.plain)
+            } else {
+                content
+            }
+        }
         .animation(AppleMotion.snappySpring, value: isSelected)
+        .contextMenu {
+            if let roomId {
+                Button {
+                    layoutUI.renamingRoomId = roomId
+                } label: {
+                    Label(L10n.tr("重命名房间…", "Rename Room…"), systemImage: "pencil")
+                }
+                Button {
+                    moveRoom(roomId, by: -1)
+                } label: {
+                    Label(L10n.tr("左移", "Move Left"), systemImage: "arrow.left")
+                }
+                .disabled(displayRooms.first?.id == roomId)
+                Button {
+                    moveRoom(roomId, by: 1)
+                } label: {
+                    Label(L10n.tr("右移", "Move Right"), systemImage: "arrow.right")
+                }
+                .disabled(displayRooms.last?.id == roomId)
+                Divider()
+                Button {
+                    resetRoomPrefs()
+                } label: {
+                    Label(L10n.tr("重置房间名称与顺序", "Reset Room Names & Order"), systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
+        .accessibilityHint(Text(isEditable
+            ? L10n.tr("点按铅笔改名，拖动调整顺序", "Tap the pencil to rename, drag to reorder")
+            : L10n.tr("切换到该房间", "Show this room")))
+        .modifier(RoomPillJiggle(active: isEditable && draggingRoomId != roomId, phase: roomPhase(roomId ?? "")))
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
@@ -2362,6 +2668,25 @@ enum PanelSearchKeyboard {
         store.presentAssistantBar()
         Task { @MainActor in
             await store.runAssistantCommand(utterance)
+        }
+    }
+}
+
+/// iOS-style jiggle for room pills in edit mode (#146), phase-shifted per room so neighbours do
+/// not swing in sync. Reduce Motion keeps the strip still.
+private struct RoomPillJiggle: ViewModifier {
+    @Environment(\.effectiveReduceMotion) private var reduceMotion
+    let active: Bool
+    let phase: Double
+
+    func body(content: Content) -> some View {
+        if active, !reduceMotion {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                content.rotationEffect(.degrees(sin(t * 2 * .pi * 3.2 + phase) * 0.9))
+            }
+        } else {
+            content
         }
     }
 }

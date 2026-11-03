@@ -170,6 +170,22 @@ struct DeviceListCutTests {
         #expect(store.listCut == .room("ke_ting"))
     }
 
+    @Test("Tab follows the display order, skips unknown room ids, and wraps")
+    func cycleRoomFollowsDisplayOrder() async throws {
+        let (store, suite) = try await makeStore()
+        defer { store.userDefaults.removePersistentDomain(forName: suite) }
+
+        let order = ["shu_fang", "ke_ting", "gone"]
+        store.cycleRoom(delta: 1, order: order)
+        #expect(store.selectedRoomId == "shu_fang")
+        store.cycleRoom(delta: 1, order: order)
+        #expect(store.selectedRoomId == "ke_ting")
+        store.cycleRoom(delta: 1, order: order)
+        #expect(store.selectedRoomId == nil)
+        store.cycleRoom(delta: -1, order: order)
+        #expect(store.selectedRoomId == "ke_ting")
+    }
+
     @Test("Switching home clears a kind cut")
     func selectMiHomeClearsTheKind() async throws {
         let (store, suite) = try await makeStore()
