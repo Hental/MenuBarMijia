@@ -631,6 +631,15 @@ extension HomeStore {
         case automation
 
         var recordsHabits: Bool { self == .userInitiated }
+
+        /// A direct or AI-assisted command is still a person acting now; scheduled and automation
+        /// rules are what the lock-screen preference deliberately lets through (#143).
+        var blocksWhileScreenLocked: Bool {
+            switch self {
+            case .userInitiated, .aiAutomatic: return true
+            case .scheduled, .automation: return false
+            }
+        }
     }
 
     func executeIntentPlan(
@@ -642,6 +651,11 @@ extension HomeStore {
         usedHabitContext: Bool = false,
         habitSummary: String? = nil
     ) async -> IntentPlan {
+        if origin.blocksWhileScreenLocked, isControlBlockedByScreenLock {
+            showToast(screenLockBlockedMessage, isError: true)
+            setAssistantState(.failed(screenLockBlockedMessage))
+            return plan
+        }
         let context = controlContextID
         let previousSnapshot = devices
         var groupOrder: [String] = []

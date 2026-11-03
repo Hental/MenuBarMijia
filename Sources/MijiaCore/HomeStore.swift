@@ -151,6 +151,24 @@ public final class HomeStore {
         didSet { userDefaults.set(enableSafetyAlerts, forKey: "enable_safety_alerts") }
     }
 
+    /// Refuse user-initiated device control while the Mac screen is locked (#143). Defaults on:
+    /// the only paths that can still fire while locked are external ones (URL links, App Intents,
+    /// assistant commands), and automation/scheduled rules stay exempt. Settings can turn it off.
+    public var blockControlWhileLocked: Bool {
+        didSet { userDefaults.set(blockControlWhileLocked, forKey: "block_control_while_locked") }
+    }
+
+    /// Set by `SystemActivityMonitor` from the distributed screen-lock notifications, not persisted.
+    public internal(set) var isScreenLocked = false
+
+    /// Presents the second confirmation for a manual high-risk action. The app installs an AppKit
+    /// alert; tests inject a closure so no window is needed.
+    @ObservationIgnored public var manualControlConfirmationHandler: ((ManualControlConfirmation) -> Bool)?
+
+    /// Test seam for revocation failures: when set, deleting credentials targets this vault even for
+    /// a custom defaults suite. Production leaves it nil and uses the Keychain/suite store.
+    @ObservationIgnored var credentialVault: CredentialVault?
+
     public var sensorAlertsOnlyWhenAway: Bool {
         didSet { userDefaults.set(sensorAlertsOnlyWhenAway, forKey: Self.sensorAlertsOnlyWhenAwayKey) }
     }
@@ -532,6 +550,7 @@ public final class HomeStore {
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
+        self.blockControlWhileLocked = boolOrDefaultTrue("block_control_while_locked")
         self.sensorAlertsOnlyWhenAway = ud.bool(forKey: Self.sensorAlertsOnlyWhenAwayKey)
         self.sensorAlertPreferences = SensorAlertKind.allCases.reduce(into: [SensorAlertKind: Bool]()) { preferences, kind in
             if ud.object(forKey: kind.defaultsKey) != nil {

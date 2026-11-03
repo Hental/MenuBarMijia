@@ -413,14 +413,19 @@ public enum MiSessionStore {
         return accounts[index].session
     }
 
+    /// `vault` is the revocation test seam: when supplied, the delete is attempted against that
+    /// vault even for a custom defaults suite. Production passes nil and keeps the suite behaviour.
     @discardableResult
     public static func clear(
         defaults: UserDefaults = .standard,
-        vault: CredentialVault = .shared
+        vault: CredentialVault? = nil
     ) -> Bool {
         defaults.removeObject(forKey: fallbackDefaultsKey)
+        if let vault {
+            return KeychainHelper.writeKeychainData(nil, account: keychainAccount, vault: vault)
+        }
         guard defaults === UserDefaults.standard else { return true }
-        return KeychainHelper.writeKeychainData(nil, account: keychainAccount, vault: vault)
+        return KeychainHelper.writeKeychainData(nil, account: keychainAccount, vault: .shared)
     }
 
     /// Re-encodes a ≤1.0.6 `UserDefaults` session for the Keychain as a v2 envelope, dropping the

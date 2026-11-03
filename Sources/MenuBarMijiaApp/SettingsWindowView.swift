@@ -809,6 +809,7 @@ private struct AppearanceSettingsTab: View {
 private struct PrivacySettingsTab: View {
     let store: HomeStore
     @State private var didCopy = false
+    @State private var confirmsRevoke = false
 
     private var scanner: UnsupportedDeviceScanner { .shared }
     private var errorLog: AppDiagnosticsLog { .shared }
@@ -930,8 +931,57 @@ private struct PrivacySettingsTab: View {
                     privacyBullet(L10n.tr("演示模式完全离线，不发起任何网络请求。", "Demo mode is fully offline and sends no requests."))
                     privacyBullet(L10n.tr("最近错误只记录次数与时间，不保存错误原文。", "Recent errors are counted by time only; the raw text is not stored."))
                 }
+
+                SettingsSection(title: L10n.tr("安全", "Security")) {
+                    SettingsToggleRow(
+                        title: L10n.tr("锁屏时禁止控制设备", "Block device control while locked"),
+                        isOn: Binding(
+                            get: { store.blockControlWhileLocked },
+                            set: { store.blockControlWhileLocked = $0 }
+                        )
+                    )
+                    Text(L10n.tr(
+                        "开启后，Mac 锁屏期间会拒绝卡片、详情、URL 链接、快捷指令与助手发起的控制；定时任务与自动化规则不受影响。默认开启。",
+                        "When on, card/detail controls, URL links, shortcuts and assistant commands are refused while the Mac is locked. Scheduled commands and automation rules still run. On by default."
+                    ))
+                    .font(.system(size: DesignTokens.TypeSize.caption))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    Divider().overlay(Color.primary.opacity(0.06))
+
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.tr("退出并吊销令牌", "Sign Out & Revoke Tokens"))
+                                .font(.system(size: DesignTokens.TypeSize.body, weight: .medium))
+                            Text(L10n.tr(
+                                "退出全部米家账号、删除 Home Assistant 令牌并断开连接，同时清除已保存的 AI 密钥与云端授权。设备、房间与本地历史保留。",
+                                "Signs out every Xiaomi Home account, deletes the Home Assistant token and disconnects, and clears saved AI keys and cloud consent. Devices, rooms and local history stay."
+                            ))
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        Button(L10n.tr("退出并吊销", "Sign Out & Revoke")) {
+                            confirmsRevoke = true
+                        }
+                        .buttonStyle(PillActionButtonStyle())
+                    }
+                }
             }
             .padding(14)
+        }
+        .alert(L10n.tr("退出并吊销所有令牌？", "Sign out and revoke all tokens?"), isPresented: $confirmsRevoke) {
+            Button(L10n.tr("取消", "Cancel"), role: .cancel) {}
+            Button(L10n.tr("退出并吊销", "Sign Out & Revoke"), role: .destructive) {
+                store.signOutAndRevokeAll()
+            }
+        } message: {
+            Text(L10n.tr(
+                "米家会话、Home Assistant 令牌和 AI 密钥会从本机删除。需要时可以重新扫码或粘贴令牌登录。",
+                "Xiaomi sessions, the Home Assistant token and AI keys are deleted from this Mac. You can scan or paste a token to sign in again."
+            ))
         }
     }
 

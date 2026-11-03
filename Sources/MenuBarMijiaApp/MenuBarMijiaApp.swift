@@ -12,6 +12,7 @@ struct MenuBarMijiaApp: App {
         // Creating the store reads the Keychain; explain the post-upgrade prompt before macOS shows it (#16).
         KeychainUpgradeNotice.presentIfNeeded()
         let sharedStore = HomeStore.shared
+        sharedStore.manualControlConfirmationHandler = ManualControlConfirmationPresenter.present
         KeychainUpgradeNotice.recordIfLoaded()
         // The menu-bar item, its label, tooltip, long press and panel all live in the AppKit
         // controller now (#56), so there is no `MenuBarExtra` scene left to host.
@@ -27,6 +28,24 @@ struct MenuBarMijiaApp: App {
         Settings {
             SettingsWindowView(store: HomeStore.shared)
         }
+    }
+}
+
+// MARK: - Manual High-Risk Confirmation (#143)
+
+/// App-modal second confirmation for manual controls on high-risk devices. Cancel is the default
+/// button, so a stray Return cannot approve a heater or plug action.
+@MainActor
+enum ManualControlConfirmationPresenter {
+    static func present(_ prompt: ManualControlConfirmation) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: prompt.cancelTitle)
+        alert.addButton(withTitle: prompt.confirmTitle)
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 
