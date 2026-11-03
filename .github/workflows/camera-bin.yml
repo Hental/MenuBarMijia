@@ -1,0 +1,43 @@
+name: Camera binaries
+
+# Builds the two Windows camera helpers that are embedded in the installer.
+# Called by ci.yml (PR gate) and release.yml (tag release) so the same pinned
+# go2rtc release and minimal LGPL ffmpeg build reach both artifacts.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  camera-bin:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            make
+            nasm
+            python
+            curl
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: windows/src-tauri/camera-bin
+          key: camera-bin-${{ hashFiles('windows/scripts/build-ffmpeg-min.sh', 'windows/scripts/prepare-camera-bin.sh', 'windows/scripts/patch_pe_subsystem.py') }}
+      - name: Build go2rtc and minimal ffmpeg
+        run: bash scripts/prepare-camera-bin.sh src-tauri/camera-bin
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: camera-bin
+          path: windows/src-tauri/camera-bin/*
+          if-no-files-found: error

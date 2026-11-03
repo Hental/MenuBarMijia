@@ -17,9 +17,10 @@ on:
         required: true
         type: string
 
-# 只有写草稿的 stage-draft 需要写权限，构建 job 一律只读。
+# 只有写草稿的 stage-draft 需要写仓库权限；actions: write 仅用于上传 camera-bin 构建产物。
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -74,6 +75,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "❌ ${tag} 已存在已发布的 release；拒绝覆盖。" >&2
           exit 1
+
+  camera-bin:
+    # 与 CI 共用同一份 go2rtc / 最小 ffmpeg 构建，安装包内置 (#200)。
+    uses: ./.github/workflows/camera-bin.yml
 
   macos-release:
     # 签名依赖 macOS 工具链。本工作流只做固定证书代码签名（并写入证书 SHA-1 pin）；
@@ -260,7 +265,7 @@ jobs:
     # 中明确标注“未签名”，并保留 #32 的 SmartScreen 验收项为未完成。
     # 校验要求 Get-AuthenticodeSignature = Valid，因此证书必须由公开信任的 CA 签发（OV/EV 或
     # SignPath/Azure Trusted Signing）；自签名/内部 CA 会被判为 UnknownError，必须换正式证书。
-    needs: verify-tag
+    needs: [verify-tag, camera-bin]
     runs-on: windows-latest
     timeout-minutes: 60
     # 只给 Windows 构建 job 加来源证明所需权限（#170）。
@@ -295,6 +300,11 @@ jobs:
 
       - name: Install frontend & Tauri CLI dependencies
         run: npm ci
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: camera-bin
+          path: windows/src-tauri/camera-bin
 
       - name: Import Authenticode certificate
         id: authenticode

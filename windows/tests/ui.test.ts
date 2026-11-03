@@ -1675,6 +1675,58 @@ describe("Smart camera support and live view (#97)", () => {
     assert.match(tile("camera.living_cam"), /侦测开/);
   });
 
+  it("persists the Xiaomi stream quality chosen inside the live window", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedDevicesVersion: 1,
+      cachedXiaomiDevices: [
+        {
+          id: "camera.living_cam",
+          name: "客厅摄像机",
+          roomId: "room_living",
+          roomName: "客厅",
+          model: "chuangmi.camera.81ac1",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:camera.living_cam:2",
+            isOn: true,
+            nightShot: "Auto",
+            availableNightShots: ["Off", "On", "Auto"],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: true,
+          },
+        },
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-body-device="camera.living_cam"]');
+
+    const values = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-cameraquality]"),
+      (pill) => pill.dataset.cameraqualityValue,
+    );
+    assert.deepEqual(values, ["auto", "sd", "hd", "max"]);
+    assert.equal(
+      document.querySelector('[data-cameraquality-value="hd"]')?.getAttribute("aria-pressed"),
+      "true",
+      "hd is the default quality",
+    );
+
+    await click('[data-cameraquality-value="max"]');
+    assert.equal(
+      document.querySelector('[data-cameraquality-value="max"]')?.getAttribute("aria-pressed"),
+      "true",
+    );
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      cameraStreamQualities?: Record<string, string>;
+    };
+    assert.deepEqual(saved.cameraStreamQualities, { "camera.living_cam": "max" });
+  });
+
   it("persists a custom camera URL and keeps its scheme when the host is localhost", async () => {
     localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
       connectionMode: "demo",
@@ -1978,6 +2030,100 @@ describe("Smart camera support and live view (#97)", () => {
     await waitFor(() => actionCalls.some((c) => c.siid === 9 && c.aiid === 1) && !sessionActive);
     assert.ok(document.querySelector(".cc-camera-live-sheet"), "modal remains open showing error state");
     assert.equal(sessionActive, false, "failure cleanup released the started P2P session");
+  });
+
+  it("hides the Xiaomi quality pills when the cloud stream is not the P2P bridge", async () => {
+    const camSpec = {
+      type: "urn:miot-spec-v2:device:camera:0000A01C:chuangmi-81ac1:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:camera-control:0000782F:chuangmi-81ac1:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:chuangmi-81ac1:1", format: "bool", access: ["read", "write"] },
+          ],
+          actions: [],
+        },
+        {
+          iid: 10,
+          type: "urn:miot-spec-v2:service:cloud-stream:00007882:chuangmi-81ac1:1",
+          properties: [],
+          actions: [
+            { iid: 1, type: "urn:miot-spec-v2:action:start-hls-stream:00002838:chuangmi-81ac1:1", in: [], out: [] },
+          ],
+        },
+      ],
+    };
+    const actionCalls: string[] = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
+      if (name === "go2rtc_endpoint") return { origin: "http://127.0.0.1:43123", authorization: "Basic aa" };
+      if (name === "bridge_hls_camera_stream") return "cam_mjpeg_living";
+      if (name !== "native_http") return undefined;
+      const url = String(args["url"] ?? "");
+      if (url.includes("/instance?")) {
+        return { status: 200, headers: {}, body: JSON.stringify(camSpec) };
+      }
+      if (url.includes("/instances?")) {
+        return { status: 200, headers: {}, body: JSON.stringify({ instances: [{ model: "chuangmi.camera.81ac1", type: camSpec.type }] }) };
+      }
+      let result: unknown = {};
+      if (url.includes("device_list")) {
+        result = {
+          list: [{ did: "cam-1", name: "客厅摄像机", model: "chuangmi.camera.81ac1", isOnline: true, spec_type: camSpec.type }],
+          has_more: false,
+        };
+      } else if (url.includes("homeroom/")) {
+        result = { homelist: [{ id: "1", name: "家", dids: [], roomlist: [{ id: "10", name: "客厅", dids: ["cam-1"] }] }] };
+      } else if (url.includes("miotspec/prop/")) {
+        result = [{ did: "cam-1", siid: 2, piid: 1, code: 0, value: true }];
+      } else if (url.includes("miotspec/action")) {
+        actionCalls.push(url);
+        result = { url: "https://example.com/live.m3u8" };
+      }
+      return { status: 200, headers: {}, body: JSON.stringify({ code: 0, result }) };
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    const security = "AQIDBAUGBwgJCgsMDQ4PEA==";
+    localStorage.setItem(
+      "menumijia.windows.settings.v2",
+      JSON.stringify({
+        connectionMode: "xiaomiCloud",
+        hasCompletedOnboarding: true,
+        cachedDevicesVersion: 1,
+        cachedXiaomiDevices: [
+          {
+            id: "cam-1",
+            name: "客厅摄像机",
+            roomId: "room_living",
+            roomName: "客厅",
+            model: "chuangmi.camera.81ac1",
+            isOnline: true,
+            kind: {
+              kind: "camera",
+              entityId: "miot:cam-1:2",
+              isOn: true,
+              nightShot: "Auto",
+              availableNightShots: ["Off", "On", "Auto"],
+              motionDetectionEntityId: null,
+              isMotionDetectionOn: null,
+              streamEntityId: null,
+              powerWritable: true,
+            },
+          },
+        ],
+        miSession: { userId: "100", cUserId: "c100", ssecurity: security, serviceToken: "tok", passToken: "", region: "cn" },
+        cachedModelTypes: { "chuangmi.camera.81ac1": camSpec.type },
+      }),
+    );
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => document.querySelector('[data-body-device="cam-1"]') !== null);
+    await click('[data-body-device="cam-1"]');
+    await waitFor(() => document.querySelector("#cc-camera-stage") !== null);
+    assert.equal(
+      document.querySelectorAll("[data-cameraquality]").length,
+      0,
+      "cloud HLS playback does not consume the P2P quality subtype",
+    );
   });
 });
 
