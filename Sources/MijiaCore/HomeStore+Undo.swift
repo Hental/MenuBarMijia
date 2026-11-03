@@ -56,7 +56,7 @@ extension HomeStore {
         switch action {
         case .lightsOff:
             for idx in devices.indices where devices[idx].isOnline {
-                guard case .light(var s) = devices[idx].kind, s.isOn else { continue }
+                guard case .light(var s) = devices[idx].kind, s.isOn, s.powerWritable else { continue }
                 let deviceId = devices[idx].id
                 affectedDeviceIds.insert(deviceId)
                 habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
@@ -70,11 +70,13 @@ extension HomeStore {
         case .softNightLight:
             var targetIndices = devices.indices.filter { idx in
                 guard devices[idx].isOnline, case .light(let s) = devices[idx].kind else { return false }
-                return s.isOn
+                return s.isOn && s.brightnessWritable && s.colorWritable
             }
             if targetIndices.isEmpty {
                 let isOnlineLight = { (dev: SmartDevice) -> Bool in
-                    if dev.isOnline, case .light = dev.kind { return true }
+                    if dev.isOnline, case .light(let spec) = dev.kind {
+                        return spec.brightnessWritable && spec.colorWritable
+                    }
                     return false
                 }
                 // Prefer the light the user last switched on by hand; otherwise the first light (#36).
@@ -118,7 +120,7 @@ extension HomeStore {
             for idx in devices.indices where devices[idx].isOnline {
                 let deviceId = devices[idx].id
                 switch devices[idx].kind {
-                case .climate(var s) where s.isOn && s.hvacMode != "off":
+                case .climate(var s) where s.isOn && s.hvacMode != "off" && s.powerWritable:
                     let prevMode = s.hvacMode
                     affectedDeviceIds.insert(deviceId)
                     habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
@@ -128,7 +130,7 @@ extension HomeStore {
                     s.isOn = false
                     s.hvacMode = "off"
                     devices[idx].kind = .climate(s)
-                case .fan(var s) where s.isOn:
+                case .fan(var s) where s.isOn && s.powerWritable:
                     affectedDeviceIds.insert(deviceId)
                     habitIntents.append(.init(targetId: deviceId, operation: .power(false)))
                     lockOptimistic(deviceId, duration: .seconds(3.0))
@@ -209,7 +211,7 @@ extension HomeStore {
 
     /// The command that switches `device` off, the one that brings it back, and the optimistic state.
     nonisolated static func allOffChange(for device: SmartDevice) -> (off: DeviceCommand, restore: DeviceCommand, kind: DeviceKind)? {
-        guard device.kind.acceptsControlWrites else { return nil }
+        guard device.kind.canTogglePower else { return nil }
         switch device.kind {
         case .light(var s):
             s.isOn = false

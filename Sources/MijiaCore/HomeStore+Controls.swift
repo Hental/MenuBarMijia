@@ -23,7 +23,7 @@ extension HomeStore {
             showToast(L10n.tr("\(device.name) 当前离线（可能断电）", "\(device.name) is offline (unplugged)"), isError: true)
             return nil
         }
-        guard device.kind.acceptsControlWrites else {
+        guard device.isPrimaryToggleable else {
             if device.hasDetailDrawer { toggleExpanded(device.id) }
             return nil
         }

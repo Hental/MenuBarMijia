@@ -1022,10 +1022,7 @@ export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">
               ],
             },
           ],
-          actions: [
-            { iid: 1, type: "urn:miot-spec-v2:action:start-sweep:00002804:fallback:1" },
-            { iid: 2, type: "urn:miot-spec-v2:action:stop-sweeping:00002805:fallback:1" },
-          ],
+          actions: [],
         },
       ],
     };
@@ -1339,6 +1336,15 @@ export class MiotSpecResolver {
 
 function exposesWrite(access: readonly string[] | undefined): boolean {
   return Boolean(access?.includes("write"));
+}
+
+/** Omit flags that stay at the writable default so verified specs match the golden corpus. */
+function readOnlyFlags(flags: Record<string, boolean>): Record<string, false> {
+  const out: Record<string, false> = {};
+  for (const [key, writable] of Object.entries(flags)) {
+    if (!writable) out[key] = false;
+  }
+  return out;
 }
 
 function miotBool(val: unknown): boolean | null {
@@ -1683,7 +1689,11 @@ export const MiotSynthesizer = {
           isLightGroup || !exposesWrite(mode?.prop.access)
             ? []
             : (mode?.prop.valueList?.map((i) => i.description) ?? []),
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          brightnessWritable: bri ? exposesWrite(bri.prop.access) : true,
+          colorWritable: ct ? exposesWrite(ct.prop.access) : true,
+        }),
       };
     }
 
@@ -1738,7 +1748,10 @@ export const MiotSynthesizer = {
         availableFanModes: exposesWrite(fanLevel?.prop.access)
           ? (fanLevel?.prop.valueList?.map((i) => i.description) ?? [])
           : [],
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          temperatureWritable: target ? exposesWrite(target.prop.access) : true,
+        }),
       };
     }
 
@@ -1778,7 +1791,11 @@ export const MiotSynthesizer = {
           ? (presetRef?.prop.valueList?.map((i) => i.description) ?? [])
           : [],
         isOscillating: miotBool(swing?.val),
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          speedWritable: percentRef ? exposesWrite(percentRef.prop.access) : true,
+          swingWritable: swing ? exposesWrite(swing.prop.access) : true,
+        }),
       };
     }
 
@@ -1875,7 +1892,10 @@ export const MiotSynthesizer = {
         ...(temperature !== null ? { temperature } : {}),
         ...(humidity !== null ? { humidity } : {}),
         ...(filterLifePercent !== null ? { filterLifePercent } : {}),
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({
+          powerWritable: onWritable,
+          speedWritable: speedRef ? exposesWrite(speedRef.prop.access) : true,
+        }),
       };
     }
 
@@ -1928,6 +1948,11 @@ export const MiotSynthesizer = {
         modeEntityId: mode ? makeMiotAddress(did, mode.service.iid) : null,
         currentMode,
         availableModes: mode?.prop.valueList?.map((i) => i.description) ?? [],
+        ...readOnlyFlags({
+          actionsWritable: primaryService.actions.some((action) =>
+            ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"].includes(miotShortName(action.type)),
+          ),
+        }),
       };
     }
 
@@ -2002,7 +2027,7 @@ export const MiotSynthesizer = {
           motion && exposesWrite(motion.prop.access) ? makeMiotAddress(did, motion.service.iid) : null,
         isMotionDetectionOn: miotBool(motion?.val),
         streamEntityId: streamSvc ? makeMiotAddress(did, streamSvc.iid) : null,
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 
@@ -2157,7 +2182,7 @@ export const MiotSynthesizer = {
         isOscillating: null,
         temperature: typeof temperature?.val === "number" ? temperature.val : null,
         humidity: typeof humidity?.val === "number" ? humidity.val : null,
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 
@@ -2193,7 +2218,7 @@ export const MiotSynthesizer = {
         ...(energyKwh !== null ? { energyKwh } : {}),
         childLockEntityId: lock ? makeMiotAddress(did, lock.service.iid) : null,
         isChildLocked: miotBool(lock?.val) ?? false,
-        ...(onWritable ? {} : { controlsWritable: false }),
+        ...readOnlyFlags({ powerWritable: onWritable }),
       };
     }
 

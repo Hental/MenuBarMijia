@@ -220,7 +220,9 @@ public enum MiotSynthesizer {
             maxKelvin: ct?.property.rangeMax.map { Int($0) } ?? 6500,
             currentEffect: isLightGroup ? nil : mode?.valueDescription,
             availableEffects: effects,
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true,
+            brightnessWritable: bri?.property.isWritable ?? true,
+            colorWritable: ct?.property.isWritable ?? true
         ))
     }
 
@@ -258,7 +260,8 @@ public enum MiotSynthesizer {
             step: target?.property.rangeStep ?? 1,
             fanMode: fanLevel?.valueDescription,
             availableFanModes: fanLevel?.property.isWritable == true ? (fanLevel?.property.valueList?.map(\.description) ?? []) : [],
-            controlsWritable: onWritable
+            powerWritable: onWritable,
+            temperatureWritable: target?.property.isWritable ?? true
         ))
     }
 
@@ -277,7 +280,9 @@ public enum MiotSynthesizer {
             presetMode: presetRef?.valueDescription,
             availablePresetModes: presetRef?.property.isWritable == true ? (presetRef?.property.valueList?.map(\.description) ?? []) : [],
             isOscillating: swing?.value?.miotBool,
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true,
+            speedWritable: percentRef?.property.isWritable ?? true,
+            swingWritable: swing?.property.isWritable ?? true
         ))
     }
 
@@ -323,7 +328,8 @@ public enum MiotSynthesizer {
             temperature: temp?.value?.doubleValue,
             humidity: hum?.value?.doubleValue,
             filterLifePercent: filterLife?.value?.intValue,
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true,
+            speedWritable: speedRef?.property.isWritable ?? true
         ))
     }
 
@@ -340,7 +346,7 @@ public enum MiotSynthesizer {
             availablePresetModes: mode?.property.isWritable == true ? mode?.property.valueList?.map(\.description) ?? [] : [],
             temperature: temperature?.value?.doubleValue,
             humidity: humidity?.value?.doubleValue,
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true
         ))
     }
 
@@ -403,7 +409,7 @@ public enum MiotSynthesizer {
             energyKwh: energyKwh,
             childLockEntityId: lock.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
             isChildLocked: lock?.value?.miotBool ?? false,
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true
         ))
     }
 
@@ -412,13 +418,15 @@ public enum MiotSynthesizer {
         let mode = r.ref("mode", in: s)
         let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
 
+        let vacuumStartActions = ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"]
         return .vacuum(VacuumSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             status: vacuumStatus(forDescription: status?.valueDescription),
             battery: battery?.value?.intValue,
             modeEntityId: mode.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
             currentMode: mode?.valueDescription,
-            availableModes: mode?.property.valueList?.map(\.description) ?? []
+            availableModes: mode?.property.valueList?.map(\.description) ?? [],
+            actionsWritable: vacuumStartActions.contains { s.action(named: $0) != nil }
         ))
     }
 
@@ -438,7 +446,7 @@ public enum MiotSynthesizer {
             motionDetectionEntityId: motion?.property.isWritable == true ? motion.map { MiotAddress.make(did: r.did, siid: $0.service.iid) } : nil,
             isMotionDetectionOn: motion?.value?.miotBool,
             streamEntityId: streamService.map { MiotAddress.make(did: r.did, siid: $0.iid) },
-            controlsWritable: on?.property.isWritable == true
+            powerWritable: on?.property.isWritable == true
         ))
     }
 

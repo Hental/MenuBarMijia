@@ -35,7 +35,7 @@ struct ClimatePanelModule: View {
         VStack(alignment: .leading, spacing: 9) {
             strip
             gauge
-            if isExpanded, spec.controlsWritable {
+            if isExpanded, (spec.temperatureWritable || !modes.isEmpty || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty) {
                 VStack(alignment: .leading, spacing: 8) {
                     if !modes.isEmpty { modeChips }
                     if !spec.availableFanModes.isEmpty {
@@ -64,7 +64,7 @@ struct ClimatePanelModule: View {
 
     private var strip: some View {
         HStack(spacing: 8) {
-            if spec.controlsWritable {
+            if spec.powerWritable {
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
@@ -91,7 +91,7 @@ struct ClimatePanelModule: View {
             }
 
             Button {
-                guard !isEditingLayout, spec.controlsWritable else { return }
+                guard !isEditingLayout, (spec.powerWritable || spec.temperatureWritable || !modes.isEmpty) else { return }
                 withAnimation(AppleMotion.snappySpring) { store.toggleExpanded(device.id) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -111,11 +111,11 @@ struct ClimatePanelModule: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .panelHelp(spec.controlsWritable
+            .panelHelp(spec.powerWritable || spec.temperatureWritable
                 ? L10n.tr("展开模式与风速", "Show modes and fan speed")
                 : L10n.tr("只读状态", "Read only"))
 
-            if spec.controlsWritable {
+            if spec.temperatureWritable {
             stepButton(symbol: "minus", delta: -L10n.celsiusStep(spec.step))
             }
 
@@ -131,7 +131,7 @@ struct ClimatePanelModule: View {
             .foregroundStyle(fg)
             .frame(minWidth: 44)
 
-            if spec.controlsWritable {
+            if spec.temperatureWritable {
             stepButton(symbol: "plus", delta: L10n.celsiusStep(spec.step))
             }
         }

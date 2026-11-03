@@ -18,8 +18,10 @@ export interface LightSpec {
   readonly maxKelvin: number;
   currentEffect: string | null;
   readonly availableEffects: readonly string[];
-  /** Absent means writable. False hides power and drawer controls (#154). */
-  readonly controlsWritable?: boolean;
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly brightnessWritable?: boolean;
+  readonly colorWritable?: boolean;
 }
 
 export interface ClimateSpec {
@@ -35,8 +37,9 @@ export interface ClimateSpec {
   readonly step: number;
   fanMode: string | null;
   readonly availableFanModes: readonly string[];
-  /** Absent means writable. False hides power, setpoint, and mode controls (#154). */
-  readonly controlsWritable?: boolean;
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly temperatureWritable?: boolean;
 }
 
 export interface FanSpec {
@@ -52,8 +55,10 @@ export interface FanSpec {
   readonly temperature?: number | null;
   readonly humidity?: number | null;
   readonly filterLifePercent?: number | null;
-  /** Absent means writable. False hides power, speed, and preset controls (#154). */
-  readonly controlsWritable?: boolean;
+  /** Absent means the control is writable. False follows a read-only MIoT property (#154). */
+  readonly powerWritable?: boolean;
+  readonly speedWritable?: boolean;
+  readonly swingWritable?: boolean;
 }
 
 export interface PlugSpec {
@@ -64,8 +69,8 @@ export interface PlugSpec {
   readonly energyKwh?: number | null;
   readonly childLockEntityId: string | null;
   isChildLocked: boolean;
-  /** Absent means writable. False hides the power toggle (#154). */
-  readonly controlsWritable?: boolean;
+  /** Absent means power is writable. Child lock stays its own entity (#154). */
+  readonly powerWritable?: boolean;
 }
 
 export interface FridgeSpec {
@@ -89,6 +94,8 @@ export interface VacuumSpec {
   readonly modeEntityId: string | null;
   currentMode: string | null;
   readonly availableModes: readonly string[];
+  /** Absent means sweep actions exist. False when a fallback spec has no actions (#154). */
+  readonly actionsWritable?: boolean;
 }
 
 export interface CameraSpec {
@@ -102,8 +109,8 @@ export interface CameraSpec {
   readonly streamEntityId: string | null;
   /** HA-only still frame URL; always absent on the MIoT backend (model parity with macOS). */
   readonly snapshotPath?: string | null;
-  /** Absent means writable. False hides sleep, night-shot, and live-view controls (#154). */
-  readonly controlsWritable?: boolean;
+  /** Absent means camera power is writable. Night-shot stays its own list (#154). */
+  readonly powerWritable?: boolean;
 }
 
 export interface SensorSpec {
@@ -223,8 +230,8 @@ export interface ScheduledCommand {
 }
 
 /** Plugs often power a router, fridge or NAS, and 全关 should not send a cleaning vacuum home (#23). */
-/** Verified specs omit the flag. A read-only MIoT fallback sets it false so no write is offered (#154). */
-export function deviceAcceptsControlWrites(device: SmartDevice): boolean {
+/** Power / sweep toggle. A read-only `on` does not remove brightness or mode (#154). */
+export function deviceCanTogglePower(device: SmartDevice): boolean {
   const kind = device.kind;
   switch (kind.kind) {
     case "light":
@@ -232,11 +239,54 @@ export function deviceAcceptsControlWrites(device: SmartDevice): boolean {
     case "fan":
     case "plug":
     case "camera":
-      return kind.controlsWritable !== false;
-    case "fridge":
+      return kind.powerWritable !== false;
     case "vacuum":
+      return kind.actionsWritable !== false;
+    case "fridge":
     case "sensor":
-      return true;
+      return false;
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
+}
+
+/** True when at least one property or action on this device can be written. */
+export function deviceAcceptsControlWrites(device: SmartDevice): boolean {
+  const kind = device.kind;
+  switch (kind.kind) {
+    case "light":
+      return (
+        kind.powerWritable !== false ||
+        kind.brightnessWritable !== false ||
+        kind.colorWritable !== false ||
+        kind.availableEffects.length > 0
+      );
+    case "climate":
+      return (
+        kind.powerWritable !== false ||
+        kind.temperatureWritable !== false ||
+        kind.availableModes.length > 0 ||
+        kind.availableFanModes.length > 0
+      );
+    case "fan":
+      return (
+        kind.powerWritable !== false ||
+        (kind.speedWritable !== false && kind.percentage !== null) ||
+        (kind.swingWritable !== false && kind.isOscillating !== null) ||
+        kind.availablePresetModes.length > 0
+      );
+    case "plug":
+      return kind.powerWritable !== false || kind.childLockEntityId !== null;
+    case "camera":
+      return kind.powerWritable !== false || kind.availableNightShots.length > 0 || kind.motionDetectionEntityId !== null;
+    case "vacuum":
+      return kind.actionsWritable !== false;
+    case "fridge":
+      return kind.modeEntityId !== null || kind.fridgeTargetEntityId !== null || kind.freezerTargetEntityId !== null;
+    case "sensor":
+      return false;
     default: {
       const _exhaustive: never = kind;
       return _exhaustive;
@@ -262,7 +312,7 @@ export function allOffTargets(
   visible: readonly SmartDevice[],
   overrides: Readonly<Record<string, boolean>>
 ): SmartDevice[] {
-  return visible.filter((d) => isDeviceActiveOn(d) && joinsAllOff(d, overrides) && deviceAcceptsControlWrites(d));
+  return visible.filter((d) => isDeviceActiveOn(d) && joinsAllOff(d, overrides) && deviceCanTogglePower(d));
 }
 
 /** A timer that comes due more than this late (the PC slept, the app was frozen) waits for the user (#22). */

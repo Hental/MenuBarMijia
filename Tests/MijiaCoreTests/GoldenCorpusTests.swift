@@ -54,7 +54,9 @@ struct GoldenCorpusTests {
             let maxKelvin: Int
             let currentEffect: String?
             let availableEffects: [String]
-            let controlsWritable: Bool?
+            let powerWritable: Bool?
+            let brightnessWritable: Bool?
+            let colorWritable: Bool?
         }
 
         struct ClimatePayload: Decodable {
@@ -71,7 +73,8 @@ struct GoldenCorpusTests {
             let availableFanModes: [String]
             let swingMode: String?
             let availableSwingModes: [String]?
-            let controlsWritable: Bool?
+            let powerWritable: Bool?
+            let temperatureWritable: Bool?
         }
 
         struct FanPayload: Decodable {
@@ -86,7 +89,9 @@ struct GoldenCorpusTests {
             let temperature: Double?
             let humidity: Double?
             let filterLifePercent: Int?
-            let controlsWritable: Bool?
+            let powerWritable: Bool?
+            let speedWritable: Bool?
+            let swingWritable: Bool?
         }
 
         struct PlugPayload: Decodable {
@@ -96,7 +101,7 @@ struct GoldenCorpusTests {
             let energyKwh: Double?
             let childLockEntityId: String?
             let isChildLocked: Bool
-            let controlsWritable: Bool?
+            let powerWritable: Bool?
         }
 
         struct FridgePayload: Decodable {
@@ -118,6 +123,7 @@ struct GoldenCorpusTests {
             let modeEntityId: String?
             let currentMode: String?
             let availableModes: [String]
+            let actionsWritable: Bool?
         }
 
         struct CameraPayload: Decodable {
@@ -129,7 +135,7 @@ struct GoldenCorpusTests {
             let isMotionDetectionOn: Bool?
             let streamEntityId: String?
             let snapshotPath: String?
-            let controlsWritable: Bool?
+            let powerWritable: Bool?
         }
 
         struct SensorPayload: Decodable {
@@ -181,7 +187,9 @@ struct GoldenCorpusTests {
                         maxKelvin: p.maxKelvin,
                         currentEffect: p.currentEffect,
                         availableEffects: p.availableEffects,
-                        controlsWritable: p.controlsWritable ?? true
+                        powerWritable: p.powerWritable ?? true,
+                        brightnessWritable: p.brightnessWritable ?? true,
+                        colorWritable: p.colorWritable ?? true
                     )
                 )
             case .climate(let p):
@@ -200,7 +208,8 @@ struct GoldenCorpusTests {
                         availableFanModes: p.availableFanModes,
                         swingMode: p.swingMode,
                         availableSwingModes: p.availableSwingModes ?? [],
-                        controlsWritable: p.controlsWritable ?? true
+                        powerWritable: p.powerWritable ?? true,
+                        temperatureWritable: p.temperatureWritable ?? true
                     )
                 )
             case .fan(let p):
@@ -217,7 +226,9 @@ struct GoldenCorpusTests {
                         temperature: p.temperature,
                         humidity: p.humidity,
                         filterLifePercent: p.filterLifePercent,
-                        controlsWritable: p.controlsWritable ?? true
+                        powerWritable: p.powerWritable ?? true,
+                        speedWritable: p.speedWritable ?? true,
+                        swingWritable: p.swingWritable ?? true
                     )
                 )
             case .plug(let p):
@@ -229,7 +240,7 @@ struct GoldenCorpusTests {
                         energyKwh: p.energyKwh,
                         childLockEntityId: p.childLockEntityId,
                         isChildLocked: p.isChildLocked,
-                        controlsWritable: p.controlsWritable ?? true
+                        powerWritable: p.powerWritable ?? true
                     )
                 )
             case .fridge(let p):
@@ -254,7 +265,8 @@ struct GoldenCorpusTests {
                         battery: p.battery,
                         modeEntityId: p.modeEntityId,
                         currentMode: p.currentMode,
-                        availableModes: p.availableModes
+                        availableModes: p.availableModes,
+                        actionsWritable: p.actionsWritable ?? true
                     )
                 )
             case .camera(let p):
@@ -268,7 +280,7 @@ struct GoldenCorpusTests {
                         isMotionDetectionOn: p.isMotionDetectionOn,
                         streamEntityId: p.streamEntityId,
                         snapshotPath: p.snapshotPath,
-                        controlsWritable: p.controlsWritable ?? true
+                        powerWritable: p.powerWritable ?? true
                     )
                 )
             case .sensor(let p):

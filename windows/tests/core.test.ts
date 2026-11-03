@@ -418,7 +418,8 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     if (purifierKind?.kind === "fan") {
       assert.equal(purifierKind.pm25Density, 18);
       assert.deepEqual(purifierKind.availablePresetModes, []);
-      assert.equal(purifierKind.controlsWritable, false);
+      assert.equal(purifierKind.powerWritable, false);
+      assert.equal(purifierKind.availablePresetModes.length, 0);
     }
 
     const cameraFallback = inferFallbackSpec({ model: "chuangmi.camera.061a01", name: "摄像机" });
@@ -429,11 +430,82 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     );
     assert.equal(cameraKind?.kind, "camera");
     if (cameraKind?.kind === "camera") {
-      assert.equal(cameraKind.controlsWritable, false);
+      assert.equal(cameraKind.powerWritable, false);
       assert.deepEqual(cameraKind.availableNightShots, []);
     }
     assert.throws(() =>
       MiotCommandMapper.map({ kind: "setFanPower", entityId: "miot:did_fb_airp:2", isOn: false }, purifierFallback),
+    );
+
+    const vacuumFallback = inferFallbackSpec({ model: "roborock.vacuum.fallback", name: "扫地机" });
+    assert.equal(vacuumFallback.services.every((service) => service.actions.length === 0), true);
+    const vacuumKind = MiotSynthesizer.buildDeviceKind("fb_vac", vacuumFallback, new Map([["fb_vac.2.1", 2]]));
+    assert.equal(vacuumKind?.kind, "vacuum");
+    if (vacuumKind?.kind === "vacuum") assert.equal(vacuumKind.actionsWritable, false);
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "vacuumAction", entityId: "miot:fb_vac:2", action: "start" }, vacuumFallback),
+    );
+
+    const partialLight: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:light:0000A001:trusted:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:light:00007802:trusted:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:trusted:1", format: "bool", access: ["read"] },
+            { iid: 2, type: "urn:miot-spec-v2:property:brightness:0000000D:trusted:1", format: "uint8", access: ["read", "write"], valueRange: [1, 100, 1] },
+          ],
+          actions: [],
+        },
+      ],
+    };
+    const partialKind = MiotSynthesizer.buildDeviceKind("trusted_light", partialLight, new Map([["trusted_light.2.2", 40]]));
+    assert.equal(partialKind?.kind, "light");
+    if (partialKind?.kind === "light") {
+      assert.equal(partialKind.powerWritable, false);
+      assert.equal(partialKind.brightnessWritable, undefined);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setLightPower", entityId: "miot:trusted_light:2", isOn: false }, partialLight),
+    );
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "setLightBrightness", entityId: "miot:trusted_light:2", percent: 30 }, partialLight),
+      { kind: "setProps", writes: [{ did: "trusted_light", siid: 2, piid: 2, value: 30 }] },
+    );
+
+    const partialFan: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:fan:0000A005:trusted:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:fan:00007808:trusted:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:trusted:1", format: "bool", access: ["read"] },
+            {
+              iid: 2,
+              type: "urn:miot-spec-v2:property:mode:00000008:trusted:1",
+              format: "uint8",
+              access: ["read", "write"],
+              valueList: [{ value: 1, description: "Natural" }],
+            },
+          ],
+          actions: [],
+        },
+      ],
+    };
+    const partialFanKind = MiotSynthesizer.buildDeviceKind("trusted_fan", partialFan, new Map([["trusted_fan.2.2", 1]]));
+    assert.equal(partialFanKind?.kind, "fan");
+    if (partialFanKind?.kind === "fan") {
+      assert.equal(partialFanKind.powerWritable, false);
+      assert.deepEqual(partialFanKind.availablePresetModes, ["Natural"]);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setFanPower", entityId: "miot:trusted_fan:2", isOn: true }, partialFan),
+    );
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "setFanPresetMode", entityId: "miot:trusted_fan:2", presetMode: "Natural" }, partialFan),
+      { kind: "setProps", writes: [{ did: "trusted_fan", siid: 2, piid: 2, value: 1 }] },
     );
   });
 

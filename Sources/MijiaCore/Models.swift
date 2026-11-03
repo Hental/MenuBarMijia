@@ -50,8 +50,10 @@ public struct LightSpec: Equatable, Sendable {
     public var maxKelvin: Int
     public var currentEffect: String?
     public var availableEffects: [String]
-    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
-    public var controlsWritable: Bool
+    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
+    public var powerWritable: Bool
+    public var brightnessWritable: Bool
+    public var colorWritable: Bool
 
     public init(
         entityId: String,
@@ -62,7 +64,9 @@ public struct LightSpec: Equatable, Sendable {
         maxKelvin: Int = 6500,
         currentEffect: String? = nil,
         availableEffects: [String] = [],
-        controlsWritable: Bool = true
+        powerWritable: Bool = true,
+        brightnessWritable: Bool = true,
+        colorWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -72,7 +76,9 @@ public struct LightSpec: Equatable, Sendable {
         self.maxKelvin = maxKelvin
         self.currentEffect = currentEffect
         self.availableEffects = availableEffects
-        self.controlsWritable = controlsWritable
+        self.powerWritable = powerWritable
+        self.brightnessWritable = brightnessWritable
+        self.colorWritable = colorWritable
     }
 }
 
@@ -90,8 +96,9 @@ public struct ClimateSpec: Equatable, Sendable {
     public var availableFanModes: [String]
     public var swingMode: String?
     public var availableSwingModes: [String]
-    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
-    public var controlsWritable: Bool
+    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
+    public var powerWritable: Bool
+    public var temperatureWritable: Bool
 
     public init(
         entityId: String,
@@ -107,7 +114,8 @@ public struct ClimateSpec: Equatable, Sendable {
         availableFanModes: [String] = [],
         swingMode: String? = nil,
         availableSwingModes: [String] = [],
-        controlsWritable: Bool = true
+        powerWritable: Bool = true,
+        temperatureWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -122,7 +130,8 @@ public struct ClimateSpec: Equatable, Sendable {
         self.availableFanModes = availableFanModes
         self.swingMode = swingMode
         self.availableSwingModes = availableSwingModes
-        self.controlsWritable = controlsWritable
+        self.powerWritable = powerWritable
+        self.temperatureWritable = temperatureWritable
     }
 }
 
@@ -138,8 +147,10 @@ public struct FanSpec: Equatable, Sendable {
     public var temperature: Double?
     public var humidity: Double?
     public var filterLifePercent: Int?
-    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
-    public var controlsWritable: Bool
+    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
+    public var powerWritable: Bool
+    public var speedWritable: Bool
+    public var swingWritable: Bool
 
     public init(
         entityId: String,
@@ -153,7 +164,9 @@ public struct FanSpec: Equatable, Sendable {
         temperature: Double? = nil,
         humidity: Double? = nil,
         filterLifePercent: Int? = nil,
-        controlsWritable: Bool = true
+        powerWritable: Bool = true,
+        speedWritable: Bool = true,
+        swingWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -166,7 +179,9 @@ public struct FanSpec: Equatable, Sendable {
         self.temperature = temperature
         self.humidity = humidity
         self.filterLifePercent = filterLifePercent
-        self.controlsWritable = controlsWritable
+        self.powerWritable = powerWritable
+        self.speedWritable = speedWritable
+        self.swingWritable = swingWritable
     }
 }
 
@@ -177,8 +192,8 @@ public struct PlugSpec: Equatable, Sendable {
     public var energyKwh: Double?
     public var childLockEntityId: String?
     public var isChildLocked: Bool
-    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
-    public var controlsWritable: Bool
+    /// False when `on` is not writable. A child-lock id is a separate capability (#154).
+    public var powerWritable: Bool
 
     public init(
         switchEntityId: String,
@@ -187,7 +202,7 @@ public struct PlugSpec: Equatable, Sendable {
         energyKwh: Double? = nil,
         childLockEntityId: String? = nil,
         isChildLocked: Bool = false,
-        controlsWritable: Bool = true
+        powerWritable: Bool = true
     ) {
         self.switchEntityId = switchEntityId
         self.isOn = isOn
@@ -195,7 +210,7 @@ public struct PlugSpec: Equatable, Sendable {
         self.energyKwh = energyKwh
         self.childLockEntityId = childLockEntityId
         self.isChildLocked = isChildLocked
-        self.controlsWritable = controlsWritable
+        self.powerWritable = powerWritable
     }
 }
 
@@ -240,6 +255,8 @@ public struct VacuumSpec: Equatable, Sendable {
     public var modeEntityId: String?
     public var currentMode: String?
     public var availableModes: [String]
+    /// False when the spec has no sweep/charge action. Guessed fallback actions stay absent (#154).
+    public var actionsWritable: Bool
 
     public init(
         entityId: String,
@@ -247,7 +264,8 @@ public struct VacuumSpec: Equatable, Sendable {
         battery: Int? = nil,
         modeEntityId: String? = nil,
         currentMode: String? = nil,
-        availableModes: [String] = []
+        availableModes: [String] = [],
+        actionsWritable: Bool = true
     ) {
         self.entityId = entityId
         self.status = status
@@ -255,6 +273,7 @@ public struct VacuumSpec: Equatable, Sendable {
         self.modeEntityId = modeEntityId
         self.currentMode = currentMode
         self.availableModes = availableModes
+        self.actionsWritable = actionsWritable
     }
 
     public var isCleaning: Bool {
@@ -345,8 +364,8 @@ public struct CameraSpec: Equatable, Sendable {
     public var isMotionDetectionOn: Bool?
     public var streamEntityId: String?
     public var snapshotPath: String?
-    /// False when the MIoT spec did not grant write access. Verified specs and HA stay true (#154).
-    public var controlsWritable: Bool
+    /// False when camera `on` is not writable. Night-shot and motion stay independent (#154).
+    public var powerWritable: Bool
 
     public init(
         entityId: String,
@@ -357,7 +376,7 @@ public struct CameraSpec: Equatable, Sendable {
         isMotionDetectionOn: Bool? = nil,
         streamEntityId: String? = nil,
         snapshotPath: String? = nil,
-        controlsWritable: Bool = true
+        powerWritable: Bool = true
     ) {
         self.entityId = entityId
         self.isOn = isOn
@@ -367,7 +386,7 @@ public struct CameraSpec: Equatable, Sendable {
         self.isMotionDetectionOn = isMotionDetectionOn
         self.streamEntityId = streamEntityId
         self.snapshotPath = snapshotPath
-        self.controlsWritable = controlsWritable
+        self.powerWritable = powerWritable
     }
 }
 
@@ -422,15 +441,43 @@ public enum DeviceKind: Equatable, Sendable {
         }
     }
 
-    /// Verified specs and Home Assistant devices stay writable. A read-only MIoT fallback is false (#154).
+    /// Power, sweep, and other primary on/off controls. A read-only `on` does not hide unrelated writes (#154).
+    public var canTogglePower: Bool {
+        switch self {
+        case .light(let spec): return spec.powerWritable
+        case .climate(let spec): return spec.powerWritable
+        case .fan(let spec): return spec.powerWritable
+        case .plug(let spec): return spec.powerWritable
+        case .camera(let spec): return spec.powerWritable
+        case .vacuum(let spec): return spec.actionsWritable
+        case .tv: return true
+        case .speaker, .fridge, .sensor: return false
+        }
+    }
+
+    /// True when at least one property or action on this device can be written.
     public var acceptsControlWrites: Bool {
         switch self {
-        case .light(let spec): return spec.controlsWritable
-        case .climate(let spec): return spec.controlsWritable
-        case .fan(let spec): return spec.controlsWritable
-        case .plug(let spec): return spec.controlsWritable
-        case .camera(let spec): return spec.controlsWritable
-        case .fridge, .vacuum, .speaker, .tv, .sensor: return true
+        case .light(let spec):
+            return spec.powerWritable || spec.brightnessWritable || spec.colorWritable || !spec.availableEffects.isEmpty
+        case .climate(let spec):
+            return spec.powerWritable || spec.temperatureWritable || !spec.availableModes.isEmpty || !spec.availableFanModes.isEmpty
+        case .fan(let spec):
+            let speed = spec.speedWritable && spec.percentage != nil
+            let swing = spec.swingWritable && spec.isOscillating != nil
+            return spec.powerWritable || speed || swing || !spec.availablePresetModes.isEmpty
+        case .plug(let spec):
+            return spec.powerWritable || spec.childLockEntityId != nil
+        case .camera(let spec):
+            return spec.powerWritable || !spec.availableNightShots.isEmpty || spec.motionDetectionEntityId != nil
+        case .vacuum(let spec):
+            return spec.actionsWritable
+        case .fridge(let spec):
+            return spec.modeEntityId != nil || spec.fridgeTargetEntityId != nil || spec.freezerTargetEntityId != nil
+        case .speaker, .tv:
+            return true
+        case .sensor:
+            return false
         }
     }
 }
@@ -465,16 +512,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     }
 
     /// Whether this device can be toggled on/off with a single primary click
-    public var isPrimaryToggleable: Bool {
-        switch kind {
-        case .light, .climate, .fan, .plug, .camera:
-            return kind.acceptsControlWrites
-        case .vacuum, .tv:
-            return true
-        case .speaker, .fridge, .sensor:
-            return false
-        }
-    }
+    public var isPrimaryToggleable: Bool { kind.canTogglePower }
 
     /// Whether this device represents a stateless momentary action button (e.g. Home Assistant `button.*` / Wake on LAN, #100).
     public var isMomentaryButton: Bool {
@@ -503,16 +541,25 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     /// Whether this device has an expandable secondary control drawer
     public var hasDetailDrawer: Bool {
         switch kind {
-        case .light, .climate, .camera:
-            return kind.acceptsControlWrites
+        case .light(let spec):
+            return spec.brightnessWritable || spec.colorWritable || !spec.availableEffects.isEmpty
+        case .climate(let spec):
+            return spec.temperatureWritable || !spec.availableModes.isEmpty
+                || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
         case .fan(let spec):
             let hasReadings = spec.pm25Density != nil || spec.airQuality != nil
                 || spec.temperature != nil || spec.humidity != nil || spec.filterLifePercent != nil
-            return spec.controlsWritable || hasReadings
-        case .fridge, .vacuum, .speaker, .tv:
+            let speed = spec.speedWritable && spec.percentage != nil
+            let swing = spec.swingWritable && spec.isOscillating != nil
+            return speed || swing || !spec.availablePresetModes.isEmpty || hasReadings
+        case .camera(let spec):
+            return spec.powerWritable || !spec.availableNightShots.isEmpty || spec.motionDetectionEntityId != nil
+        case .vacuum(let spec):
+            return spec.actionsWritable
+        case .fridge, .speaker, .tv:
             return true
         case .plug(let s):
-            return s.powerWatts != nil || s.energyKwh != nil || (s.controlsWritable && s.childLockEntityId != nil)
+            return s.powerWatts != nil || s.energyKwh != nil || s.childLockEntityId != nil
         case .sensor:
             return false
         }

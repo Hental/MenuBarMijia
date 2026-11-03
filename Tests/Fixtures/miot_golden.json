@@ -1483,7 +1483,7 @@
         "temperature": 24.5,
         "humidity": 52,
         "filterLifePercent": 86,
-        "controlsWritable": false
+        "powerWritable": false
       },
       "rejectedCommands": [
         { "kind": "setFanPower", "entityId": "miot:fb_airp:2", "isOn": false },
@@ -1531,7 +1531,7 @@
         "motionDetectionEntityId": null,
         "isMotionDetectionOn": null,
         "streamEntityId": null,
-        "controlsWritable": false
+        "powerWritable": false
       },
       "rejectedCommands": [
         { "kind": "setSwitch", "entityId": "miot:fb_cam:2", "isOn": false },
@@ -1571,7 +1571,9 @@
         "maxKelvin": 6500,
         "currentEffect": null,
         "availableEffects": [],
-        "controlsWritable": false
+        "powerWritable": false,
+        "brightnessWritable": false,
+        "colorWritable": false
       },
       "rejectedCommands": [
         { "kind": "setLightPower", "entityId": "miot:fb_light:2", "isOn": false },
@@ -1627,7 +1629,8 @@
         "step": 0.5,
         "fanMode": null,
         "availableFanModes": [],
-        "controlsWritable": false
+        "powerWritable": false,
+        "temperatureWritable": false
       },
       "rejectedCommands": [
         { "kind": "setClimatePower", "entityId": "miot:fb_ac:2", "isOn": false, "hvacMode": "cool" },
@@ -1682,7 +1685,8 @@
         "step": 0.5,
         "fanMode": null,
         "availableFanModes": [],
-        "controlsWritable": false
+        "powerWritable": false,
+        "temperatureWritable": false
       },
       "rejectedCommands": [
         { "kind": "setClimateMode", "entityId": "miot:fb_heater:2", "hvacMode": "heat" }
@@ -1731,7 +1735,8 @@
         "presetMode": "Level 2",
         "availablePresetModes": [],
         "isOscillating": true,
-        "controlsWritable": false
+        "powerWritable": false,
+        "swingWritable": false
       },
       "rejectedCommands": [
         { "kind": "setFanPower", "entityId": "miot:fb_fan:2", "isOn": false },
@@ -1795,7 +1800,7 @@
         "presetMode": null,
         "availablePresetModes": [],
         "isOscillating": null,
-        "controlsWritable": false
+        "powerWritable": false
       },
       "rejectedCommands": [
         { "kind": "setFanPower", "entityId": "miot:fb_fresh:2", "isOn": true }
@@ -1859,7 +1864,7 @@
         "presetMode": "Sleep",
         "availablePresetModes": [],
         "isOscillating": null,
-        "controlsWritable": false
+        "powerWritable": false
       },
       "rejectedCommands": [
         { "kind": "setFanPresetMode", "entityId": "miot:fb_humid:2", "presetMode": "Auto" }
@@ -1892,10 +1897,57 @@
         "powerWatts": null,
         "childLockEntityId": null,
         "isChildLocked": false,
-        "controlsWritable": false
+        "powerWritable": false
       },
       "rejectedCommands": [
         { "kind": "setSwitch", "entityId": "miot:fb_outlet:2", "isOn": false }
+      ]
+    },
+    {
+      "did": "fb_vac",
+      "model": "roborock.vacuum.fallback",
+      "name": "扫地机",
+      "spec": {
+        "type": "urn:miot-spec-v2:device:vacuum:0000A006:fallback:1",
+        "services": [
+          {
+            "iid": 2,
+            "type": "urn:miot-spec-v2:service:vacuum:00007810:fallback:1",
+            "properties": [
+              {
+                "iid": 1,
+                "type": "urn:miot-spec-v2:property:status:00000007:fallback:1",
+                "format": "uint8",
+                "access": ["read"],
+                "value-list": [
+                  { "value": 1, "description": "Idle" },
+                  { "value": 2, "description": "Sweeping" },
+                  { "value": 3, "description": "Charging" },
+                  { "value": 4, "description": "Paused" },
+                  { "value": 5, "description": "Go Charging" }
+                ]
+              }
+            ],
+            "actions": []
+          }
+        ]
+      },
+      "values": [
+        { "siid": 2, "piid": 1, "value": 1 }
+      ],
+      "expectedKind": {
+        "kind": "vacuum",
+        "entityId": "miot:fb_vac:2",
+        "status": "idle",
+        "battery": null,
+        "modeEntityId": null,
+        "currentMode": null,
+        "availableModes": [],
+        "actionsWritable": false
+      },
+      "rejectedCommands": [
+        { "kind": "vacuumAction", "entityId": "miot:fb_vac:2", "action": "start" },
+        { "kind": "vacuumAction", "entityId": "miot:fb_vac:2", "action": "returnToBase" }
       ]
     }
   ],
