@@ -492,6 +492,31 @@ struct SensorSafetyAlertTests {
         #expect(alert.turnOffCommand == nil)
     }
 
+    @Test("Traditional Chinese has the sensor alert sentences")
+    func traditionalChineseSensorAlerts() {
+        L10n.$overrideLanguage.withValue(.zhHant) {
+            #expect(L10n.format("%@ 烟雾告警", "%@ Smoke", "厨房烟感") == "厨房烟感 煙霧告警")
+            #expect(L10n.format("%@ 燃气告警", "%@ Gas", "厨房燃气") == "厨房燃气 燃氣告警")
+            #expect(L10n.format("%@ 门窗打开", "%@ Door Open", "门磁") == "门磁 門窗打開")
+            #expect(L10n.format("%@ 有人移动", "%@ Motion", "人体传感器") == "人体传感器 有人移動")
+            #expect(
+                L10n.format("「%@」（%@）于 %@ 触发", "\"%@\" (%@) at %@", "水浸传感器", "厨房", "2023-11-15 06:13")
+                    == "「水浸传感器」（厨房）於 2023-11-15 06:13 觸發"
+            )
+            #expect(SensorAlertKind.leak.settingsTitle == "漏水告警")
+            #expect(SensorAlertKind.smoke.settingsTitle == "煙霧告警")
+            #expect(SensorAlertKind.gas.settingsTitle == "燃氣告警")
+            #expect(SensorAlertKind.contact.settingsTitle == "門窗開關")
+            #expect(SensorAlertKind.motion.settingsTitle == "人體移動")
+            #expect(
+                L10n.tr(
+                    "门窗和移动只在这台 Mac 锁屏、睡眠或切换走时提醒",
+                    "Door and motion only when this Mac is locked, asleep, or switched away"
+                ) == "門窗和移動只在這台 Mac 鎖屏、睡眠或切換走時提醒"
+            )
+        }
+    }
+
     @Test("A low-battery alert still returns from the same call as a leak")
     func lowBatteryAlertStillReturnsWithTheLeak() async throws {
         let (store, suite) = try await makeStore(devices: [leak(true, battery: 10)])
