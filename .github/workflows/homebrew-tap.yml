@@ -51,8 +51,9 @@ permissions:
 
 concurrency:
   # 同一事件源只保留最新一次运行；真正的跨仓库写入在 publish job 内再串行一层。
+  # main 上的每一次推送都要跑完（包括发版后的 tap 同步），不取消进行中的运行。
   group: homebrew-tap-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.event.workflow_run.head_branch || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   self-test:

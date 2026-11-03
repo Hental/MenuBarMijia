@@ -45,6 +45,7 @@ if [ -n "$MACOS_CERT_SHA1" ] && ! printf '%s' "$MACOS_CERT_SHA1" | grep -Eq '^[0
     exit 1
 fi
 
+if [ "${APP_INTENTS_ONLY:-0}" != "1" ]; then
 echo "▶ 正在编译 MenuBarMijiaApp $VERSION (Release Universal: arm64 + x86_64)..."
 swift build -c release --product MenuBarMijiaApp --arch arm64 --arch x86_64
 
@@ -219,6 +220,7 @@ cat > "$APP_DIR/Contents/Resources/en.lproj/InfoPlist.strings" <<'STRINGS_EN'
 "NSMicrophoneUsageDescription" = "Used to control your Xiaomi Home smart devices with voice commands.";
 "NSSpeechRecognitionUsageDescription" = "Used to transcribe your voice commands into smart home actions in real time.";
 STRINGS_EN
+fi
 
 # SwiftPM executable targets emit const values through Xcode but do not run the app metadata
 # extraction phase. Build those values with Xcode, then process them before signing the bundle.
@@ -238,10 +240,21 @@ app_intents_bundle_dir() {
 }
 
 generate_app_intents_metadata_via_xcode() {
+    if _generate_app_intents_metadata_via_xcode; then
+        return 0
+    fi
+    # A restored or half-written derived-data tree can fail incremental extraction.
+    # One clean retry still produces metadata; the successful tree is kept for the next build.
+    echo "ℹ️ 增量 Xcode 构建没有产出 App Intents 元数据，清理派生数据后重试..."
+    rm -rf "$ROOT/.derived/appintents"
+    _generate_app_intents_metadata_via_xcode
+}
+
+_generate_app_intents_metadata_via_xcode() {
     # Xcode's build graph requests const values itself and runs ExtractAppIntentsMetadata per target.
-    local derived="$ROOT/.build/appintents-derived"
+    # Derived data lives outside SwiftPM's .build so `swift test` cannot clobber an incremental Xcode build.
+    local derived="$ROOT/.derived/appintents"
     command -v xcodebuild >/dev/null 2>&1 || return 1
-    rm -rf "$derived"
     mkdir -p "$derived"
 
     # SwiftPM exposes one scheme per product; consult the list instead of assuming a name.
@@ -265,14 +278,16 @@ generate_app_intents_metadata_via_xcode() {
             -destination 'platform=macOS' \
             -configuration Release \
             -derivedDataPath "$derived" \
-            build >"$ROOT/.build/appintents-build.log" 2>&1; then
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ENABLE_INDEX_STORE=NO \
+            build >"$ROOT/.derived/appintents-build.log" 2>&1; then
             built=1
             break
         fi
     done
     if [ "$built" = "0" ]; then
         echo "   （xcodebuild 未能构建含 $APP_INTENTS_MODULE 的 scheme；可用 xcodebuild -list 查看）" >&2
-        tail -n 40 "$ROOT/.build/appintents-build.log" >&2
+        tail -n 40 "$ROOT/.derived/appintents-build.log" >&2
         return 1
     fi
 
@@ -287,7 +302,7 @@ generate_app_intents_metadata_via_xcode() {
         find "$derived" -path "*/${APP_INTENTS_MODULE}*.build/*" -name '*.swiftconstvalues' > "$derived/constvals.txt"
         find "$ROOT/Sources/$APP_INTENTS_MODULE" -name '*.swift' > "$derived/sources.txt"
         if [ ! -s "$derived/constvals.txt" ]; then
-            echo "❌ Xcode 构建未产生 ${APP_INTENTS_MODULE} 的 swiftconstvalues，构建日志：$ROOT/.build/appintents-build.log" >&2
+            echo "❌ Xcode 构建未产生 ${APP_INTENTS_MODULE} 的 swiftconstvalues，构建日志：$ROOT/.derived/appintents-build.log" >&2
             find "$derived" -name '*.swiftconstvalues' >&2
             return 1
         fi
@@ -310,7 +325,6 @@ generate_app_intents_metadata_via_xcode() {
     fi
     rm -rf "$APP_DIR/Contents/Resources/Metadata.appintents"
     cp -R "$bundle" "$APP_DIR/Contents/Resources/Metadata.appintents"
-    rm -rf "$derived"
     return 0
 }
 
@@ -336,6 +350,17 @@ generate_app_intents_metadata() {
 
     echo "🧩 已嵌入 App Intents 元数据：$(du -h "$resources/extract.actionsdata" | awk '{print $1}') extract.actionsdata（快捷指令 / Siri 可发现）"
 }
+if [ "${APP_INTENTS_ONLY:-0}" = "1" ]; then
+    APP_DIR="$(mktemp -d)/MenuBarMijia.app"
+    mkdir -p "$APP_DIR/Contents/Resources"
+    generate_app_intents_metadata
+    if [ ! -s "$APP_DIR/Contents/Resources/Metadata.appintents/extract.actionsdata" ]; then
+        echo "❌ App Intents 元数据未生成" >&2
+        exit 1
+    fi
+    echo "✅ App Intents 元数据可生成"
+    exit 0
+fi
 if [ "${SKIP_APP_INTENTS:-0}" = "1" ] && [ "$SIGN_IDENTITY" = "-" ]; then
     rm -rf "$APP_DIR/Contents/Resources/Metadata.appintents"
     echo "⚠️ 已跳过 App Intents 元数据生成（SKIP_APP_INTENTS=1，仅限本机 ad-hoc 自用）"

@@ -125,7 +125,8 @@ if ! cmp -s Resources/AppIcon/AppIcon-Dark.svg docs/assets/logo-dark.svg || ! cm
     exit 1
 fi
 
-# The design-token scan only reads macOS UI sources; Linux runners have no python3.
+# Design-token and Ed25519 checks need python3. CI runs them on ubuntu-latest
+# (the Swift container image does not ship python3).
 if command -v python3 >/dev/null 2>&1; then
     python3 scripts/check_design_tokens.py
     python3 - <<'PY'

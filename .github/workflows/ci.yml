@@ -15,38 +15,100 @@ on:
         type: boolean
         default: false
 
-# 最小权限：所有 job 只读。需要写权限的发布流程放在单独的 release 工作流里。
+# 最小权限。actions: write 只用于 Actions cache（Swift .build / npm / Rust），
+# 不授予 contents: write。需要写仓库的发布流程在单独的 release 工作流里。
 permissions:
   contents: read
+  actions: write
 
-# 同一个 PR / 分支只保留最新一次运行，节省 Runner 时间。
+# PR 上连续推送只保留最新一次。main 的每一次提交都要跑完（发版依赖这条），不取消。
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    # 文档-only 的 diff 不启动 macOS / Windows / Swift 容器。
+    # 工作流本身仍会运行：被 if 跳过的 job 在 GitHub 上记为成功，
+    # 这样 path filter 不会把 required check 卡在 Pending。
+    # 见 https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Decide whether code changed
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch always runs full CI"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$BASE_SHA"
+            head="$HEAD_SHA"
+          else
+            base="$BEFORE_SHA"
+            head="$HEAD_SHA"
+            if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "new branch; running full CI"
+              exit 0
+            fi
+          fi
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null || ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "could not resolve ${base}..${head}; running full CI"
+            exit 0
+          fi
+          git diff --name-only "$base" "$head" > "$RUNNER_TEMP/changed.txt"
+          if bash scripts/ci_relevant_paths.sh < "$RUNNER_TEMP/changed.txt"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed; running full CI"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "docs-only change; heavy jobs skipped"
+            cat "$RUNNER_TEMP/changed.txt"
+          fi
+
   nas-safety:
-    if: inputs.record_only != true
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install ripgrep
+        run: bash scripts/install_ripgrep.sh
+      - name: Secret, coding-standard, and design-token checks
+        # 这些检查与操作系统无关，放在 Ubuntu 上，避免占用 macOS 配额。
+        # swift:6.1 容器里没有 python3，设计令牌和公钥一致性以前只在 macOS 上跑。
+        run: bash scripts/check.sh --lint-only
       - name: Test NAS deployment safety
         run: bash scripts/test_nas_setup.sh
 
   linux-core:
-    if: inputs.record_only != true
-    # 验证密钥扫描、编码规范与 MijiaCore 全量单测（Ubuntu + Swift 6.1）
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # 验证 MijiaCore 全量单测（Ubuntu + Swift 6.1）。密钥与编码规范在 nas-safety 里跑。
     runs-on: ubuntu-latest
     container: swift:6.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Secret & coding-standard checks
-        run: bash scripts/check.sh --lint-only
       - name: Test MijiaCore on Linux
         run: bash scripts/linux-check/run.sh
 
   windows-core:
-    if: inputs.record_only != true
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
     # 验证 Windows 版 TypeScript 核心测试与前端打包
     runs-on: ubuntu-latest
     defaults:
@@ -63,10 +125,11 @@ jobs:
         run: npm ci && npm test && npm run build
 
   windows-installer:
-    if: inputs.record_only != true
-    # 编译 Windows 安装包并保留为 CI 产物，发布时再上传到对应版本。
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # 与 linux-core / windows-core 没有产物传递，并行启动。
+    # 前端测试仍由 windows-core 覆盖；这里保留 cargo test 与 Tauri 安装包构建。
     runs-on: windows-latest
-    needs: [windows-core, linux-core]
     defaults:
       run:
         working-directory: windows
@@ -102,37 +165,131 @@ jobs:
           name: MenuBarMijia-Windows-x64
           path: dist-windows/*
 
-  macos:
-    if: inputs.record_only != true
-    # 编译 App 层（Release -O 配置，#2 这类崩溃只在 -O 下出现）并运行全部单测。
-    # Package.swift 需要 macOS 26 SDK；GitHub 托管的 macos-26 Runner 已于 2026-02-26 正式可用。
+  macos-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # 全部 Swift 单测（含快照）。App Intents 与 Release 通用二进制各用一台机器，三路并行。
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Toolchain info
         run: xcodebuild -version && swift --version
-      - name: Install ripgrep
-        run: command -v rg >/dev/null || brew install ripgrep
-      - name: Build app (release and App Intents metadata)
-        run: bash scripts/build_app.sh
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .build
+          key: spm-debug-v2-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            spm-debug-v2-${{ runner.os }}-
+            spm-debug-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Swift cache
+        run: bash scripts/ci_restore_mtimes.sh
       - name: Perturb baseline for the manual snapshot failure probe
         if: github.event_name == 'workflow_dispatch' && inputs.snapshot_failure_probe
         run: sips -z 1 1 Tests/MenuBarMijiaAppTests/__Snapshots__/SnapshotTests/deviceCardSnapshots.card-light-classic-zh-light.png
-      - name: Lint & test
+      - name: Swift tests
         env:
           # 快照不一致时把差异图写到固定目录，便于作为 artifact 下载（#46）。
           SNAPSHOT_ARTIFACTS: "${{ github.workspace }}/snapshot-failed"
-        run: bash scripts/check.sh
+        run: swift test
+      - name: Trim Swift build cache
+        if: success()
+        run: |
+          find .build -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
+          du -sh .build 2>/dev/null || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: snapshot-diff
-          path: |
-            snapshot-failed
-            .build/appintents-build.log
+          path: snapshot-failed
           if-no-files-found: ignore
           include-hidden-files: true
+
+  macos-appintents:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # xcodebuild 提取 App Intents。和 swift test 串在一台 3 核机器上时，冷启动会把两者相加。
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .derived
+          key: appintents-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            appintents-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Xcode cache
+        run: bash scripts/ci_restore_mtimes.sh
+      - name: App Intents metadata
+        run: APP_INTENTS_ONLY=1 bash scripts/build_app.sh
+      - name: Trim Xcode derived data
+        if: success()
+        run: |
+          find .derived -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
+          rm -f .derived/appintents-build.log
+          du -sh .derived 2>/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: appintents-log
+          path: .derived/appintents-build.log
+          if-no-files-found: ignore
+
+  macos-release:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # Release -O 通用二进制（#2 这类崩溃只在 -O 下出现）以及符号表路径泄露检查。
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Toolchain info
+        run: xcodebuild -version && swift --version
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .build
+          key: spm-release-v2-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            spm-release-v2-${{ runner.os }}-
+            spm-release-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Swift cache
+        run: bash scripts/ci_restore_mtimes.sh
+      - name: Build app (release universal)
+        env:
+          SKIP_APP_INTENTS: "1"
+        run: bash scripts/build_app.sh
+      - name: Trim Swift build cache
+        if: success()
+        run: |
+          find .build -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
+          rm -f .build/appintents-build.log
+          du -sh .build 2>/dev/null || true
+
+  macos:
+    # 历史 required check 的名字。文档-only 时三个 macOS job 被跳过，这里仍成功，
+    # 避免 path filter 把 `CI / macos` 卡在 Pending。任一 macOS job 失败则这里失败。
+    needs: [changes, macos-test, macos-release, macos-appintents]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require macOS tests and the release build
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          RECORD_ONLY: ${{ inputs.record_only }}
+          TESTS: ${{ needs.macos-test.result }}
+          RELEASE: ${{ needs.macos-release.result }}
+          INTENTS: ${{ needs.macos-appintents.result }}
+        run: bash scripts/ci_require_jobs.sh "macos-test:$TESTS" "macos-release:$RELEASE" "macos-appintents:$INTENTS"
 
   snapshot-record:
     # 仅手动触发（workflow_dispatch）：以 record 模式渲染 UI 快照基线（#46）。
@@ -160,3 +317,34 @@ jobs:
         with:
           name: snapshot-baselines
           path: snapshot-baselines
+
+  ci:
+    # 始终运行的汇总检查。文档-only 时重型 job 全部 skipped，这里成功；
+    # 任何一个实际失败（不是 skipped）则失败。适合作为唯一的 required check。
+    needs: [changes, nas-safety, linux-core, windows-core, windows-installer, macos-test, macos-release, macos-appintents]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fail the workflow unless every job succeeded or was skipped
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          RECORD_ONLY: ${{ inputs.record_only }}
+          NAS: ${{ needs.nas-safety.result }}
+          LINUX: ${{ needs.linux-core.result }}
+          WINDOWS_CORE: ${{ needs.windows-core.result }}
+          WINDOWS_INSTALLER: ${{ needs.windows-installer.result }}
+          MACOS_TEST: ${{ needs.macos-test.result }}
+          MACOS_RELEASE: ${{ needs.macos-release.result }}
+          MACOS_INTENTS: ${{ needs.macos-appintents.result }}
+        run: >-
+          bash scripts/ci_require_jobs.sh
+          "nas-safety:$NAS"
+          "linux-core:$LINUX"
+          "windows-core:$WINDOWS_CORE"
+          "windows-installer:$WINDOWS_INSTALLER"
+          "macos-test:$MACOS_TEST"
+          "macos-release:$MACOS_RELEASE"
+          "macos-appintents:$MACOS_INTENTS"

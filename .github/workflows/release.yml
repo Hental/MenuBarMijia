@@ -93,7 +93,7 @@ jobs:
         run: xcodebuild -version && swift --version
 
       - name: Install ripgrep
-        run: command -v rg >/dev/null || brew install ripgrep
+        run: bash scripts/install_ripgrep.sh
 
       - name: Require a pinned macOS signing certificate
         env:
