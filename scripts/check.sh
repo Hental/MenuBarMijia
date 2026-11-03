@@ -180,6 +180,23 @@ PY
     bash scripts/test_check_release.sh
 fi
 
+large_files=""
+for dir in Sources Tests windows/src windows/src-tauri/src; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' file; do
+        lines=$(wc -l < "$file" | tr -d '[:space:]')
+        if [ "$lines" -gt 1500 ]; then
+            large_files="${large_files}  ${lines}  ${file}"$'\n'
+        fi
+    done < <(find "$dir" -type f \( -name '*.swift' -o -name '*.ts' -o -name '*.rs' \) -print0)
+done
+if [ -n "$large_files" ]; then
+    echo "⚠️  单文件行数告警（> 1500 行；新代码优先拆分，见 #184）："
+    printf '%s' "$large_files"
+else
+    echo "✅ 没有超过 1500 行的源文件。"
+fi
+
 if [ "$LINT_ONLY" = "1" ]; then
     echo "✅ 密钥与机械性编码规范检查通过！"
     exit 0
