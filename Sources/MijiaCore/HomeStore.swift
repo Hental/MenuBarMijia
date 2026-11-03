@@ -69,6 +69,9 @@ public final class HomeStore {
     var isHoldingReadBackEcho = false
     var readBackEchoHold: CheckedContinuation<Void, Never>?
     var readBackOwner: [String: UInt64] = [:]
+    /// Latest ticket per device. Unlike `readBackOwner`, this survives a completed newer toggle,
+    /// so an older echo retry can still tell that it has been superseded (#201 review).
+    var latestReadBackTicket: [String: UInt64] = [:]
     var nextReadBackTicket: UInt64 = 0
 
     func releaseReadBackEcho() {

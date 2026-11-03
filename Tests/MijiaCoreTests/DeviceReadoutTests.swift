@@ -174,7 +174,38 @@ struct DeviceReadoutTests {
         store.releaseReadBackEcho()
         #expect(await second?.value == true)
         #expect(store.devices[0].isActiveOn == true)
-        _ = await first?.value
+        #expect(await first?.value == true)
+        #expect(store.devices[0].isActiveOn == true)
+        #expect(store.toastNotice == nil, "The older retry must not report failure after a newer toggle confirmed")
+    }
+
+    @Test("An accepted power survives a stale snapshot during the read-back fallback lock")
+    func unavailableReadBackLocksAcceptedPower() async throws {
+        let lamp = light(on: false)
+        let provider = HoldingHomeProvider(snapshot: SynthesizedHome(
+            rooms: [RoomArea(id: "room", name: "书房", sortOrder: 0)],
+            devices: [lamp]
+        ))
+        let suite = "test.readout.fallback-lock.\(UUID().uuidString)"
+        let store = HomeStore(provider: provider, defaultsSuiteName: suite)
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await provider.holdNextExecute()
+        let toggle = store.togglePrimary(store.devices[0])
+        for _ in 0..<50 where await provider.executeStarted == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await provider.releaseExecute()
+        #expect(await toggle?.value == true)
+        #expect(store.devices[0].isActiveOn == true)
+
+        let before = store.snapshotGeneration
+        await provider.publishDevice(lamp)
+        for _ in 0..<50 where store.snapshotGeneration == before {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.snapshotGeneration != before)
         #expect(store.devices[0].isActiveOn == true)
     }
 }
@@ -215,6 +246,11 @@ private actor HoldingHomeProvider: HomeProvider {
             hold = false
             await withCheckedContinuation { gate = $0 }
         }
+    }
+
+    func publishDevice(_ device: SmartDevice) {
+        snapshot = SynthesizedHome(rooms: snapshot.rooms, devices: [device])
+        continuation?.yield(.snapshotUpdated(snapshot))
     }
 
     func refreshNow() async {}

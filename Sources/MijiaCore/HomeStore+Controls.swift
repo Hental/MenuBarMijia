@@ -146,6 +146,7 @@ extension HomeStore {
         nextReadBackTicket &+= 1
         let ticket = nextReadBackTicket
         readBackOwner[deviceId] = ticket
+        latestReadBackTicket[deviceId] = ticket
         waitingDeviceIds.insert(deviceId)
         return ticket
     }
@@ -170,6 +171,9 @@ extension HomeStore {
             return .unmatched
         case .unavailable:
             applyConfirmedPower(from: requested, deviceId: deviceId)
+            // HA rebuilds the whole home on every state_changed event, so an unrelated sensor
+            // update could restore the old power before the device's own update arrives.
+            lockOptimistic(deviceId, duration: .seconds(2.0))
             return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
         case .published:
             guard snapshotGeneration != before else { return .unmatched }
@@ -184,7 +188,7 @@ extension HomeStore {
             } else {
                 try? await Task.sleep(for: readBackEchoDelay)
             }
-            if readBackOwner[deviceId] != nil { return .superseded }
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
             let second = await provider.readBack(deviceId: deviceId)
             if case .failed = second { return .unmatched }
             await settleSnapshot(after: again)

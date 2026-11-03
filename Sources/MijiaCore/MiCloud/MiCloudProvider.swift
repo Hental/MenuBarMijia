@@ -20,6 +20,9 @@ public actor MiCloudProvider: HomeProvider {
     private let selectedHomeLoader: @Sendable () -> String?
 
     private var continuation: AsyncStream<HomeProviderEvent>.Continuation?
+    /// Whether the last status sent to the store was `.connected`; a transient read failure
+    /// reports a disconnect that the next successful poll must clear (#201 review).
+    private var lastReportedConnected = false
     private var loopTask: Task<Void, Never>?
     private var api: (any MiCloudAPI)?
     private var pendingCameraReleases: [String: Task<Void, Never>] = [:]
@@ -94,7 +97,7 @@ public actor MiCloudProvider: HomeProvider {
         do {
             try await discover(api)
             try await poll(api, dids: nil)
-            continuation?.yield(.statusChanged(.connected))
+            reportConnected()
         } catch {
             report(error)
         }
@@ -117,17 +120,19 @@ public actor MiCloudProvider: HomeProvider {
 
         while !Task.isCancelled {
             continuation?.yield(.statusChanged(.connecting))
+            lastReportedConnected = false
             do {
                 try await discover(api)
                 // Connected means a poll just succeeded. Marking it earlier shows the previous
                 // snapshot as live while the cloud is still catching up.
                 try await poll(api, dids: nil)
-                continuation?.yield(.statusChanged(.connected))
+                reportConnected()
                 backoff = 2
                 var polls = 1
                 while !Task.isCancelled {
                     try await waitForNextPoll()
                     try await poll(api, dids: nil)
+                    reportConnected()
                     polls += 1
                     if polls % deviceRefreshEveryPolls == 0 {
                         try await refreshDeviceList(api)
@@ -208,7 +213,15 @@ public actor MiCloudProvider: HomeProvider {
     private func report(_ error: any Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         logger.error("Mi cloud error: \(message, privacy: .public)")
+        lastReportedConnected = false
         continuation?.yield(.statusChanged(.disconnected(message)))
+    }
+
+    /// Clears a disconnect reported by a failed poll after the cloud answers again.
+    private func reportConnected() {
+        guard !lastReportedConnected else { return }
+        lastReportedConnected = true
+        continuation?.yield(.statusChanged(.connected))
     }
 
     // MARK: Discovery & Polling
@@ -435,16 +448,21 @@ public actor MiCloudProvider: HomeProvider {
         }
 
         let delay = followUpDelay
+        // Split cards address `100.s2`; property reads are keyed by the parent `100`.
+        let followUpDid = record.miotDid
         Task {
             try? await Task.sleep(for: delay)
-            await self.followUpPoll(did: did)
+            await self.followUpPoll(did: followUpDid)
         }
     }
 
     public func readBack(deviceId: String) async -> ControlReadBack {
         guard let api else { return .failed }
+        // Split wall-switch cards report `100.s2` while property reads are keyed by `100`.
+        let did = devices.first { $0.did == deviceId }?.miotDid ?? deviceId
         do {
-            try await poll(api, dids: [deviceId])
+            try await poll(api, dids: [did])
+            reportConnected()
             return .published
         } catch {
             report(error)

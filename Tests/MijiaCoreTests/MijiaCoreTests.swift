@@ -281,6 +281,10 @@ struct MijiaCoreTests {
         for _ in 0..<50 where store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn != false {
             try await Task.sleep(for: .milliseconds(10))
         }
+        // A tap during the older read-back sends nothing; wait for the owner to clear first.
+        for _ in 0..<50 where !store.waitingDeviceIds.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn == false)
 
         // 2. Focus movement & Space/Enter toggle
