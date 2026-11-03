@@ -70,6 +70,7 @@ import {
   type DeviceIntent,
   type ScheduledCommand,
   deviceReadout,
+  readMiotPower,
   deviceStatusSummary,
   type SmartDevice,
 } from "../src/core/models.js";
@@ -3400,5 +3401,14 @@ describe("device readout", () => {
     assert.equal(deviceReadout(true, false), "waiting");
     assert.equal(deviceReadout(false, true), "possiblyStale");
     assert.equal(deviceReadout(true, true), "waiting");
+  });
+
+  it("accepts a MIoT power bool or 0/1 and rejects anything else", () => {
+    assert.equal(readMiotPower(true), true);
+    assert.equal(readMiotPower(false), false);
+    assert.equal(readMiotPower(1), true);
+    assert.equal(readMiotPower(0), false);
+    assert.equal(readMiotPower(2), null);
+    assert.equal(readMiotPower("1"), null);
   });
 });

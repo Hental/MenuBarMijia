@@ -40,6 +40,9 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
   const values = new Map<number, unknown>([[1, true], [2, 50], [3, 4100]]);
   const writes: Array<{ piid: number; value: unknown; accepted: boolean }> = [];
   const rejectedValues = new Map<number, unknown>([[2, 80]]);
+  let echoPowerReads = false;
+  let numericPowerReads = false;
+  const echoedPower = new Map(values);
   let completedReads = 0;
   let failGets = 0;
   let writeGate: {
@@ -110,7 +113,10 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
         }
         assert.ok("did" in entry && typeof entry.did === "string");
         const props = deviceRecords.find((record) => record.did === entry.did)?.model === sensorModel ? sensorValues : sourceValues;
-        return { did: entry.did, siid: 2, piid, code: 0, value: props.get(piid) };
+        let value = props.get(piid);
+        if (piid === 1 && echoPowerReads) value = echoedPower.get(1);
+        if (piid === 1 && numericPowerReads && typeof value === "boolean") value = value ? 1 : 0;
+        return { did: entry.did, siid: 2, piid, code: 0, value };
       });
       completedReads += 1;
       completedGate?.resolveFinished();
@@ -137,6 +143,17 @@ export function cloudFixture(intents: readonly DeviceIntent[]) {
     /** Captures the next property read's values, then waits until the test releases the response. */
     failNextGets: (count = 1) => {
       failGets = count;
+    },
+    setEchoPowerReads: (enabled: boolean) => {
+      echoPowerReads = enabled;
+    },
+    setNumericPowerReads: (enabled: boolean) => {
+      numericPowerReads = enabled;
+    },
+    enableHabitLearning: () => {
+      const raw = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as Record<string, unknown>;
+      raw.habitLearningEnabled = true;
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify(raw));
     },
     holdNextWrite: () => {
       let release!: () => void;

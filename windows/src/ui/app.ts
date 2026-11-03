@@ -82,6 +82,7 @@ import {
   deviceCanTogglePower,
   deviceEnvironmentReading,
   deviceReadout,
+  readMiotPower,
   deviceStatusSummary,
   environmentReadingPriority,
   isDeviceActiveOn,
@@ -1482,12 +1483,14 @@ export class MenuMijiaWindowsApp {
             : new Map<string, unknown>();
       } catch (error) {
         // A failed property read must not rebuild every device from defaults.
-        if (this.devices.length > 0) this.cloudValuesStale = true;
+        if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
+          this.cloudValuesStale = true;
+        }
         throw error;
       }
 
       const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
-      this.cloudValuesStale = false;
+      if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
       // Cloud list order is not a layout preference. Keep known devices in their
       // displayed order, use fresh values, drop removed ids and append new ones.
@@ -1525,7 +1528,9 @@ export class MenuMijiaWindowsApp {
         };
       }
     } catch (err) {
-      if (this.devices.length > 0) this.cloudValuesStale = true;
+      if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
+        this.cloudValuesStale = true;
+      }
       if (!silent) {
         const msg = err instanceof Error ? err.message : String(err);
         this.replyBanner = {
@@ -2250,6 +2255,11 @@ export class MenuMijiaWindowsApp {
     const inverseCommands = this.buildInverseCommand(device, command);
     if (!(await this.applyCommand(command, readBackPower))) return;
     if (sourceRevision !== this.sourceRevision) return;
+    if (readBackPower && !this.readBackMatches(device.id, intent)) {
+      this.replyBanner = { text: t("未能读回设备状态"), source: t("控制失败"), isError: true };
+      this.render();
+      return;
+    }
     this.grokBallCelebrationUntil = Date.now() + 2400;
     const habitReceipt = intent ? this.recordHabits([intent]) : null;
     this.lastUndoAction = inverseCommands.length > 0 ? {
@@ -2260,6 +2270,12 @@ export class MenuMijiaWindowsApp {
     } : null;
     this.replyBanner = { text: summary, source: t("实时控制") };
     this.render();
+  }
+
+  private readBackMatches(deviceId: string, intent?: DeviceIntent): boolean {
+    if (!intent || intent.operation.kind !== "power") return true;
+    const current = this.devices.find((item) => item.id === deviceId);
+    return current !== undefined && isDeviceActiveOn(current) === intent.operation.isOn;
   }
 
   /** Records manual card actions into the habit memory for the current time bucket (#113). */
@@ -2793,8 +2809,9 @@ export class MenuMijiaWindowsApp {
         if (power) {
           const read = await client.getProps([power]);
           const value = read.get(propKeyString(power));
-          if (typeof value !== "boolean") throw new Error(t("未能读回设备状态"));
-          return value;
+          const isOn = readMiotPower(value);
+          if (isOn === null) throw new Error(t("未能读回设备状态"));
+          return isOn;
         }
       }
     } else {
@@ -2804,9 +2821,13 @@ export class MenuMijiaWindowsApp {
   }
 
   private get valuesAreStale(): boolean {
-    if (this.settings.connectionMode === "demo") return false;
-    if (this.haConnectionError && this.devices.length > 0) return true;
-    return this.cloudValuesStale && this.devices.length > 0;
+    if (this.settings.connectionMode === "xiaomiCloud") {
+      return this.cloudValuesStale && this.devices.length > 0;
+    }
+    if (this.settings.connectionMode === "homeAssistant") {
+      return this.haConnectionError !== null && this.devices.length > 0;
+    }
+    return false;
   }
 
   private toggleVoiceInput(): void {
@@ -6025,6 +6046,7 @@ export class MenuMijiaWindowsApp {
         this.homes = [];
         this.replyBanner = null;
         this.settings.connectionMode = mode;
+        if (mode !== "xiaomiCloud") this.cloudValuesStale = false;
         this.selectedRoom = "全部";
         if (mode === "demo") {
           this.devices = demoDevices();

@@ -62,6 +62,20 @@ public final class HomeStore {
     public internal(set) var deviceValuesAreStale = false
     /// Bumped on every snapshot so a toggle can tell a read-back from the row it already had.
     var snapshotGeneration: UInt64 = 0
+    /// How long to wait before a second property poll when the first read still shows the old power.
+    var readBackEchoDelay: Duration = .milliseconds(800)
+    /// Test latch: the echo retry waits until `releaseReadBackEcho` instead of sleeping.
+    var holdReadBackEcho = false
+    var isHoldingReadBackEcho = false
+    var readBackEchoHold: CheckedContinuation<Void, Never>?
+    var readBackOwner: [String: UInt64] = [:]
+    var nextReadBackTicket: UInt64 = 0
+
+    func releaseReadBackEcho() {
+        isHoldingReadBackEcho = false
+        readBackEchoHold?.resume()
+        readBackEchoHold = nil
+    }
 
     public var selectedRoomId: String? = nil // nil = 全部 / 常用
     public var expandedDeviceId: String? = nil

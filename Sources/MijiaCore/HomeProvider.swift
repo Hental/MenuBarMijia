@@ -74,6 +74,7 @@ public protocol HomeProvider: Sendable {
     func resolveCameraStream(for device: SmartDevice, quality: XiaomiCameraStreamQuality) async throws -> CameraStreamSource
     /// Releases any active live stream session (such as a single-session P2P bridge) for a camera device.
     func stopCameraStream(for device: SmartDevice) async
+    func readBack(deviceId: String) async -> ControlReadBack
 }
 
 extension HomeProvider {

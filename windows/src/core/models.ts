@@ -538,6 +538,13 @@ export function deviceReadout(isWaiting: boolean, valuesAreStale: boolean): Devi
   return "live";
 }
 
+/** MIoT `on` is a bool on some devices and 0/1 on others. Anything else is not a power reading. */
+export function readMiotPower(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+  return null;
+}
+
 export function deviceStatusSummary(device: SmartDevice): string {
   if (!device.isOnline) return t("离线");
   const k = device.kind;

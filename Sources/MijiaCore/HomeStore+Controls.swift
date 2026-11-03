@@ -105,29 +105,29 @@ extension HomeStore {
             }
         }
 
-        guard !waitingDeviceIds.contains(device.id) else { return nil }
-        waitingDeviceIds.insert(device.id)
+        guard let ticket = self.claimReadBack(device.id) else { return nil }
 
         return Task {
-            defer { self.waitingDeviceIds.remove(device.id) }
+            defer { self.finishReadBack(device.id, ticket: ticket) }
             do {
                 try await self.executeDeviceCommand(cmd)
-                let confirmed = await self.confirmToggleReadBack(deviceId: device.id, requested: updated)
-                guard confirmed else {
+                switch await self.confirmToggleReadBack(deviceId: device.id, requested: updated, ticket: ticket) {
+                case .matched:
+                    let shown = self.devices.first(where: { $0.id == device.id }) ?? updated
+                    self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
+                    if case .light = shown.kind, shown.isActiveOn {
+                        self.recordManualLightUse(device.id)
+                    }
+                    return true
+                case .unmatched:
                     self.showToast(
                         L10n.tr("\(device.name) 未能读回状态", "\(device.name) state was not read back"),
                         isError: true
                     )
                     return false
+                case .superseded:
+                    return true
                 }
-                let shown = self.devices.first(where: { $0.id == device.id }) ?? updated
-                if shown.isActiveOn == updated.isActiveOn {
-                    self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
-                    if case .light = shown.kind, shown.isActiveOn {
-                        self.recordManualLightUse(device.id)
-                    }
-                }
-                return true
             } catch {
                 self.showToast(L10n.tr("\(device.name) 响应失败", "\(device.name) failed to respond"), isError: true)
                 return false
@@ -135,32 +135,70 @@ extension HomeStore {
         }
     }
 
+    private enum ReadBackConfirm {
+        case matched
+        case unmatched
+        case superseded
+    }
+
+    private func claimReadBack(_ deviceId: String) -> UInt64? {
+        guard readBackOwner[deviceId] == nil else { return nil }
+        nextReadBackTicket &+= 1
+        let ticket = nextReadBackTicket
+        readBackOwner[deviceId] = ticket
+        waitingDeviceIds.insert(deviceId)
+        return ticket
+    }
+
+    private func finishReadBack(_ deviceId: String, ticket: UInt64) {
+        guard readBackOwner[deviceId] == ticket else { return }
+        readBackOwner[deviceId] = nil
+        waitingDeviceIds.remove(deviceId)
+    }
+
     /// Applies a provider snapshot when one was published. Providers with no property read
-    /// keep the accepted command. A published read that still shows the old power is polled
-    /// once more, because a device often reports the previous value immediately after a write.
-    private func confirmToggleReadBack(deviceId: String, requested: SmartDevice) async -> Bool {
+    /// keep the accepted power and leave every other field on the current row. A published
+    /// read that still shows the old power is polled once more, because a device often
+    /// reports the previous value immediately after a write. That second wait releases the
+    /// tap so a newer toggle, such as the next keyboard press, is not discarded.
+    private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64) async -> ReadBackConfirm {
         let before = snapshotGeneration
         let read = await provider.readBack(deviceId: deviceId)
         await settleSnapshot(after: before)
         switch read {
         case .failed:
-            return false
+            return .unmatched
         case .unavailable:
-            if let idx = devices.firstIndex(where: { $0.id == deviceId }) {
-                devices[idx] = requested
-            }
-            return true
+            applyConfirmedPower(from: requested, deviceId: deviceId)
+            return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
         case .published:
-            guard snapshotGeneration != before else { return false }
-            if let current = devices.first(where: { $0.id == deviceId }), current.isActiveOn != requested.isActiveOn {
-                let again = snapshotGeneration
-                try? await Task.sleep(for: .milliseconds(800))
-                let second = await provider.readBack(deviceId: deviceId)
-                if case .failed = second { return false }
-                await settleSnapshot(after: again)
+            guard snapshotGeneration != before else { return .unmatched }
+            if powerMatches(deviceId, requested: requested) { return .matched }
+            finishReadBack(deviceId, ticket: ticket)
+            let again = snapshotGeneration
+            if holdReadBackEcho {
+                isHoldingReadBackEcho = true
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    self.readBackEchoHold = cont
+                }
+            } else {
+                try? await Task.sleep(for: readBackEchoDelay)
             }
-            return snapshotGeneration != before
+            if readBackOwner[deviceId] != nil { return .superseded }
+            let second = await provider.readBack(deviceId: deviceId)
+            if case .failed = second { return .unmatched }
+            await settleSnapshot(after: again)
+            return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
         }
+    }
+
+    private func powerMatches(_ deviceId: String, requested: SmartDevice) -> Bool {
+        devices.first(where: { $0.id == deviceId })?.isActiveOn == requested.isActiveOn
+    }
+
+    private func applyConfirmedPower(from requested: SmartDevice, deviceId: String) {
+        guard let idx = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        devices[idx] = devices[idx].applyingConfirmedPower(from: requested)
     }
 
     private func settleSnapshot(after generation: UInt64) async {

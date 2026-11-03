@@ -659,6 +659,41 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.equal(saved.cachedXiaomiDevices?.[0]?.kind.isOn, true);
   });
 
+  it("accepts a numeric 0/1 power read-back", async () => {
+    const { cloud } = await readyCloudApp();
+    cloud.setNumericPowerReads(true);
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
+    assert.match(tile("fixture-light"), /已关闭/);
+  });
+
+  it("does not celebrate or learn a power tap whose read-back still shows the old value", async () => {
+    const cloud = cloudFixture([]);
+    cloud.enableHabitLearning();
+    cloud.setEchoPowerReads(true);
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => (document.querySelector('[data-body-device="fixture-light"]')?.textContent ?? "").includes("已开启"));
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => (document.body.textContent ?? "").includes("未能读回设备状态"));
+    assert.match(tile("fixture-light"), /已开启/);
+    assert.equal(localStorage.getItem("menumijia.windows.habit.sequences.v1"), null);
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      habitEntries?: unknown[];
+    };
+    assert.equal(saved.habitEntries?.length ?? 0, 0);
+  });
+
+  it("clears a Xiaomi stale mark when the connection mode changes", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp();
+    cloud.failNextGets(1);
+    triggerRefresh();
+    await waitFor(() => tile("fixture-light").includes("可能过期"));
+    await click("#btn-settings");
+    await click('[data-conn-mode="demo"]');
+    await waitFor(() => !(document.body.textContent ?? "").includes("可能过期"));
+    assert.doesNotMatch(document.body.textContent ?? "", /可能过期/);
+  });
+
   it("patches dynamic values without replacing the focused device control", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp();
     const toggle = element('[data-toggle-device="fixture-light"]');
