@@ -1,5 +1,4 @@
-import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand, parseCachedHAHome } from "../core/homeAssistant.js";
-import type { SynthesizedHome } from "../core/models.js";
+import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand } from "../core/homeAssistant.js";
 import { GrokBallView } from "./grokBall.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
@@ -30,15 +29,12 @@ import {
   MI_CLOUD_REGIONS,
   MiAccountLogin,
   MiCloudClient,
-  MiCloudError,
   type MiDeviceRecord,
   type MiRoom,
   MiotCommandMapper,
   propKeyString,
   type MiotDeviceSpec,
-  type MiotPropKey,
   MiotSpecResolver,
-  MiotSynthesizer,
   type MiSession,
   type QRLoginTicket,
   maskedMiUserId,
@@ -134,9 +130,7 @@ import {
 import {
   KIND_CHIP,
   filterByListCut,
-  foldGroupedLights,
   kindChips,
-  memberGroupOwners,
   showsKindRow,
   type DeviceKindTag,
   type DeviceListCut,
@@ -154,6 +148,7 @@ import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
 import { applyGlobalHotkey, applyInterfaceLanguage, applyTemperatureSetting, bindGlobalKeys, checkForAppUpdate, hydrateCredentials, initializeCredentials, openSettingsSheet, openUpdatePage, osLanguages, persistCredentials, restoreUpdateState, saveSettings, saveUpdateState, startTimerLoop, startUpdateInstall, submitServiceEndpoints } from "./appLifecycle.js";
 import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
+import { cloudPanelStructureFingerprint, cloudPresentationFingerprint, cloudSnapshotIsStale, filterBySelectedHome, foldGrouped, patchCloudPresentation, refreshDevices, refreshHADevices, withSharedHomeDevices } from "./cloudRefresh.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
@@ -246,7 +241,7 @@ export class MenuMijiaWindowsApp {
   private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   public isResolvingIntent = false;
   public isSyncingCloud = false;
-  private syncGeneration = 0;
+  public syncGeneration = 0;
   public lastCloudRefreshAt: number | null = null;
   public localControlRevision = 0;
   public sourceRevision = 0;
@@ -432,7 +427,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Applies a background result only when it cannot clear focus or cancel a pointer gesture. */
-  private queueBackgroundRender(): void {
+  public queueBackgroundRender(): void {
     if (this.hasBlockingPanelInteraction()) {
       this.pendingCloudRender = true;
       return;
@@ -450,17 +445,15 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Cards on screen: the list cut, plus folding member lights into a visible group card (#214). */
-  private get presentationDevices(): SmartDevice[] {
+  public get presentationDevices(): SmartDevice[] {
     return this.foldGrouped(this.filteredDevices);
   }
 
   private foldGrouped(devices: readonly SmartDevice[]): SmartDevice[] {
-    return this.settings.hideGroupedLights
-      ? foldGroupedLights(devices, this.groupOwnerByMemberDid)
-      : [...devices];
+    return foldGrouped(this, devices);
   }
 
-  private get activeDeviceCount(): number {
+  public get activeDeviceCount(): number {
     return this.devices.filter((d) => isDeviceActiveOn(d)).length;
   }
 
@@ -508,396 +501,46 @@ export class MenuMijiaWindowsApp {
    * up by did (#134). Dids the lookup cannot resolve (IR remotes, removed devices) are skipped on
    * silent refreshes so polling does not spend a request on them every time.
    */
-  private unresolvedRoomDids = new Set<string>();
+  public unresolvedRoomDids = new Set<string>();
 
   private async withSharedHomeDevices(
     client: MiCloudClient,
     listed: MiDeviceRecord[],
     rooms: MiRoom[],
-    retryUnresolved: boolean,
+    includeShared: boolean,
   ): Promise<MiDeviceRecord[]> {
-    if (retryUnresolved) this.unresolvedRoomDids.clear();
-    const listedDids = new Set(listed.map((d) => d.did));
-    const missing = [...new Set(rooms.flatMap((r) => r.dids))]
-      .filter((did) => !listedDids.has(did) && !this.unresolvedRoomDids.has(did))
-      .sort();
-    if (missing.length === 0) return listed;
-    try {
-      const extra = (await client.devicesByDids(missing)).filter((d) => !listedDids.has(d.did));
-      const found = new Set(extra.map((d) => d.did));
-      for (const did of missing) if (!found.has(did)) this.unresolvedRoomDids.add(did);
-      return [...listed, ...extra];
-    } catch (err) {
-      if (err instanceof MiCloudError && err.kind === "sessionExpired") throw err;
-      return listed;
-    }
+    return withSharedHomeDevices(this, client, listed, rooms, includeShared);
   }
 
   public async refreshDevices(silent = false): Promise<void> {
-    if (this.settings.connectionMode === "homeAssistant") return this.refreshHADevices(silent);
-    if (!this.settings.miSession || this.settings.connectionMode !== "xiaomiCloud" || this.isSyncingCloud) return;
-    const session = this.settings.miSession;
-    const previousPresentation = this.cloudPresentationFingerprint();
-    const previousStructure = this.cloudPanelStructureFingerprint();
-    const staleBefore = this.cloudValuesStale;
-    const stateRevisionAtStart = this.localControlRevision;
-    const syncGen = ++this.syncGeneration;
-    let presentationChanged = false;
-    this.isSyncingCloud = true;
-    this.lastCloudRefreshAt = Date.now();
-    if (!silent) {
-      this.render();
-    }
-
-    try {
-      const client = new MiCloudClient(session, this.transport);
-      const [listedDevices, allRooms] = await Promise.all([
-        client.deviceList(),
-        client.homeRooms().catch(() => []),
-      ]);
-      const allDevices = await this.withSharedHomeDevices(client, listedDevices, allRooms, !silent);
-      const nextHomes = homeOptions(allRooms);
-      if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
-      this.homes = applyOrder(this.homes.map((home) => home.id), nextHomes);
-      const { devices: rawDevices, rooms } = this.filterBySelectedHome(allDevices, allRooms);
-      const groupDids = rawDevices.map((device) => device.did).filter((did) => did.startsWith("group."));
-      const membershipByGroup = groupDids.length > 0
-        ? client.lightGroupMembers(groupDids).catch(() => new Map<string, string[]>())
-        : Promise.resolve(new Map<string, string[]>());
-
-      // Stage 1: Instant synthesis with cached/fallback specs so user sees their real devices immediately
-      const stage1Specs = this.specResolver.exportCachedSpecs();
-      const stage1Home = MiotSynthesizer.synthesize(
-        rawDevices,
-        rooms,
-        stage1Specs,
-        new Map<string, unknown>(),
-      );
-      if (stage1Home.devices.length > 0 && this.devices.length === 0) {
-        this.devices = stage1Home.devices;
-        presentationChanged = true;
-        this.render();
-      }
-
-      // Stage 2: Resolve exact MIoT specs + fetch live device properties
-      const specs = await this.specResolver.resolveForDevices(rawDevices);
-      const propKeys: MiotPropKey[] = [];
-      for (const dev of rawDevices) {
-        const spec = specs[dev.model];
-        if (spec) {
-          propKeys.push(...MiotSynthesizer.requiredProps(dev, spec));
-        }
-      }
-
-      let values: Map<string, unknown>;
-      try {
-        values =
-          propKeys.length > 0
-            ? await client.getProps(propKeys)
-            : new Map<string, unknown>();
-      } catch (error) {
-        // A failed property read must not rebuild every device from defaults.
-        if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
-          this.markCloudValuesStale();
-        }
-        throw error;
-      }
-
-      const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
-      const membersByGroup = await membershipByGroup;
-      // An old refresh must not clear or set freshness for the connection that replaced it.
-      if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
-      this.markCloudValuesFresh();
-      this.groupOwnerByMemberDid = memberGroupOwners(membersByGroup);
-      // Cloud list order is not a layout preference. Keep known devices in their
-      // displayed order, use fresh values, drop removed ids and append new ones.
-      this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
-      const readingPriorityById = new Map(
-        home.devices.map((device) => [device.id, environmentReadingPriority(device.kind)]),
-      );
-      this.environmentReadings = applyOrder(
-        this.environmentReadings.map((reading) => reading.id),
-        home.environmentReadings,
-      ).sort(
-        (a, b) => (readingPriorityById.get(a.id) ?? 0) - (readingPriorityById.get(b.id) ?? 0),
-      );
-      presentationChanged =
-        presentationChanged || this.cloudPresentationFingerprint() !== previousPresentation;
-
-      this.settings.cachedXiaomiDevices = this.devices;
-      const knownModelTypes = this.specResolver.exportKnownModelTypes(
-        rawDevices.map((d) => d.model),
-      );
-      const cacheChanged =
-        JSON.stringify(knownModelTypes) !== JSON.stringify(this.settings.cachedModelTypes);
-      this.settings.cachedModelTypes = knownModelTypes;
-      if (presentationChanged || cacheChanged) {
-        this.saveSettings();
-      }
-
-      if (!silent) {
-        this.replyBanner = {
-          text:
-            home.devices.length > 0
-              ? t("已同步 {count} 台真实米家设备", { count: home.devices.length })
-              : t("当前小米账号下暂未发现米家设备"),
-          source: t("米家云直连"),
-        };
-      }
-    } catch (err) {
-      if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
-        this.markCloudValuesStale();
-      }
-      if (!silent) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.replyBanner = {
-          text: t("米家云同步失败：{message}", { message: msg }),
-          source: t("连接异常"),
-          isError: true,
-        };
-      }
-    } finally {
-      if (this.syncGeneration === syncGen) {
-        this.isSyncingCloud = false;
-        const staleChanged = staleBefore !== this.cloudValuesStale;
-        if (!silent || staleChanged) {
-          this.render();
-        } else if (presentationChanged) {
-          if (
-            this.cloudPanelStructureFingerprint() !== previousStructure ||
-            !this.patchCloudPresentation()
-          ) {
-            this.queueBackgroundRender();
-          }
-        }
-      }
-    }
+    return refreshDevices(this, silent);
   }
 
   public async refreshHADevices(silent = false): Promise<void> {
-    if (this.settings.connectionMode !== "homeAssistant" || this.isSyncingCloud) return;
-    const endpoint = this.settings.haBaseURL;
-    const token = this.settings.haToken;
-    const revision = this.localControlRevision;
-    const syncGen = ++this.syncGeneration;
-    const previousPresentation = this.cloudPresentationFingerprint();
-    const previousStructure = this.cloudPanelStructureFingerprint();
-    let failed = false;
-    let shouldUpdateView = false;
-    this.isSyncingCloud = true;
-    this.lastCloudRefreshAt = Date.now();
-    if (!silent && this.devices.length === 0) this.render();
-    try {
-      await this.endpointSubmission;
-      const home = await new HomeAssistantClient(endpoint, token).snapshot();
-      const identity = homeAssistantIdentity(endpoint, token);
-      if (!identity) throw new Error("Invalid Home Assistant URL");
-      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
-      this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
-      this.scenes = home.scenes;
-      const readingPriorityById = new Map(
-        home.devices.map((device) => [device.id, environmentReadingPriority(device.kind)]),
-      );
-      this.environmentReadings = applyOrder(
-        this.environmentReadings.map((reading) => reading.id),
-        home.environmentReadings,
-      ).sort(
-        (a, b) => (readingPriorityById.get(a.id) ?? 0) - (readingPriorityById.get(b.id) ?? 0),
-      );
-      const hadValidCache = this.settings.cachedHAHome?.identity === identity;
-      const presentationChanged =
-        this.cloudPresentationFingerprint() !== previousPresentation || this.haConnectionError !== null;
-      this.settings.cachedHAHome = {identity,home:{...home,devices:this.devices,environmentReadings:this.environmentReadings}};
-      if (this.haConnectionError !== null) failed = true;
-      this.haConnectionError = null;
-      if (presentationChanged || !hadValidCache) this.saveSettings();
-      shouldUpdateView = !silent || presentationChanged;
-    } catch (error) {
-      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
-      failed = true;
-      shouldUpdateView = true;
-      this.haConnectionError = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (this.syncGeneration === syncGen) {
-        this.isSyncingCloud = false;
-        if (shouldUpdateView) {
-          if (failed || this.devices.length === 0 || this.cloudPanelStructureFingerprint() !== previousStructure || !this.patchCloudPresentation()) this.queueBackgroundRender();
-        }
-      }
-    }
+    return refreshHADevices(this, silent);
   }
 
-  /** Cloud state that affects the rendered panel; polling a matching snapshot is a visual no-op. */
   private cloudPresentationFingerprint(): string {
-    return JSON.stringify({
-      homes: this.homes,
-      devices: this.devices,
-      scenes: this.scenes,
-      environmentReadings: this.environmentReadings,
-      groupOwners: [...this.groupOwnerByMemberDid],
-    });
+    return cloudPresentationFingerprint(this);
   }
 
   private cloudSnapshotIsStale(session: MiSession, revision: number): boolean {
-    return (
-      this.settings.connectionMode !== "xiaomiCloud" ||
-      this.settings.miSession !== session ||
-      this.localControlRevision !== revision
-    );
+    return cloudSnapshotIsStale(this, session, revision);
   }
 
   private cloudPanelStructureFingerprint(): string {
-    const kindChipsForPanel = kindChips(
-      this.devices,
-      this.listCut,
-      this.settings.hideOfflineDevices,
-    );
-    return JSON.stringify({
-      homes: this.homes,
-      scenes: this.scenes,
-      kindChips: kindChipsForPanel,
-      kindRowVisible: showsKindRow(kindChipsForPanel, this.listCut),
-      groupOwners: [...this.groupOwnerByMemberDid],
-      allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
-      devices: this.devices.map((device) => {
-        const kind = device.kind;
-        const capabilities =
-          kind.kind === "light"
-            ? [kind.availableEffects, kind.minKelvin, kind.maxKelvin]
-            : kind.kind === "climate"
-              ? [kind.availableModes, kind.availableFanModes, kind.minTemp, kind.maxTemp, kind.step]
-              : kind.kind === "fan"
-                ? [kind.availablePresetModes]
-                : kind.kind === "vacuum"
-                  ? [kind.availableModes]
-                  : kind.kind === "camera"
-                    ? [kind.availableNightShots, kind.motionDetectionEntityId]
-                    : [];
-        return {
-          id: device.id,
-          name: device.name,
-          roomId: device.roomId,
-          roomName: device.roomName,
-          model: device.model,
-          category: kind.kind,
-          capabilities,
-          sensorShape:
-            kind.kind === "sensor"
-              ? [kind.temperature !== null, kind.humidity !== null, kind.battery !== null]
-              : null,
-        };
-      }),
-    });
+    return cloudPanelStructureFingerprint(this);
   }
 
   private patchCloudPresentation(): boolean {
-    if (
-      this.isEditingLayout ||
-      this.activeSheet !== "none" ||
-      this.pointerIsDown ||
-      this.draggingId !== null
-    ) {
-      return false;
-    }
-
-    const isAll = this.selectedRoom === "全部";
-    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.presentationDevices));
-    const sections = pageSections(this.layout, ordered, isAll);
-    const desiredHeaders = sections.filter((section) => section.title !== null);
-    const domHeaders = Array.from(this.root.querySelectorAll<HTMLElement>(".cc-group-header"));
-    if (domHeaders.length !== desiredHeaders.length) return false;
-    for (const section of desiredHeaders) {
-      const header = domHeaders.find((element) => element.dataset.collapse === section.id);
-      const count = header?.querySelector(".cc-group-count")?.textContent ?? "";
-      if (!header || count !== String(section.devices.length)) return false;
-    }
-    const bento = this.skin === "bento" && this.settings.isCompactGridMode;
-    const tilePatches: Array<{ current: HTMLElement; desired: Element }> = [];
-    const unmatchedTileIds = new Set(
-      Array.from(this.root.querySelectorAll<HTMLElement>("[data-tile-id]"), (element) => element.dataset.tileId ?? ""),
-    );
-    let index = 0;
-    for (const section of sections) {
-      if (this.layout.collapsed.includes(scopedKey(this.pageKey, section.id))) continue;
-      const spanMap = spans(
-        section.devices,
-        (device) => (this.expandedDeviceId === device.id ? "full" : this.tileSize(device)),
-        bento,
-      );
-      for (const device of section.devices) {
-        unmatchedTileIds.delete(device.id);
-        const current = Array.from(
-          this.root.querySelectorAll<HTMLElement>("[data-tile-id]"),
-        ).find((element) => element.dataset.tileId === device.id);
-        const desired = parseSingleElement(
-          this.renderDeviceTile(device, spanMap.get(device.id) ?? 6, index++),
-        );
-        if (!current || !desired || !hasMatchingDomShape(current, desired)) return false;
-        tilePatches.push({ current, desired });
-      }
-    }
-    if (unmatchedTileIds.size > 0) return false;
-    for (const patch of tilePatches) morphMatchingDom(patch.current, patch.desired);
-    if (this.settings.connectionMode === "homeAssistant") {
-      const current = this.root.querySelector<HTMLElement>("#btn-all-off");
-      const desired = parseSingleElement(this.renderAllOffControl());
-      if (current && desired) {
-        morphMatchingDom(current, desired);
-      } else if (current) {
-        current.remove();
-      } else if (desired) {
-        this.root.querySelector("#btn-hide-panel")?.before(desired);
-        this.bindAllOffControl();
-      }
-    }
-
-    const envHTML = this.renderEnvironmentStrip();
-    const currentEnv = this.root.querySelector<HTMLElement>(".cc-env-strip");
-    if (currentEnv) {
-      const desiredEnv = parseSingleElement(envHTML);
-      if (!desiredEnv) {
-        currentEnv.remove();
-      } else if (hasMatchingDomShape(currentEnv, desiredEnv)) {
-        morphMatchingDom(currentEnv, desiredEnv);
-      } else {
-        currentEnv.replaceWith(desiredEnv);
-      }
-    } else if (envHTML) {
-      this.root.querySelector(".cc-header-top")?.insertAdjacentHTML("afterend", envHTML);
-    }
-
-    const subtitle = this.root.querySelector<HTMLElement>(".cc-subtitle");
-    if (subtitle) subtitle.textContent = this.statusSummaryText;
-    this.root
-      .querySelector<HTMLElement>(".cc-home-badge")
-      ?.classList.toggle("is-active", this.activeDeviceCount > 0);
-    const footerLabel = this.root.querySelector<HTMLElement>(".cc-footer-label");
-    if (footerLabel) {
-      footerLabel.textContent =
-        this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession
-          ? t("米家账号 {user} · {count} 台设备", {
-              user: maskedMiUserId(this.settings.miSession.userId),
-              count: this.devices.length,
-            })
-          : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云");
-    }
-    this.syncGrokBallEmotion();
-    return true;
+    return patchCloudPresentation(this);
   }
 
-  /** Narrows cloud records and rooms to the selected Mi Home; split keys bring their parent panel along. */
   private filterBySelectedHome<D extends { readonly did: string; readonly splitParentDid?: string | null }, R extends { readonly homeId?: string; readonly dids: readonly string[] }>(
     devices: readonly D[],
     rooms: readonly R[],
   ): { devices: D[]; rooms: R[] } {
-    const selected = this.settings.selectedHomeId;
-    if (!selected || !this.homes.some((h) => h.id === selected)) return { devices: [...devices], rooms: [...rooms] };
-    const homeRooms = rooms.filter((r) => r.homeId === selected);
-    const dids = new Set(homeRooms.flatMap((r) => r.dids));
-    const kept = devices.filter((d) => dids.has(d.did) || (d.splitParentDid ? dids.has(d.splitParentDid) : false));
-    const parents = new Set(kept.map((d) => d.splitParentDid).filter((x): x is string => !!x));
-    const withParents = devices.filter((d) => kept.includes(d) || parents.has(d.did));
-    return { devices: withParents, rooms: homeRooms };
+    return filterBySelectedHome(this, devices, rooms);
   }
 
   public selectHome(id: string | null): void {
@@ -923,7 +566,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Devices 全关 would switch off: on screen (current room), on, and taking part (#23). */
-  private get allOffTargets(): SmartDevice[] {
+  public get allOffTargets(): SmartDevice[] {
     return allOffTargets(this.filteredDevices, this.settings.allOffOverrides);
   }
 
@@ -1562,13 +1205,13 @@ export class MenuMijiaWindowsApp {
     return null;
   }
 
-  private markCloudValuesStale(): void {
+  public markCloudValuesStale(): void {
     if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
       this.cloudValuesStale = true;
     }
   }
 
-  private markCloudValuesFresh(): void {
+  public markCloudValuesFresh(): void {
     if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
   }
 
@@ -1910,7 +1553,7 @@ export class MenuMijiaWindowsApp {
       .join("");
   }
 
-  private renderDeviceTile(dev: SmartDevice, span: number, index: number): string {
+  public renderDeviceTile(dev: SmartDevice, span: number, index: number): string {
     return renderDeviceTileView(dev, {
       span,
       index,
