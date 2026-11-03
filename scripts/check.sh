@@ -157,7 +157,12 @@ if [ "$LINT_ONLY" = "1" ]; then
 fi
 
 swift_status=0
-if [ "$SKIP_SNAPSHOTS" = "1" ]; then
+if [ "$(uname -s)" = "Linux" ]; then
+    # Package.swift requires the macOS SDK. CI's linux-core job runs MijiaCore through this
+    # shim; `swift test` at the repo root cannot compile Security/AppKit imports on Linux.
+    echo "🧪 [3/4] 运行 Linux 上的 MijiaCore 测试（scripts/linux-check）与双端黄金语料校验..."
+    bash scripts/linux-check/run.sh || swift_status=$?
+elif [ "$SKIP_SNAPSHOTS" = "1" ]; then
     # The local macOS renderer drifts from the CI-recorded baselines on every run, so a local gate
     # that includes SnapshotTests can never pass. CI still records and compares the baselines.
     echo "🧪 [3/4] 运行 Swift 单元测试（跳过快照）与双端黄金语料校验..."
