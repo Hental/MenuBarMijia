@@ -1997,6 +1997,26 @@ mod tests {
     }
 
     #[test]
+    fn installer_asset_payload_matches_the_windows_frontend_contract() {
+        let raw = include_str!("../../tests/fixtures/windows-installer-asset.json");
+        let payload: InstallerAssetPayload =
+            serde_json::from_str(raw).expect("the Windows frontend installer payload must deserialize");
+        assert_eq!(payload.name, "MenuBarMijia-9.9.9-windows-x64-setup.exe");
+        assert_eq!(
+            payload.download_url,
+            "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe"
+        );
+        assert_eq!(payload.size_bytes, 3_145_728);
+        let expected_sha = "b".repeat(64);
+        assert_eq!(payload.sha256.as_deref(), Some(expected_sha.as_str()));
+        assert_eq!(payload.checksum_url, None);
+        assert_eq!(
+            payload.signature_url,
+            "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe.ed25519.sig"
+        );
+    }
+
+    #[test]
     fn only_opens_menu_barmijia_release_pages() {
         assert!(validated_release_url(RELEASE_PAGE_URL).is_ok());
         assert!(validated_release_url(
