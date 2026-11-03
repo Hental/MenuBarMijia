@@ -7,7 +7,7 @@ import { setImmediate } from "node:timers/promises";
 import { Window } from "happy-dom";
 
 import { installWindow } from "./dom.js";
-import { MenuMijiaWindowsApp } from "../src/ui/app.js";
+import { MenuMijiaWindowsApp, waitForCameraFrameGap } from "../src/ui/app.js";
 import { SKINS } from "../src/ui/panelPrefs.js";
 import { cloudFixture } from "./cloudFixture.js";
 import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
@@ -1670,6 +1670,26 @@ describe("Smart camera support and live view (#97)", () => {
       "data:image/jpeg;base64,aGVsbG8",
     );
     assert.equal(bridgedOwnedGo2rtc, false);
+  });
+
+  it("drops the frame-gap abort listener when the timer fires", async () => {
+    const controller = new AbortController();
+    let listeners = 0;
+    const add = controller.signal.addEventListener.bind(controller.signal);
+    const remove = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+      if (type === "abort") listeners += 1;
+      return add(type, listener, options);
+    }) as typeof controller.signal.addEventListener;
+    controller.signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+      if (type === "abort") listeners -= 1;
+      return remove(type, listener, options);
+    }) as typeof controller.signal.removeEventListener;
+    await waitForCameraFrameGap(controller.signal, 15);
+    await waitForCameraFrameGap(controller.signal, 15);
+    assert.equal(listeners, 0);
+    controller.abort();
+    assert.equal(listeners, 0);
   });
 
   it("does not start a bridge after the camera closes during the endpoint refresh", async () => {

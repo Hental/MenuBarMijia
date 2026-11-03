@@ -772,6 +772,19 @@ function inputKeepsDraft(input: HTMLInputElement | HTMLTextAreaElement): boolean
   );
 }
 
+export function waitForCameraFrameGap(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, ms);
+    signal.addEventListener("abort", finish);
+  });
+}
+
 export class MenuMijiaWindowsApp {
   private readonly loadedSettings: LoadedSettings = loadSettings();
   private settings: PersistedSettings = this.loadedSettings.settings;
@@ -4029,6 +4042,7 @@ export class MenuMijiaWindowsApp {
     this.liveCameraLoading = false;
     invokeTauriVoid("set_pin_popover", { pin: true });
     if (dev.kind.isOn && this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      this.liveCameraLoading = true;
       void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
     } else if (dev.kind.isOn && this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
       void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
@@ -4212,17 +4226,7 @@ export class MenuMijiaWindowsApp {
         }
         return;
       }
-      await new Promise<void>((resolve) => {
-        const timer = window.setTimeout(resolve, 200);
-        signal.addEventListener(
-          "abort",
-          () => {
-            window.clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
-      });
+      await waitForCameraFrameGap(signal, 200);
     }
   }
 
@@ -4250,6 +4254,7 @@ export class MenuMijiaWindowsApp {
       this.attachLiveMedia();
       return;
     }
+    this.liveCameraLoading = false;
     this.liveCameraStreamURL = normalized;
     if (this.needsHlsTranscodeBridge(normalized)) {
       void this.bridgeHlsStreamToMjpeg(devId, normalized);
@@ -4345,6 +4350,7 @@ export class MenuMijiaWindowsApp {
     this.liveCameraError = null;
     this.liveCameraLoading = false;
     if (this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      this.liveCameraLoading = true;
       void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
     } else if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
       void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
@@ -4598,6 +4604,12 @@ export class MenuMijiaWindowsApp {
       // restart the stream.
       viewportHtml = `<div class="cc-camera-stage" id="cc-camera-stage"></div>`;
     } else if (this.liveCameraLoading) {
+      viewportHtml = `
+        <div class="cc-camera-stage" style="padding:28px 16px;text-align:center;">
+          <strong>${t("正在握手并连接摄像机实时画面…")}</strong>
+        </div>
+      `;
+    } else if (this.liveCameraStreamURL && this.isOwnedGo2rtcApiUrl(this.liveCameraStreamURL)) {
       viewportHtml = `
         <div class="cc-camera-stage" style="padding:28px 16px;text-align:center;">
           <strong>${t("正在握手并连接摄像机实时画面…")}</strong>
@@ -6057,11 +6069,12 @@ export class MenuMijiaWindowsApp {
     this.stopLiveTransport();
     const token = this.liveCameraToken;
     await this.refreshOwnedGo2rtcOrigin();
+    const stillViewing = this.liveCameraToken === token && this.activeLiveCameraId === id;
     if (val) this.cameraStreamURLs[id] = val;
     else delete this.cameraStreamURLs[id];
     this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
     this.saveSettings();
-    if (this.liveCameraToken !== token || this.activeLiveCameraId !== id) return;
+    if (!stillViewing) return;
     if (val) {
       const playable = this.normalizeWindowsCameraStreamUrl(val);
       this.liveCameraStreamURL = playable;
