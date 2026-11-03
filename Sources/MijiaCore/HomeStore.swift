@@ -121,6 +121,10 @@ public final class HomeStore {
         didSet { userDefaults.set(enableSafetyAlerts, forKey: "enable_safety_alerts") }
     }
 
+    public var sensorAlertsOnlyWhenAway: Bool {
+        didSet { userDefaults.set(sensorAlertsOnlyWhenAway, forKey: Self.sensorAlertsOnlyWhenAwayKey) }
+    }
+
     public var homeName: String {
         didSet { userDefaults.set(homeName, forKey: "home_name") }
     }
@@ -265,6 +269,8 @@ public final class HomeStore {
     var rawDeviceNames: [String: String] = [:]
 
     var lowBatteryAlertedAt: [String: Date] = [:]
+    var sensorEdge: [String: Bool] = [:]
+    var awayGap = MacAwayGap(includesAway: false)
     var activeSinceByDeviceId: [String: Date] = [:]
     var longRunAlertedForSession: Set<String> = []
 
@@ -328,12 +334,15 @@ public final class HomeStore {
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
+        self.sensorAlertsOnlyWhenAway = ud.bool(forKey: Self.sensorAlertsOnlyWhenAwayKey)
+        self.awayGap = MacAwayGap(includesAway: ud.bool(forKey: MacAwayGap.storageKey))
         self.isCompactGridMode = (ud.object(forKey: "compact_grid_mode") as? Bool) ?? true
         self.showQuickActionsBar = boolOrDefaultTrue("show_quick_actions_bar")
         self.enableGrokBall = ud.bool(forKey: "enable_grok_ball")
         self.menuBarTargetId = ud.string(forKey: "menubar_target_id") ?? "auto:primary"
         self.lastManuallyUsedLightId = ud.string(forKey: Self.lastManualLightIdKey)
         self.lowBatteryAlertedAt = Self.loadLowBatteryAlertedAt(from: ud)
+        self.sensorEdge = Self.loadSensorEdge(from: ud)
 
         let savedModeRaw = ud.string(forKey: "menubar_display_mode")
         if let savedModeRaw, let mode = MenuBarDisplayMode(rawValue: savedModeRaw) {
