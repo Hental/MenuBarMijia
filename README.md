@@ -214,7 +214,26 @@ These phrases are parsed locally **without any AI API key** or cloud model token
 
 MenuBarMijia is an independent open-source project, not an official Xiaomi app. Mi Home cloud control needs an internet connection. You can connect your own Home Assistant instance on macOS or Windows.
 
-Account credentials and AI keys are stored in the macOS Keychain or Windows Credential Manager. macOS may ask for Keychain permission after an update. When migrating credentials from an older version, the plaintext copy is removed after the Keychain accepts it.
+### Where credentials live
+
+| Secret | What is stored | Where |
+| :--- | :--- | :--- |
+| Xiaomi Home / Mijia | Every signed-in account's `userId`, `cUserId`, `ssecurity`, `serviceToken`, cloud region and declared expiry | macOS Keychain (one generic-password item) or Windows Credential Manager |
+| Home Assistant | The long-lived access token (the instance URL is not secret) | macOS Keychain or Windows Credential Manager |
+| AI assistants | The API key saved for each provider, plus the imported-key source label and remembered cloud-consent endpoints | API keys in macOS Keychain / Windows Credential Manager; the non-secret labels in app preferences |
+| LG webOS TV | The pairing client key issued by the TV | macOS Keychain |
+
+macOS encrypts these Keychain items at rest and protects them with the login Keychain; MenuBarMijia writes them with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so they are available after the first unlock but are never synced to iCloud or another Mac. The app does not store these secrets in plain `UserDefaults` or log files. macOS may ask for Keychain permission after an app update because the build signature changes; answering "Always Allow" covers later reads and writes.
+
+Versions up to 1.0.6 could mirror credentials into plain `UserDefaults`. On first launch after upgrading, each legacy plaintext value is written into the Keychain and the plaintext key is deleted only after that write succeeds. If the Keychain is unavailable, the old copy is left in place for the next attempt instead of silently pretending the migration succeeded.
+
+### High-risk controls, lock screen, and revocation
+
+Manual controls on high-risk devices ask for a second confirmation, not only AI-proposed actions: turning on a heater, switching a plug or camera, starting a vacuum, or turning a water heater on or hotter. Turning one of these off stays direct, so making the home safer never requires fighting a dialog. Door/window and gas-alarm sensors are read-only status cards in this app, so they cannot be actuated here at all. The confirmation table is shared with the AI policy and lives in `Sources/MijiaCore/ModelActionPolicy.swift`.
+
+Settings → 隐私 / Privacy has **锁屏时禁止控制设备 / Block device control while locked**, on by default. While the Mac screen is locked, card/detail controls, `menumijia://` links, App Intents/Shortcuts and assistant commands are refused with a toast; scheduled commands and Mac-event automation rules still run. The toggle is persisted locally and the lock state comes from the system's screen-lock notifications.
+
+The same Settings page has **退出并吊销令牌 / Sign Out & Revoke Tokens**, confirmed by a destructive dialog. It signs out every Xiaomi Home account, deletes the Home Assistant token and disconnects, and clears saved AI keys and cloud-consent records. Device names, room layout and local history stay. You can also revoke one thing at a time: 退出登录 in the Mi account section, replacing the HA token with an empty value, or the per-key 撤销 button in the AI settings.
 
 Everyday commands are handled by local rules. You can also connect an AI service of your choice for more complex requests. The request includes your command, device and environment information, and any habit summary you have enabled. Manual card actions also train local time-bucket habit memories (used only for the "For You" suggestions); the habit learning toggle turns this off, learned entries can be reviewed and cleared, and undoing a banner rolls the matching records back. Speech recognition uses system services; on-device-only recognition is available for supported languages.
 

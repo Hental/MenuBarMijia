@@ -410,6 +410,17 @@ public struct AssistantConfig: Equatable, Sendable {
         defaults.removeObject(forKey: importedKeySourceKey(for: preset))
     }
 
+    /// Forgets every saved assistant key and import label, for the single sign-out-and-revoke action (#143).
+    public static func removeAllStoredAPIKeys(defaults: UserDefaults = .standard) {
+        for preset in AssistantProviderPreset.allCases {
+            clearSecret(for: preset, defaults: defaults)
+            defaults.removeObject(forKey: importedKeySourceKey(for: preset))
+        }
+        // Pre-v1.0.4 builds read the OpenRouter key from this generic slot.
+        KeychainHelper.saveSecret("", account: KeychainHelper.assistantAPIKeyAccount, defaults: defaults)
+        defaults.removeObject(forKey: customKeyEndpointKey)
+    }
+
     /// Reads an ambient API key from environment variables or `~/.config/codexbar/config.json` matching the provider for `baseURL`.
     public static func loadAmbientAPIKey(forBaseURL baseURL: String, configURL: URL? = nil) -> String? {
         let preset = AssistantProviderPreset.infer(baseURL: baseURL)

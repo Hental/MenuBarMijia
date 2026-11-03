@@ -131,7 +131,7 @@ final class AutomationEngine {
         // banner; the longer automation window keeps the banner usable after unlocking (#59).
         case .quickAction(let action):
             // Automation is not a user action, so it never trains habits (#34/#113).
-            store.executeQuickAction(action, undoBannerDuration: AutomationPolicy.undoWindow, recordsHabits: false)
+            store.executeQuickAction(action, undoBannerDuration: AutomationPolicy.undoWindow, recordsHabits: false, respectScreenLock: false)
         case .devices, .scene:
             let intents = rule.action.intents()
             guard !intents.isEmpty else { return }

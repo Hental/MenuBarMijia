@@ -49,9 +49,21 @@ public enum KeychainHelper {
         return readKeychainSecret(account: account) ?? defaultSeededToken
     }
 
-    public static func saveToken(_ token: String) {
+    public static func saveToken(_ token: String, defaults: UserDefaults = .standard) {
+        // A test suite keeps its token in the suite, never in the real login Keychain. This mirrors
+        // `loadToken(defaults:)`, so HomeStore tests can exercise sign-out and revocation.
+        guard defaults === UserDefaults.standard else {
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = secretFallbackKey(for: account)
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: key)
+            } else {
+                defaults.set(trimmed, forKey: key)
+            }
+            return
+        }
         guard writeKeychainSecret(token, account: account) else { return }
-        UserDefaults.standard.removeObject(forKey: legacyPlaintextTokenKey)
+        defaults.removeObject(forKey: legacyPlaintextTokenKey)
     }
 
     // MARK: - Keychain Primitives

@@ -575,6 +575,31 @@ extension HomeStore {
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
     }
 
+    /// The single destructive entry point behind Settings → 隐私 → 退出并吊销令牌 (#143): signs out
+    /// every Mi account, deletes the Home Assistant token and drops that connection, forgets saved AI
+    /// keys and cloud-consent records. Local preferences, aliases and history stay untouched.
+    public func signOutAndRevokeAll() {
+        invalidateUndoContext()
+        logoutMiAccount()
+        disconnectHomeAssistant()
+        AssistantConfig.removeAllStoredAPIKeys(defaults: userDefaults)
+        revokeCloudConsent()
+        showToast(L10n.tr("已退出并吊销本地保存的令牌", "Signed out and removed saved tokens"))
+    }
+
+    /// Deletes the Home Assistant long-lived token and closes the live connection, keeping the saved
+    /// instance URL so the user can reconnect by entering only a new token. A remaining Mi source
+    /// keeps serving the panel after the composite provider is rebuilt.
+    public func disconnectHomeAssistant() {
+        KeychainHelper.saveToken("", defaults: userDefaults)
+        hasHASource = false
+        pendingHAAddressSuggestion = nil
+        guard homeBackend != .demo,
+              (provider is DualSourceHomeProvider || provider is HAWebSocketProvider) else { return }
+        invalidateUndoContext()
+        rebuildLiveProvider()
+    }
+
     /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel
     /// right away instead of waiting for the next merged snapshot.
     public func logoutMiAccount(id: String) {
@@ -636,7 +661,7 @@ extension HomeStore {
         }
         pendingHAAddressSuggestion = nil
         self.serverURLString = normalized
-        KeychainHelper.saveToken(token)
+        KeychainHelper.saveToken(token, defaults: userDefaults)
         self.hasHASource = !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         self.homeBackend = preferredLiveBackend
         if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

@@ -57,6 +57,7 @@ final class SystemActivityMonitor {
     }
 
     private func publish() {
+        store?.setScreenLocked(locked)
         store?.setSystemActive(!(asleep || displayAsleep || locked || sessionInactive))
         store?.setLowPowerMode(ProcessInfo.processInfo.isLowPowerModeEnabled)
     }

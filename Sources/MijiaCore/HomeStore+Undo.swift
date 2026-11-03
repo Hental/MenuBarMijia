@@ -29,7 +29,8 @@ extension HomeStore {
 
     @discardableResult
     public func triggerScene(_ scene: HomeScene) -> Task<Bool, Never> {
-        Task {
+        guard !rejectControlWhileLocked() else { return Task { false } }
+        return Task {
             do {
                 try await executeDeviceCommand(.activateScene(entityId: scene.entityId))
                 confirmManualControl(intents: [.init(targetId: scene.id, operation: .activateScene)])
@@ -45,8 +46,10 @@ extension HomeStore {
     public func executeQuickAction(
         _ action: QuickAction,
         undoBannerDuration: TimeInterval? = nil,
-        recordsHabits: Bool = true
+        recordsHabits: Bool = true,
+        respectScreenLock: Bool = true
     ) {
+        if respectScreenLock, rejectControlWhileLocked() { return }
         let previousSnapshot = devices
         var commands: [(deviceId: String, command: DeviceCommand)] = []
         var restoreCommands: [DeviceCommand] = []
@@ -256,6 +259,7 @@ extension HomeStore {
     }
 
     public func turnAllOff() {
+        guard !rejectControlWhileLocked() else { return }
         let targetIds = Set(allOffTargets.map(\.id))
         guard !targetIds.isEmpty else {
             showToast(L10n.tr("当前没有开启的设备", "No active devices are currently on"))
