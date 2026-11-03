@@ -136,6 +136,12 @@ struct MenuBarPanelControllerTests {
         #expect(MenuBarPanelController.speechLabel("  关灯  ") == "关灯")
     }
 
+    @Test("statusBarImage loads house.slash and falls back when a symbol name is unknown")
+    func statusBarImageFallback() {
+        #expect(MenuBarPanelController.statusBarImage(symbolName: "house.slash") != nil)
+        #expect(MenuBarPanelController.statusBarImage(symbolName: "nonexistent.symbol.for.test.181") != nil)
+    }
+
     @Test("Showing the panel creates a key-capable 376 pt window and marks it visible")
     func showPanelCreatesVisibleWindow() async throws {
         let (store, suite) = try await makeStore()

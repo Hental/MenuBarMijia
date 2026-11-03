@@ -245,7 +245,15 @@ public final class HomeStore {
     /// expired/disconnected account even while another account keeps `connectionStatus == .connected`.
     public internal(set) var miAccountStatuses: [String: ConnectionStatus] = [:]
     /// The session's one absolute end: carried by the login response, or the last rejection time (#181).
-    public internal(set) var miSessionExpiresAt: Date?
+    public internal(set) var miSessionExpiresAt: Date? {
+        didSet {
+            if miSessionExpiresAt != oldValue {
+                scheduleMiSessionExpiryTransition()
+            }
+        }
+    }
+    var miSessionExpiryRevision: UInt64 = 0
+    var miSessionExpiryTimerTask: Task<Void, Never>?
     var miSessionScopeIdentifier: String? {
         didSet { syncSensorHistoryScope() }
     }
@@ -468,6 +476,7 @@ public final class HomeStore {
             self.provider = makeHAProvider(baseURLString: savedURL, token: initialHAToken)
         }
         syncSensorHistoryScope()
+        scheduleMiSessionExpiryTransition()
         startListening()
         restoreScheduledCommands()
         // Demo mode is strictly offline: no LAN discovery, no LG connection (#47).

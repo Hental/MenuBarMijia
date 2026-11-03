@@ -219,14 +219,9 @@ public struct ControlCenterPanel: View {
     }
 
     private var miReauthOverlay: some View {
-        ZStack {
-            Rectangle()
-                .fill(reduceTransparency
-                    ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
-                    : AnyShapeStyle(.ultraThinMaterial))
-                .overlay(Color.black.opacity(reduceTransparency ? 0.32 : 0.18))
-                .ignoresSafeArea()
-
+        promptBackdrop(onDismiss: {
+            withAnimation(AppleMotion.snappySpring) { store.dismissMiReauth() }
+        }) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "qrcode")
@@ -762,17 +757,24 @@ public struct ControlCenterPanel: View {
         }
     }
 
-    private func promptBackdrop<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+    private func promptBackdrop<C: View>(
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder _ content: () -> C
+    ) -> some View {
         ZStack {
             Rectangle()
                 .fill(reduceTransparency ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.ultraThinMaterial))
                 .overlay(Color.black.opacity(reduceTransparency ? 0.32 : 0.18))
                 .ignoresSafeArea()
                 .onTapGesture {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        layoutUI.newGroupForDevice = nil
-                        layoutUI.renamingGroupId = nil
-                        layoutUI.renamingDeviceId = nil
+                    if let onDismiss {
+                        onDismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            layoutUI.newGroupForDevice = nil
+                            layoutUI.renamingGroupId = nil
+                            layoutUI.renamingDeviceId = nil
+                        }
                     }
                 }
                 .transition(.opacity)

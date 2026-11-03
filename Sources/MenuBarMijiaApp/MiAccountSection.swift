@@ -174,22 +174,34 @@ public struct MiAccountSection: View {
     private var multiAccountView: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(store.miAccounts) { account in
+                let expiryState = account.session.expiryState()
                 let disconnectReason: String? = {
                     if case .disconnected(let reason) = store.miAccountStatuses[account.id], !reason.isEmpty {
                         return reason
                     }
+                    if expiryState == .expired {
+                        return MiCloudError.sessionExpired.localizedDescription
+                    }
                     return nil
                 }()
+                let needsRescan = disconnectReason != nil || expiryState != .valid
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Image(systemName: disconnectReason == nil
-                            ? "person.crop.circle.badge.checkmark"
-                            : "exclamationmark.triangle.fill")
+                        Image(systemName: needsRescan
+                            ? "exclamationmark.triangle.fill"
+                            : "person.crop.circle.badge.checkmark")
                             .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
-                            .foregroundStyle(disconnectReason == nil ? .green : .orange)
+                            .foregroundStyle(needsRescan ? .orange : .green)
                         Text(account.displayName)
                             .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
                         Spacer()
+                        if needsRescan {
+                            Button(L10n.tr("重新扫码", "Rescan QR")) {
+                                store.miCloudRegion = account.region
+                                startQRLogin()
+                            }
+                            .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+                        }
                         Button(L10n.tr("移除", "Remove")) {
                             store.logoutMiAccount(id: account.id)
                         }
@@ -197,6 +209,11 @@ public struct MiAccountSection: View {
                     }
                     if let reason = disconnectReason {
                         Text(reason)
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.orange)
+                    } else if case .expiringSoon(let date) = expiryState {
+                        let dateText = date.formatted(date: .abbreviated, time: .omitted)
+                        Text(L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
                             .font(.system(size: DesignTokens.TypeSize.caption))
                             .foregroundStyle(.orange)
                     }

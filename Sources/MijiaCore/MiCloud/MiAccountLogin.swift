@@ -191,8 +191,8 @@ public struct MiAccountLogin: Sendable {
             var req = URLRequest(url: url)
             req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             let (_, http) = try await redirectlessTransport.send(req)
-            if let cookie = Self.cookie(named: "serviceToken", in: http, url: url) {
-                return (cookie.value, cookie.expiresDate)
+            if let token = Self.serviceTokenCookie(in: http, url: url) {
+                return token
             }
             guard (300...399).contains(http.statusCode),
                   let next = http.value(forHTTPHeaderField: "Location").flatMap({ URL(string: $0, relativeTo: url) }) else {
@@ -210,6 +210,76 @@ public struct MiAccountLogin: Sendable {
         }
         return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
             .first { $0.name == name && !$0.value.isEmpty }
+    }
+
+    /// Extracts `serviceToken` and its declared expiry from `Set-Cookie`.
+    /// Foundation's `HTTPCookie` ignores `Max-Age` unless `Version=1` is present; RFC 6265 §4.1.2.2
+    /// specifies `Max-Age` (in seconds) takes precedence over `Expires` on all modern cookies.
+    static func serviceTokenCookie(
+        in response: HTTPURLResponse,
+        url: URL,
+        now: Date = Date()
+    ) -> (token: String, expiresAt: Date?)? {
+        guard let cookie = cookie(named: "serviceToken", in: response, url: url) else {
+            return nil
+        }
+        let explicitExpiry = parseSetCookieExpiry(named: "serviceToken", in: response, now: now)
+        return (cookie.value, explicitExpiry ?? cookie.expiresDate)
+    }
+
+    static func parseSetCookieExpiry(named name: String, in response: HTTPURLResponse, now: Date = Date()) -> Date? {
+        var rawHeaders: [String] = []
+        for (k, v) in response.allHeaderFields {
+            guard let ks = k as? String, ks.caseInsensitiveCompare("Set-Cookie") == .orderedSame,
+                  let vs = v as? String else { continue }
+            rawHeaders.append(vs)
+        }
+        for header in rawHeaders {
+            let parts = header.split(separator: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard let first = parts.first,
+                  let eq = first.firstIndex(of: "="),
+                  first[..<eq].trimmingCharacters(in: .whitespaces) == name else {
+                continue
+            }
+            var maxAgeSeconds: Int?
+            var expiresDate: Date?
+            for attr in parts.dropFirst() {
+                guard let attrEq = attr.firstIndex(of: "=") else { continue }
+                let attrName = attr[..<attrEq].trimmingCharacters(in: .whitespaces).lowercased()
+                let attrVal = attr[attr.index(after: attrEq)...].trimmingCharacters(in: .whitespaces)
+                if attrName == "max-age", let secs = Int(attrVal) {
+                    maxAgeSeconds = secs
+                } else if attrName == "expires", let parsed = parseHTTPDate(String(attrVal)) {
+                    expiresDate = parsed
+                }
+            }
+            if let secs = maxAgeSeconds {
+                return secs <= 0 ? now : now.addingTimeInterval(TimeInterval(secs))
+            }
+            if let expiresDate {
+                return expiresDate
+            }
+        }
+        return nil
+    }
+
+    private static func parseHTTPDate(_ raw: String) -> Date? {
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "EEE MMM d HH:mm:ss yyyy",
+            "EEE, dd-MMM-yyyy HH:mm:ss zzz"
+        ]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in formats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) {
+                return date
+            }
+        }
+        return nil
     }
 }
 

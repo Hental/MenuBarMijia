@@ -459,6 +459,7 @@ extension HomeStore {
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
         self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
         self.miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+        self.isShowingMiReauth = false
         self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
@@ -740,7 +741,32 @@ extension HomeStore {
 
 extension HomeStore {
     public var miSessionExpiryState: MiSessionExpiryState {
-        MiSessionExpiryPolicy.state(expiresAt: miSessionExpiresAt, now: Date())
+        let _ = miSessionExpiryRevision
+        return MiSessionExpiryPolicy.state(expiresAt: miSessionExpiresAt, now: Date())
+    }
+
+    /// Schedules a one-shot wake at the next boundary (`expiresAt - warningLeadTime` or `expiresAt`)
+    /// so `@Observable` views update when a live session crosses into `.expiringSoon` or `.expired`.
+    func scheduleMiSessionExpiryTransition(now: Date = Date()) {
+        miSessionExpiryTimerTask?.cancel()
+        miSessionExpiryTimerTask = nil
+        guard let expiresAt = miSessionExpiresAt else { return }
+        let warnAt = expiresAt.addingTimeInterval(-MiSessionExpiryPolicy.warningLeadTime)
+        let nextBoundary: Date? = if now < warnAt {
+            warnAt
+        } else if now < expiresAt {
+            expiresAt
+        } else {
+            nil
+        }
+        guard let nextBoundary else { return }
+        let delay = max(0.05, nextBoundary.timeIntervalSince(now) + 0.05)
+        miSessionExpiryTimerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.miSessionExpiryRevision &+= 1
+            self.scheduleMiSessionExpiryTransition()
+        }
     }
 
     /// Only the cloud backend can name a session end; HA and demo never show this warning.
@@ -755,7 +781,11 @@ extension HomeStore {
     }
 
     public func presentMiReauth() {
-        guard homeBackend == .xiaomiCloud, miSessionMaskedUserId != nil else { return }
+        guard homeBackend == .xiaomiCloud,
+              miSessionMaskedUserId != nil || !miAccounts.isEmpty else { return }
+        if let target = miAccounts.first(where: { $0.session.expiresAt == miSessionExpiresAt }) ?? miAccounts.first {
+            miCloudRegion = target.region
+        }
         isShowingMiReauth = true
     }
 

@@ -144,6 +144,38 @@ struct MiAccountLoginExpiryTests {
         #expect(session.serviceToken == "tok123")
         #expect(session.expiresAt == nil)
     }
+
+    @Test("Max-Age without Version=1 or Expires is parsed directly from Set-Cookie")
+    func maxAgeWithoutVersion1IsParsed() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let url = URL(string: "https://sts.example/sts")!
+        let response = try #require(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Set-Cookie": "serviceToken=tok_max; Max-Age=3600; Path=/; HttpOnly"]
+        ))
+        let parsed = try #require(MiAccountLogin.serviceTokenCookie(in: response, url: url, now: now))
+        #expect(parsed.token == "tok_max")
+        #expect(parsed.expiresAt == now.addingTimeInterval(3600))
+    }
+
+    @Test("Max-Age takes precedence over Expires per RFC 6265")
+    func maxAgeOverridesExpires() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let url = URL(string: "https://sts.example/sts")!
+        let response = try #require(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Set-Cookie": "serviceToken=tok_rfc; Max-Age=7200; Expires=Wed, 21 Oct 2099 07:28:00 GMT; Path=/"
+            ]
+        ))
+        let parsed = try #require(MiAccountLogin.serviceTokenCookie(in: response, url: url, now: now))
+        #expect(parsed.token == "tok_rfc")
+        #expect(parsed.expiresAt == now.addingTimeInterval(7200))
+    }
 }
 
 struct MiSessionExpiryHomeStoreTests {
