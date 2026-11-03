@@ -186,6 +186,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Not affiliated with Xiaomi. MenuBarMijia is an independent open-source project, not an official Xiaomi or Mijia product. "Xiaomi", "Mijia", "Mi Home", and "米家" are trademarks of Xiaomi Corporation and its affiliates, used only to describe compatibility. No endorsement is implied. Copyright © 2026 jryang1997. MIT License.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>用于局域网自动发现并实时连接 Home Assistant 及电视等智能家居设备。</string>
     <key>NSBonjourServices</key>

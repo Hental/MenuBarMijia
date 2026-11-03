@@ -15,6 +15,9 @@
 
 <h1 align="center">MenuBarMijia</h1>
 
+> [!IMPORTANT]
+> **非小米官方产品，与小米无关联。** MenuBarMijia 是独立开源项目，并非小米或米家官方客户端，与小米科技有限责任公司及其关联公司不存在隶属、合作、赞助或背书关系。「小米」「米家」「Xiaomi」「Mijia」「Mi Home」是小米科技有限责任公司及其关联公司的商标。本项目仅在说明与小米 / 米家设备的兼容性时使用这些名称，不暗示任何背书或认可。
+
 <p align="center">
   <b>在电脑上，顺手控制整个家。</b><br>
   面向 macOS 的原生菜单栏智能家居控制工具，亦提供 Windows 11 托盘版本。<br>
@@ -31,7 +34,7 @@
 </p>
 
 <p align="center">
-  <a href="https://jryang1997.github.io/menubarmijia-web/">官方网站</a> ·
+  <a href="https://jryang1997.github.io/menubarmijia-web/">项目官网</a> ·
   <a href="https://github.com/jryang1997/MenuBarMijia/releases/latest">下载最新版本</a> ·
   <a href="#快速开始">安装与连接</a> ·
   <a href="#功能概览与双端对照">平台能力对照</a> ·
