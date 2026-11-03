@@ -3,12 +3,9 @@ import type { SynthesizedHome } from "../core/models.js";
 import { GrokBallView } from "./grokBall.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
-  DelayPhrase,
   IntentReply,
   IntentValidator,
-  LocalIntentParser,
   ModelIntentResolver,
-  UndoPhrase,
   UserHabitMemory,
   buildAssistantContext,
   resolveHabitSharing,
@@ -19,8 +16,6 @@ import {
   endpointAllowsSendingSecrets,
   isLocalAssistantEndpoint,
   timeBucketLabel,
-  INSECURE_ENDPOINT_MESSAGE,
-  ModelActionPolicy,
   partitionHabitReceipt,
   resolveGrokBallEmotion,
   type HabitEntry,
@@ -175,6 +170,7 @@ import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as ren
 import { renderSettingsModal } from "./settingsViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
+import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
@@ -785,7 +781,7 @@ export class MenuMijiaWindowsApp {
     return watts;
   }
 
-  private get computedEnvironmentReadings(): EnvironmentReading[] {
+  public get computedEnvironmentReadings(): EnvironmentReading[] {
     if (this.environmentReadings.length > 0) {
       const priorityById = new Map(
         this.devices.map((d) => [d.id, environmentReadingPriority(d.kind)]),
@@ -1309,170 +1305,7 @@ export class MenuMijiaWindowsApp {
   }
 
   public async handleNaturalCommand(rawInput: string, fromScheduled = false): Promise<void> {
-    const trimmed = rawInput.trim();
-    if (!trimmed) return;
-    const sourceRevision = this.sourceRevision;
-    // A new command replaces any question still waiting for cloud consent, and old suggestions.
-    this.pendingCloudConsent = null;
-    this.pendingSuggestions = [];
-
-    if (UndoPhrase.isUndo(trimmed)) {
-      await this.performUndo();
-      return;
-    }
-
-    if (DelayPhrase.isCancel(trimmed)) {
-      const count = this.scheduledCommands.length + this.missedScheduledCommands.length;
-      this.scheduledCommands = [];
-      this.missedScheduledCommands = [];
-      this.replyBanner = {
-        text: count > 0 ? t("已取消 {count} 项定时指令", { count: count }) : t("当前没有待执行的定时指令"),
-        source: t("0ms 本地直达"),
-      };
-      this.render();
-      return;
-    }
-
-    if (!fromScheduled) {
-      const delaySpec = DelayPhrase.extract(trimmed);
-      if (delaySpec) {
-        const scheduled: ScheduledCommand = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          command: delaySpec.remainder,
-          delaySeconds: delaySpec.seconds,
-          fireTimestampMs: Date.now() + delaySpec.seconds * 1000,
-          reply: t("{delay}后：{command}", { delay: DelayPhrase.formatDelay(delaySpec.seconds), command: delaySpec.remainder }),
-        };
-        this.scheduledCommands.push(scheduled);
-        this.replyBanner = {
-          text: t("已设定 {delay}后执行「{command}」", { delay: DelayPhrase.formatDelay(delaySpec.seconds), command: delaySpec.remainder }),
-          source: t("定时任务"),
-        };
-        this.render();
-        return;
-      }
-    }
-
-    const learnedMatch = this.settings.learnedShortcuts.find(
-      (s) => s.phrase.replace(/\s+/g, "") === trimmed.replace(/\s+/g, ""),
-    );
-    if (learnedMatch) {
-      // A timer firing a learned phrase is not a user action, so it never trains habits (#34/#113).
-      await this.executeIntents(learnedMatch.intents, learnedMatch.reply, t("习惯记忆 0ms"), { recordHabits: !fromScheduled });
-      return;
-    }
-
-    this.isResolvingIntent = true;
-    this.render();
-
-    try {
-      const aliasedDevices = withAliases(this.layout, this.devices);
-      const localPlan = LocalIntentParser.parse(trimmed, aliasedDevices, this.scenes);
-      let plan: IntentPlan | null = localPlan;
-      let sourceLabel = t("0ms 本地直达");
-
-      if (!plan) {
-        const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
-        const apiKey = this.apiKeyFor(baseURL);
-        const isLoopback = isLocalAssistantEndpoint(baseURL);
-        if (!endpointAllowsSendingSecrets(baseURL)) {
-          this.replyBanner = { text: INSECURE_ENDPOINT_MESSAGE, source: t("地址不安全"), isError: true };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        if (!apiKey && !isLoopback) {
-          this.replyBanner = {
-            text: t("未命中本地规则。请在设置中填写 AI 服务的 API Key（支持 OpenRouter Jev、原生 Jev、DeepSeek 等）。"),
-            source: t("需要 API Key"),
-            isError: true,
-          };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        const endpoint = assistantEndpointIdentity(baseURL);
-        if (!isLoopback && endpoint && !this.settings.cloudConsentEndpoints.includes(endpoint)) {
-          this.pendingCloudConsent = { utterance: trimmed, endpoint };
-          this.replyBanner = {
-            text: t("这句话本机没听懂，要交给云端 AI（{endpoint}）处理吗？会发送：这句话、设备名称/房间/状态。只问这一次，可在设置里撤销。", { endpoint: endpoint }),
-            source: t("需要确认"),
-          };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        const resolver = new ModelIntentResolver(
-          {
-            baseURL,
-            model: this.settings.assistantModel,
-            apiKey,
-          },
-          this.transport,
-        );
-        // Same ambient context macOS sends with Jev requests (#38); the getter falls
-        // back to sensor devices when no refreshed EnvironmentReading list exists.
-        const readings = this.computedEnvironmentReadings;
-        const context = buildAssistantContext({
-          now: new Date(),
-          readings,
-          devices: aliasedDevices,
-          scenes: this.scenes,
-          sharing: this.settings.habitShareEnabled ? "on" : "off",
-          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
-            phrase: shortcut.phrase,
-            intents: shortcut.intents,
-          })),
-          mention: { kind: "utterance", text: trimmed },
-        });
-        plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
-        if (sourceRevision !== this.sourceRevision) return;
-        sourceLabel = resolver.usesSystemOne ? "Jev SystemOne" : this.settings.assistantModel;
-      }
-
-      const sanitized = IntentValidator.sanitize(plan.intents, aliasedDevices, this.scenes);
-      this.pendingSuggestions = [...plan.suggestions];
-      if (sanitized.length === 0 && plan.suggestions.length > 0) {
-        this.replyBanner = { text: plan.reply || ModelActionPolicy.confirmationReply(null), source: t("需要确认") };
-        return;
-      }
-      if (sanitized.length === 0) {
-        this.replyBanner =
-          plan.intents.length > 0
-            ? { text: t("无法找到指令对应的设备"), source: t("控制失败"), isError: true }
-            : { text: plan.reply || t("无法找到指令对应的设备"), source: sourceLabel, isError: !plan.reply };
-        return;
-      }
-      const replyText =
-        plan.reply || IntentReply.describe(sanitized, aliasedDevices, this.scenes);
-      const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel, {
-        recordHabits: plan.source === "local" && !fromScheduled,
-      });
-      if (sourceRevision !== this.sourceRevision) return;
-
-      if (
-        succeeded &&
-        this.settings.habitLearningEnabled &&
-        plan.source === "model" &&
-        sanitized.length > 0
-      ) {
-        this.learnShortcut(trimmed, replyText, sanitized);
-      }
-    } catch (err) {
-      if (sourceRevision !== this.sourceRevision) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      this.replyBanner = {
-        text: msg,
-        source: t("出错提示"),
-        isError: true,
-      };
-    } finally {
-      if (sourceRevision === this.sourceRevision) {
-        this.isResolvingIntent = false;
-        this.render();
-      }
-    }
+    return handleNaturalCommand(this, rawInput, fromScheduled);
   }
 
   private learnShortcut(
@@ -1480,19 +1313,7 @@ export class MenuMijiaWindowsApp {
     reply: string,
     intents: readonly DeviceIntent[],
   ): void {
-    const clean = phrase.trim();
-    if (clean.length < 2 || clean.length > 18) return;
-    if (this.settings.learnedShortcuts.some((s) => s.phrase === clean)) return;
-    this.settings.learnedShortcuts.unshift({
-      phrase: clean,
-      reply,
-      intents,
-      learnedAt: new Date().toISOString(),
-    });
-    if (this.settings.learnedShortcuts.length > 25) {
-      this.settings.learnedShortcuts.length = 25;
-    }
-    this.saveSettings();
+    learnShortcut(this, phrase, reply, intents);
   }
 
   private buildInverseCommand(dev: SmartDevice, command: DeviceCommand): DeviceCommand[] {
