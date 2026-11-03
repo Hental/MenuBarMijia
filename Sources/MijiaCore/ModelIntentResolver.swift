@@ -90,7 +90,7 @@ public enum AssistantError: LocalizedError, Equatable, Sendable {
 
 /// LLM fallback for utterances the LocalIntentParser cannot resolve, via an OpenAI-compatible
 /// `/chat/completions` endpoint.
-public struct ModelIntentResolver: Sendable {
+public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     public let config: AssistantConfig
@@ -514,6 +514,29 @@ public struct ModelIntentResolver: Sendable {
                 )
             }
         }
+        let rawSuggestions = object["suggestions"] as? [[String: Any]] ?? []
+        let modelReply = (object["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return plan(
+            chosenActions: chosen,
+            rawSuggestions: rawSuggestions,
+            modelReply: modelReply,
+            catalog: catalog,
+            devices: devices,
+            scenes: scenes
+        )
+    }
+
+    /// The single policy boundary for both cloud JSON and Apple's on-device guided generation:
+    /// alias expansion already happened, so this applies `ModelActionPolicy`/`IntentValidator`,
+    /// merges follow-up suggestions, and picks the reply shown in the command bar.
+    static func plan(
+        chosenActions chosen: [ChosenAction],
+        rawSuggestions: [[String: Any]] = [],
+        modelReply: String,
+        catalog: IntentCatalog,
+        devices: [SmartDevice],
+        scenes: [HomeScene]
+    ) -> IntentPlan {
         let decision = ModelActionPolicy.decide(
             devices: devices,
             scenes: scenes,
@@ -522,7 +545,6 @@ public struct ModelIntentResolver: Sendable {
         let intents = decision.intents
         let confirmChips = decision.suggestions
         let primaryTargetIds = Set((intents + confirmChips.flatMap(\.intents)).map(\.targetId))
-        let rawSuggestions = object["suggestions"] as? [[String: Any]] ?? []
         let parsedSuggestions = parseChatSuggestionItems(
             rawSuggestions,
             catalog: catalog,
@@ -531,7 +553,6 @@ public struct ModelIntentResolver: Sendable {
         ).filter { suggestion in
             !suggestion.intents.contains(where: { primaryTargetIds.contains($0.targetId) })
         }
-        let modelReply = (object["reply"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let reply: String
         if !confirmChips.isEmpty {
             // The model's own reply may claim the waiting actions already happened.

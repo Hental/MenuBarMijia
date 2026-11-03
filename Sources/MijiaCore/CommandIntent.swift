@@ -400,6 +400,32 @@ public struct IntentCatalog: Sendable {
     let aliasDevices: [(alias: String, device: SmartDevice)]
     private let catalogText: String
     private let realIdsByAlias: [String: [String]]
+    private let deviceEntries: [DeviceEntry]
+    private let groupEntries: [GroupEntry]
+    private let sceneEntries: [SceneEntry]
+
+    private struct DeviceEntry: Sendable {
+        let alias: String
+        let row: String
+        let deviceId: String
+        let name: String
+        let roomName: String
+    }
+
+    private struct GroupEntry: Sendable {
+        let alias: String
+        let row: String
+        let roomName: String
+        let memberAliases: [String]
+        let memberDeviceIds: [String]
+    }
+
+    private struct SceneEntry: Sendable {
+        let alias: String
+        let row: String
+        let sceneId: String
+        let name: String
+    }
 
     public init(devices: [SmartDevice], scenes: [HomeScene]) {
         var aliasDevices: [(alias: String, device: SmartDevice)] = []
@@ -411,6 +437,7 @@ public struct IntentCatalog: Sendable {
         var roomLights: [String: [String]] = [:]
         var aliasById: [String: String] = [:]
         var deviceRows: [String] = []
+        var deviceEntries: [DeviceEntry] = []
         for device in devices {
             let category = IntentDeviceCategory(device)
             guard category.isAssistantControllable, device.kind.acceptsControlWrites else { continue }
@@ -429,18 +456,29 @@ public struct IntentCatalog: Sendable {
                 }
             }
             criteria[alias] = Self.choiceCriterion(category: category, state: state)
+            let sanitizedName = PromptText.sanitize(device.name, limit: PromptText.nameLimit)
+            let sanitizedRoom = PromptText.sanitize(device.roomName, limit: PromptText.nameLimit)
             var fields = [
                 ("id", CatalogJSON.quote(alias)),
-                ("name", CatalogJSON.quote(PromptText.sanitize(device.name, limit: PromptText.nameLimit))),
-                ("room", CatalogJSON.quote(PromptText.sanitize(device.roomName, limit: PromptText.nameLimit))),
+                ("name", CatalogJSON.quote(sanitizedName)),
+                ("room", CatalogJSON.quote(sanitizedRoom)),
                 ("category", CatalogJSON.quote(category.rawValue)),
                 ("state", CatalogJSON.quote(state)),
             ]
             if device.isSharedHome { fields.append(("shared", "true")) }
-            deviceRows.append(CatalogJSON.object(fields))
+            let row = CatalogJSON.object(fields)
+            deviceRows.append(row)
+            deviceEntries.append(DeviceEntry(
+                alias: alias,
+                row: row,
+                deviceId: device.id,
+                name: sanitizedName,
+                roomName: sanitizedRoom
+            ))
         }
         var groupIndex = 0
         var groupRows: [String] = []
+        var groupEntries: [GroupEntry] = []
         for room in roomOrder {
             let ids = roomLights[room] ?? []
             guard ids.count >= 2 else { continue }
@@ -448,12 +486,22 @@ public struct IntentCatalog: Sendable {
             let alias = "room_lights:\(groupIndex)"
             map[alias] = ids
             criteria[alias] = Self.roomGroupCriterion(lightCount: ids.count)
-            let members = ids.compactMap { aliasById[$0] }.map { CatalogJSON.quote($0) }
-            groupRows.append(CatalogJSON.object([
+            let memberAliases = ids.compactMap { aliasById[$0] }
+            let members = memberAliases.map { CatalogJSON.quote($0) }
+            let sanitizedRoom = PromptText.sanitize(room, limit: PromptText.nameLimit)
+            let row = CatalogJSON.object([
                 ("id", CatalogJSON.quote(alias)),
-                ("room", CatalogJSON.quote(PromptText.sanitize(room, limit: PromptText.nameLimit))),
+                ("room", CatalogJSON.quote(sanitizedRoom)),
                 ("members", "[\(members.joined(separator: ","))]"),
-            ]))
+            ])
+            groupRows.append(row)
+            groupEntries.append(GroupEntry(
+                alias: alias,
+                row: row,
+                roomName: sanitizedRoom,
+                memberAliases: memberAliases,
+                memberDeviceIds: ids
+            ))
         }
         if allLightIds.count >= 2 {
             map["all_lights"] = allLightIds
@@ -464,19 +512,31 @@ public struct IntentCatalog: Sendable {
             criteria["all_devices"] = "全屋所有可控设备 (\(allDeviceIds.count)台)"
         }
         var sceneRows: [String] = []
+        var sceneEntries: [SceneEntry] = []
         for (offset, scene) in scenes.enumerated() {
             let alias = "s\(offset + 1)"
             map[alias] = [scene.id]
             if map[scene.id] == nil { map[scene.id] = [scene.id] }
             criteria[alias] = Self.sceneCriterion()
-            sceneRows.append(CatalogJSON.object([
+            let sanitizedName = PromptText.sanitize(scene.name, limit: PromptText.nameLimit)
+            let row = CatalogJSON.object([
                 ("id", CatalogJSON.quote(alias)),
-                ("name", CatalogJSON.quote(PromptText.sanitize(scene.name, limit: PromptText.nameLimit))),
-            ]))
+                ("name", CatalogJSON.quote(sanitizedName)),
+            ])
+            sceneRows.append(row)
+            sceneEntries.append(SceneEntry(
+                alias: alias,
+                row: row,
+                sceneId: scene.id,
+                name: sanitizedName
+            ))
         }
         self.aliasDevices = aliasDevices
         self.criteriaByAlias = criteria
         self.realIdsByAlias = map
+        self.deviceEntries = deviceEntries
+        self.groupEntries = groupEntries
+        self.sceneEntries = sceneEntries
         self.catalogText = PromptText.dataNotice + "\n" + "{\"devices\":[\(deviceRows.joined(separator: ","))],\"groups\":[\(groupRows.joined(separator: ","))],\"scenes\":[\(sceneRows.joined(separator: ","))]}"
     }
 
@@ -501,6 +561,139 @@ public struct IntentCatalog: Sendable {
     }
 
     public var text: String { catalogText }
+
+    /// Serializes the catalog under an approximate token budget. Explicit device/scene names come
+    /// first, then a mentioned room's group row, then that room's members, then favorites/active
+    /// devices; the rest fill the remaining budget in catalog order, so truncation is deterministic.
+    public func text(
+        fitting maxEstimatedTokens: Int,
+        mention: String = "",
+        preferredDeviceIds: Set<String> = []
+    ) -> String {
+        let cleanMention = PromptText.sanitize(mention, limit: PromptText.contextLimit)
+        let preferredAliases = Set(deviceEntries.filter {
+            preferredDeviceIds.contains($0.deviceId)
+        }.map(\.alias))
+
+        // Match exact names first and hand their claimed ranges to the room/scene matchers, so a
+        // room name embedded in a device name ("书房" in "书房吸顶灯") cannot promote the whole
+        // room, while the explicitly named device still wins.
+        let deviceMatch = Self.matchedNames(in: cleanMention, names: deviceEntries.map(\.name))
+        let sceneMatch = Self.matchedNames(
+            in: cleanMention,
+            names: sceneEntries.map(\.name),
+            excluding: deviceMatch.ranges
+        )
+        let roomMatch = Self.matchedNames(
+            in: cleanMention,
+            names: deviceEntries.map(\.roomName),
+            excluding: deviceMatch.ranges + sceneMatch.ranges
+        )
+        let deviceNameMatchedAliases = Set(deviceEntries.filter {
+            deviceMatch.names.contains($0.name)
+        }.map(\.alias))
+        let roomMatchedAliases = Set(deviceEntries.filter {
+            !$0.roomName.isEmpty && roomMatch.names.contains($0.roomName)
+        }.map(\.alias))
+        let sceneNameMatchedAliases = Set(sceneEntries.filter {
+            sceneMatch.names.contains($0.name)
+        }.map(\.alias))
+
+        struct Candidate {
+            let row: String
+            let priority: Int
+            let order: Int
+        }
+        var candidates: [Candidate] = []
+        var order = 0
+        for entry in deviceEntries {
+            let priority: Int
+            if deviceNameMatchedAliases.contains(entry.alias) {
+                priority = 0
+            } else if roomMatchedAliases.contains(entry.alias) {
+                priority = 2
+            } else if preferredAliases.contains(entry.alias) {
+                priority = 3
+            } else {
+                priority = 4
+            }
+            candidates.append(Candidate(row: entry.row, priority: priority, order: order))
+            order += 1
+        }
+        for entry in groupEntries {
+            let mentionsRoom = !entry.roomName.isEmpty && roomMatch.names.contains(entry.roomName)
+            let containsNamed = entry.memberAliases.contains(where: deviceNameMatchedAliases.contains)
+            let containsPreferred = entry.memberDeviceIds.contains(where: preferredDeviceIds.contains)
+            let priority: Int
+            if mentionsRoom {
+                // An explicitly requested room group must survive before its individual members.
+                priority = 1
+            } else if containsNamed {
+                priority = 2
+            } else if containsPreferred {
+                priority = 3
+            } else {
+                priority = 4
+            }
+            candidates.append(Candidate(row: entry.row, priority: priority, order: order))
+            order += 1
+        }
+        for entry in sceneEntries {
+            let priority = sceneNameMatchedAliases.contains(entry.alias) ? 0 : 4
+            candidates.append(Candidate(row: entry.row, priority: priority, order: order))
+            order += 1
+        }
+
+        let notice = PromptText.dataNotice
+        let skeleton = "{\"devices\":[],\"groups\":[],\"scenes\":[]}"
+        var usedTokens = PromptText.estimatedTokens(notice + "\n" + skeleton)
+        var selectedRows = Set<String>()
+        for candidate in candidates.sorted(by: {
+            if $0.priority != $1.priority { return $0.priority < $1.priority }
+            return $0.order < $1.order
+        }) {
+            let cost = PromptText.estimatedTokens(candidate.row) + 1
+            guard usedTokens + cost <= maxEstimatedTokens else { continue }
+            usedTokens += cost
+            selectedRows.insert(candidate.row)
+        }
+
+        let deviceRows = deviceEntries.filter { selectedRows.contains($0.row) }.map(\.row)
+        let groupRows = groupEntries.filter { selectedRows.contains($0.row) }.map(\.row)
+        let sceneRows = sceneEntries.filter { selectedRows.contains($0.row) }.map(\.row)
+        return notice + "\n" + "{\"devices\":[\(deviceRows.joined(separator: ","))],\"groups\":[\(groupRows.joined(separator: ","))],\"scenes\":[\(sceneRows.joined(separator: ","))]}"
+    }
+
+    /// Finds the longest catalog names that occur in `mention`, claiming their ranges first so
+    /// prefix collisions ("设备1" vs "设备127", "房间7" vs "房间70") only keep the exact target.
+    /// Ranges already claimed by a higher-priority match (for example a room name inside an
+    /// explicitly named device) are excluded.
+    private static func matchedNames(
+        in mention: String,
+        names: [String],
+        excluding claimedRanges: [Range<String.Index>] = []
+    ) -> (names: Set<String>, ranges: [Range<String.Index>]) {
+        guard !mention.isEmpty else { return ([], claimedRanges) }
+        let uniqueNames = Set(names.filter { !$0.isEmpty })
+        var claimed = claimedRanges
+        var matched: Set<String> = []
+        for name in uniqueNames.sorted(by: { $0.count > $1.count }) {
+            var searchStart = mention.startIndex
+            while searchStart < mention.endIndex,
+                  let range = mention.range(
+                    of: name,
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    range: searchStart..<mention.endIndex
+                  ) {
+                if !claimed.contains(where: { $0.overlaps(range) }) {
+                    claimed.append(range)
+                    matched.insert(name)
+                }
+                searchStart = range.upperBound
+            }
+        }
+        return (matched, claimed)
+    }
 
     static func stateSummary(_ device: SmartDevice) -> String {
         guard device.isOnline else { return "离线" }
