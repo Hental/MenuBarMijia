@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import MijiaCore
 
-/// One cut of the home-scoped list: every device, one room, or one kind.
 @MainActor
 struct DeviceListCutTests {
     private func light(_ id: String, roomId: String, roomName: String, isOn: Bool, isOnline: Bool = true) -> SmartDevice {

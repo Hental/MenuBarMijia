@@ -41,7 +41,6 @@ public struct ControlCenterPanel: View {
     @State private var isPresented = false
     /// Re-centers the active room pill when the user taps an already-selected pill after scrolling.
     @State private var roomScrollTrigger = 0
-    /// Re-centers the lit kind chip. A second tap does not clear the cut.
     @State private var kindScrollTrigger = 0
 
     /// Card sizes are remembered per page: a room id, or "all" for the overview.

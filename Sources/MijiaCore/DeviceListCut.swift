@@ -1,14 +1,21 @@
 import Foundation
 
-/// Case identity of a card. No spec payload, so two lights compare equal
-/// and a heater compares equal to an air conditioner.
-/// Cases follow `DeviceSynthesizer` kind priority, which is the chip order,
-/// not the declaration order of `DeviceKind`.
-public enum DeviceKindTag: String, CaseIterable, Equatable, Sendable {
+public enum DeviceKindTag: String, Equatable, Sendable {
     case climate, light, plug, fan, vacuum, fridge, speaker, tv, camera, sensor
 
     public var rank: Int {
-        Self.allCases.firstIndex(of: self)!
+        switch self {
+        case .climate: return 1
+        case .light: return 2
+        case .plug: return 3
+        case .fan: return 4
+        case .vacuum: return 5
+        case .fridge: return 6
+        case .speaker: return 7
+        case .tv: return 8
+        case .camera: return 9
+        case .sensor: return 10
+        }
     }
 
     public var chipTitle: String {
@@ -26,7 +33,6 @@ public enum DeviceKindTag: String, CaseIterable, Equatable, Sendable {
         }
     }
 
-    /// Wider than the face word. Nil when the hint would only repeat that word.
     public var chipHint: String? {
         switch self {
         case .climate:
@@ -72,8 +78,6 @@ extension DeviceKind {
     }
 }
 
-/// The one ephemeral cut of an already home-scoped list.
-/// A room and a kind cannot both be set. Not persisted.
 public enum DeviceListCut: Equatable, Sendable {
     case all
     case room(String)
