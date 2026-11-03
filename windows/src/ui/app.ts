@@ -818,6 +818,7 @@ export class MenuMijiaWindowsApp {
   private liveCameraMode: "mjpeg" | null = null;
   private liveCameraImgEl: HTMLImageElement | null = null;
   private liveCameraAbort: AbortController | null = null;
+  private ownedStreamOrigin: string | null = null;
   private liveCameraToken = 0;
   private readonly pendingCameraReleases = new Map<string, Promise<void>>();
   private updateState: UpdateState = { lastCheckedAtMs: null, release: null };
@@ -4050,6 +4051,17 @@ export class MenuMijiaWindowsApp {
     return port > 0 && port !== 1984 && port !== 8554 && port !== 8555;
   }
 
+  private async refreshOwnedGo2rtcOrigin(): Promise<void> {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    try {
+      const endpoint = await invoke<{ origin: string }>("go2rtc_endpoint");
+      this.ownedStreamOrigin = this.ownedGo2rtcOrigin(endpoint.origin) ? endpoint.origin : null;
+    } catch {
+      this.ownedStreamOrigin = null;
+    }
+  }
+
   private async pumpAuthenticatedMjpeg(
     name: string,
     img: HTMLImageElement,
@@ -4058,63 +4070,30 @@ export class MenuMijiaWindowsApp {
   ): Promise<void> {
     const invoke = window.__TAURI_INTERNALS__?.invoke;
     if (!invoke) return;
-    let endpoint: { origin: string; authorization: string };
-    try {
-      endpoint = await invoke<{ origin: string; authorization: string }>("go2rtc_endpoint");
-    } catch {
-      return;
-    }
-    if (token !== this.liveCameraToken || signal.aborted || !this.ownedGo2rtcOrigin(endpoint.origin)) return;
-    const url = `${endpoint.origin}/api/stream.mjpeg?src=${encodeURIComponent(name)}`;
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        headers: { Authorization: endpoint.authorization },
-        signal,
-      });
-    } catch {
-      return;
-    }
-    if (!response.ok || !response.body) {
-      img.dispatchEvent(new Event("error"));
-      return;
-    }
-    const reader = response.body.getReader();
-    let pending = new Uint8Array(0);
-    let lastObjectURL: string | null = null;
-    const find = (haystack: Uint8Array, needle0: number, needle1: number, from: number) => {
-      for (let index = from; index < haystack.length - 1; index += 1) {
-        if (haystack[index] === needle0 && haystack[index + 1] === needle1) return index;
-      }
-      return -1;
-    };
     while (token === this.liveCameraToken && !signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      const next = new Uint8Array(pending.length + value.length);
-      next.set(pending);
-      next.set(value, pending.length);
-      pending = next;
-      while (token === this.liveCameraToken) {
-        const start = find(pending, 0xff, 0xd8, 0);
-        if (start < 0) {
-          pending = pending.length > 1 ? pending.slice(pending.length - 1) : pending;
-          break;
+      try {
+        const jpeg = await invoke<string>("go2rtc_jpeg_frame", { src: name });
+        if (token !== this.liveCameraToken || signal.aborted) return;
+        if (!jpeg) throw new Error("empty frame");
+        img.src = `data:image/jpeg;base64,${jpeg}`;
+      } catch {
+        if (token === this.liveCameraToken && !signal.aborted) {
+          img.dispatchEvent(new Event("error"));
         }
-        const end = find(pending, 0xff, 0xd9, start + 2);
-        if (end < 0) {
-          pending = pending.slice(start);
-          break;
-        }
-        const jpeg = pending.slice(start, end + 2);
-        pending = pending.slice(end + 2);
-        const objectURL = URL.createObjectURL(new Blob([jpeg], { type: "image/jpeg" }));
-        if (lastObjectURL) URL.revokeObjectURL(lastObjectURL);
-        lastObjectURL = objectURL;
-        img.src = objectURL;
+        return;
       }
+      await new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, 200);
+        signal.addEventListener(
+          "abort",
+          () => {
+            window.clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+      });
     }
-    if (lastObjectURL && token !== this.liveCameraToken) URL.revokeObjectURL(lastObjectURL);
   }
 
   /**
@@ -4132,13 +4111,22 @@ export class MenuMijiaWindowsApp {
       );
   }
 
-  private isLoopbackGo2rtcUrl(url: string): boolean {
-    return /^https?:\/\/(127\.0\.0\.1|localhost):\d+(\/|$)/i.test(url);
+  private isOwnedGo2rtcApiUrl(url: string): boolean {
+    const origin = this.ownedStreamOrigin;
+    if (!origin) return false;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return false;
+    }
+    if (`${parsed.protocol}//${parsed.host}`.toLowerCase() !== origin.toLowerCase()) return false;
+    return parsed.pathname === "/api" || parsed.pathname.startsWith("/api/");
   }
 
   private needsHlsTranscodeBridge(url: string): boolean {
     if (!window.__TAURI_INTERNALS__?.invoke) return false;
-    if (this.isLoopbackGo2rtcUrl(url)) return false;
+    if (this.isOwnedGo2rtcApiUrl(url)) return false;
     if (/\.m3u8(\?|$|#)/i.test(url)) {
       const probe = document.createElement("video");
       const canPlayNative =
@@ -5633,37 +5621,7 @@ export class MenuMijiaWindowsApp {
     });
 
     this.root.querySelector("#btn-save-camera-url")?.addEventListener("click", () => {
-      const id = this.activeLiveCameraId;
-      if (!id) return;
-      const input = this.root.querySelector<HTMLInputElement>("#camera-stream-url-input");
-      const val = input?.value.trim() ?? "";
-      this.stopLiveTransport();
-      if (val) {
-        const playable = this.normalizeWindowsCameraStreamUrl(val);
-        this.cameraStreamURLs[id] = val;
-        this.liveCameraStreamURL = playable;
-        this.liveCameraError = null;
-        this.liveCameraLoading = false;
-        const dev = this.devices.find((d) => d.id === id);
-        if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
-          void this.bridgeHlsStreamToMjpeg(id, playable);
-        }
-      } else {
-        delete this.cameraStreamURLs[id];
-        const dev = this.devices.find((d) => d.id === id);
-        this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
-        if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
-          if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
-            void this.bridgeHlsStreamToMjpeg(id, this.liveCameraStreamURL);
-          } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
-            void this.resolveCloudCameraStream(dev);
-          }
-        }
-      }
-      this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
-      this.saveSettings();
-      this.liveCameraShowingURLInput = false;
-      this.render();
+      void this.commitCameraStreamUrl();
     });
 
     this.root.querySelector("#btn-cloud-allow")?.addEventListener("click", () => {
@@ -5892,6 +5850,41 @@ export class MenuMijiaWindowsApp {
       invokeTauriVoid("set_pin_popover", { pin: false });
       this.render();
     });
+  }
+
+  private async commitCameraStreamUrl(): Promise<void> {
+    const id = this.activeLiveCameraId;
+    if (!id) return;
+    const input = this.root.querySelector<HTMLInputElement>("#camera-stream-url-input");
+    const val = input?.value.trim() ?? "";
+    this.stopLiveTransport();
+    await this.refreshOwnedGo2rtcOrigin();
+    if (val) {
+      const playable = this.normalizeWindowsCameraStreamUrl(val);
+      this.cameraStreamURLs[id] = val;
+      this.liveCameraStreamURL = playable;
+      this.liveCameraError = null;
+      this.liveCameraLoading = false;
+      const dev = this.devices.find((d) => d.id === id);
+      if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
+        void this.bridgeHlsStreamToMjpeg(id, playable);
+      }
+    } else {
+      delete this.cameraStreamURLs[id];
+      const dev = this.devices.find((d) => d.id === id);
+      this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
+      if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
+        if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+          void this.bridgeHlsStreamToMjpeg(id, this.liveCameraStreamURL);
+        } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
+          void this.resolveCloudCameraStream(dev);
+        }
+      }
+    }
+    this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
+    this.saveSettings();
+    this.liveCameraShowingURLInput = false;
+    this.render();
   }
 
   // MARK: Layout editing

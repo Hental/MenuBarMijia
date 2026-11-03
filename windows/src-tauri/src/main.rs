@@ -2087,6 +2087,53 @@ async fn go2rtc_endpoint() -> Result<Go2RtcEndpoint, String> {
     })
 }
 
+fn is_go2rtc_stream_name(src: &str) -> bool {
+    !src.is_empty()
+        && src.len() <= 128
+        && src
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn go2rtc_jpeg_frame_url(session: &Go2RtcSession, src: &str) -> Result<String, String> {
+    if !is_go2rtc_stream_name(src) {
+        return Err("无效的摄像机流名称".to_string());
+    }
+    if !is_acceptable_go2rtc_listen(&session.api_listen) {
+        return Err("本地流媒体地址无效".to_string());
+    }
+    Ok(api_url(
+        session,
+        &format!("/api/frame.jpeg?src={}", urlencoding_simple(src)),
+    ))
+}
+
+#[tauri::command]
+async fn go2rtc_jpeg_frame(src: String) -> Result<String, String> {
+    let session = current_go2rtc_session()?;
+    let url = go2rtc_jpeg_frame_url(&session, &src)?;
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = authed(http.get(&url), &session)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "读取摄像机画面失败 (HTTP {})",
+            response.status()
+        ));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("摄像机画面过大".to_string());
+    }
+    Ok(base64_encode(&bytes))
+}
+
 fn spawn_cs2_udp_relay(
     cam_ip: std::net::Ipv4Addr,
 ) -> Result<(u16, std::sync::Arc<AtomicBool>), String> {
@@ -2263,7 +2310,8 @@ fn main() {
             start_xiaomi_camera_bridge,
             bridge_hls_camera_stream,
             stop_xiaomi_camera_bridge,
-            go2rtc_endpoint
+            go2rtc_endpoint,
+            go2rtc_jpeg_frame
         ])
         .setup(move |app| {
             sweep_stale_update_installers();
@@ -2887,6 +2935,25 @@ mod tests {
             }),
             Go2RtcAction::SpawnFresh
         );
+        let session = Go2RtcSession {
+            api_listen: "127.0.0.1:43123".to_string(),
+            rtsp_listen: "127.0.0.1:43124".to_string(),
+            username: "muser0001".to_string(),
+            password: "mpass0001".to_string(),
+            nonce: "mnonce0001".to_string(),
+        };
+        assert_eq!(
+            go2rtc_jpeg_frame_url(&session, "cam_mjpeg_dev_cam").expect("frame url"),
+            "http://127.0.0.1:43123/api/frame.jpeg?src=cam_mjpeg_dev_cam"
+        );
+        assert!(go2rtc_jpeg_frame_url(&session, "http://127.0.0.1:1984/api/config").is_err());
+        assert!(go2rtc_jpeg_frame_url(&session, "../api/config").is_err());
+        let stranger = Go2RtcSession {
+            api_listen: "127.0.0.1:1984".to_string(),
+            ..session
+        };
+        assert!(go2rtc_jpeg_frame_url(&stranger, "cam_mjpeg_dev_cam").is_err());
+
         let ports = reserve_loopback_ports(2).expect("loopback ports");
         assert_eq!(ports.len(), 2);
         assert_ne!(ports[0], ports[1]);
