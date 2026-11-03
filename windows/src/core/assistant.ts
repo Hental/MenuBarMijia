@@ -2365,21 +2365,18 @@ function mentionedHabitTargets(
   const accepted: Array<[number, number]> = [];
   const ids = new Set<string>();
   for (const needle of needles) {
+    const hits: number[] = [];
     let from = 0;
-    let hit: number | null = null;
     while (from <= foldedUtterance.length - needle.text.length) {
       const at = foldedUtterance.indexOf(needle.text, from);
       if (at < 0) break;
       const end = at + needle.text.length;
       const overlaps = accepted.some(([start, stop]) => at < stop && start < end);
-      if (!overlaps) {
-        hit = at;
-        break;
-      }
+      if (!overlaps) hits.push(at);
       from = at + 1;
     }
-    if (hit === null) continue;
-    accepted.push([hit, hit + needle.text.length]);
+    if (hits.length === 0) continue;
+    for (const hit of hits) accepted.push([hit, hit + needle.text.length]);
     for (const id of needle.ids) ids.add(id);
   }
   return ids;

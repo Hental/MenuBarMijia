@@ -163,8 +163,11 @@ private func mentionedTargets(_ utterance: String, devices: [SmartDevice], scene
     var ids: Set<String> = []
     for needle in needles {
         let units = Array(needle.text.utf16)
-        guard let start = firstNonOverlapping(haystack, units, accepted) else { continue }
-        accepted.append((start, start + units.count))
+        let starts = nonOverlappingOccurrences(haystack, units, accepted)
+        guard !starts.isEmpty else { continue }
+        for start in starts {
+            accepted.append((start, start + units.count))
+        }
         ids.formUnion(needle.ids)
     }
     return ids
@@ -199,17 +202,22 @@ private func utf16Descending(_ lhs: String, _ rhs: String) -> Bool {
     return left.count > right.count
 }
 
-private func firstNonOverlapping(_ haystack: [UInt16], _ needle: [UInt16], _ accepted: [(start: Int, end: Int)]) -> Int? {
-    guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+private func nonOverlappingOccurrences(
+    _ haystack: [UInt16],
+    _ needle: [UInt16],
+    _ accepted: [(start: Int, end: Int)]
+) -> [Int] {
+    guard !needle.isEmpty, haystack.count >= needle.count else { return [] }
     let last = haystack.count - needle.count
     var index = 0
+    var starts: [Int] = []
     while index <= last {
         if haystack[index..<(index + needle.count)].elementsEqual(needle) {
             let end = index + needle.count
             let overlaps = accepted.contains { span in index < span.end && span.start < end }
-            if !overlaps { return index }
+            if !overlaps { starts.append(index) }
         }
         index += 1
     }
-    return nil
+    return starts
 }
