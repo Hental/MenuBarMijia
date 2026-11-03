@@ -41,7 +41,8 @@ public enum DeviceDeduplicator {
         xiaomiCloud: SynthesizedHome?,
         canonical: CanonicalDeviceRegistry = CanonicalDeviceRegistry(),
         rooms: RoomIdentityRegistry = RoomIdentityRegistry(),
-        knownPreferenceIDs: Set<String> = []
+        knownPreferenceIDs: Set<String> = [],
+        pinnedBackends: [String: HomeBackend] = [:]
     ) -> DeviceMergeResult {
         let haCandidates = candidates(in: homeAssistant, backend: .homeAssistant)
         let miCandidates = candidates(in: xiaomiCloud, backend: .xiaomiCloud)
@@ -185,8 +186,10 @@ public enum DeviceDeduplicator {
         mergedDevices.reserveCapacity(cards.count)
         var routes: [String: DeviceMergeRoute] = [:]
         var deviceBackends: [String: HomeBackend] = [:]
+        var pairedDeviceIDs: Set<String> = []
 
         for card in cards {
+            var card = card
             let canonicalID: String
             let canUseCanonical: Bool
             if card.other != nil {
@@ -202,6 +205,20 @@ public enum DeviceDeduplicator {
             } else {
                 canonicalID = card.winner.device.id
             }
+
+            let wasPaired = card.other != nil
+            if let pinned = pinnedBackends[canonicalID],
+               let other = card.other,
+               let pinnedCandidate = [card.winner, other].first(where: {
+                   $0.backend == pinned && $0.device.isOnline
+               }),
+               pinnedCandidate.backend != card.winner.backend {
+                // A pin wins only while that source can actually drive the card; offline keeps the
+                // automatic online/capability fallback (#111).
+                card.other = card.winner
+                card.winner = pinnedCandidate
+            }
+            if wasPaired { pairedDeviceIDs.insert(canonicalID) }
 
             var merged = mergedDevice(for: card)
             let roomKey = DeviceIdentityNormalizer.normalizedRoomName(merged.roomName)
@@ -268,6 +285,7 @@ public enum DeviceDeduplicator {
         if xiaomiCloud != nil { activeBackends.insert(.xiaomiCloud) }
         home.activeBackends = activeBackends
         home.deviceBackends = deviceBackends
+        home.pairedDeviceIDs = pairedDeviceIDs
 
         return DeviceMergeResult(
             home: home,
@@ -387,8 +405,8 @@ public enum DeviceDeduplicator {
     }
 
     private struct Card {
-        let winner: Candidate
-        let other: Candidate?
+        var winner: Candidate
+        var other: Candidate?
         let canonicalKeys: [String]
         let chosenCanonical: String?
     }

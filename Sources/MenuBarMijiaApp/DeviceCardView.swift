@@ -203,6 +203,42 @@ public struct DeviceCardView: View {
 
     @ViewBuilder
     private var contextMenuItems: some View {
+            if store.isPairedDualSourceDevice(device.id) {
+                Text(L10n.tr("当前来源：", "Current source: ") + store.deviceBackend(for: device.id).shortTitle)
+                Menu {
+                    Button {
+                        store.pinDeviceSource(device.id, to: nil)
+                    } label: {
+                        if store.pinnedSource(for: device.id) == nil {
+                            Label(L10n.tr("自动择优（默认）", "Automatic (Default)"), systemImage: "checkmark")
+                        } else {
+                            Text(L10n.tr("自动择优（默认）", "Automatic (Default)"))
+                        }
+                    }
+                    Button {
+                        store.pinDeviceSource(device.id, to: .homeAssistant)
+                    } label: {
+                        if store.pinnedSource(for: device.id) == .homeAssistant {
+                            Label("Home Assistant", systemImage: "checkmark")
+                        } else {
+                            Text("Home Assistant")
+                        }
+                    }
+                    Button {
+                        store.pinDeviceSource(device.id, to: .xiaomiCloud)
+                    } label: {
+                        if store.pinnedSource(for: device.id) == .xiaomiCloud {
+                            Label(L10n.tr("米家云端", "Xiaomi Cloud"), systemImage: "checkmark")
+                        } else {
+                            Text(L10n.tr("米家云端", "Xiaomi Cloud"))
+                        }
+                    }
+                } label: {
+                    Label(L10n.tr("数据来源", "Data Source"), systemImage: "arrow.triangle.branch")
+                }
+                Divider()
+            }
+
             Menu {
                 ForEach(TileSize.allCases) { size in
                     Button {

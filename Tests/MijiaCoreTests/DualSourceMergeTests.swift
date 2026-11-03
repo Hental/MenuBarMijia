@@ -966,4 +966,96 @@ struct DualSourceMergeTests {
         #expect(result.home.devices.count == 2)
         #expect(Set(result.home.devices.map(\.id)) == Set(["ha-sub-1", "888000222"]))
     }
+
+    @Test("A source pin overrides the automatic winner while the pinned source is online")
+    func pinnedSourceOverridesWinner() throws {
+        let haLight = makeLight(id: "ha-pinned-light", name: "客厅灯", roomId: "living_room", roomName: "客厅")
+        let miLight = makeLight(id: "555666777", name: "吸顶灯", roomId: "mi_room_1", roomName: "客厅", model: "xiaomi.light")
+        let haHome = makeHome(
+            devices: [haLight],
+            identities: [
+                haLight.id: makeIdentity(
+                    dids: DeviceIdentityNormalizer.didCandidates(from: ["xiaomi_home_555666777"]),
+                    model: haLight.model,
+                    name: haLight.name,
+                    roomName: haLight.roomName,
+                    kind: .light
+                )
+            ]
+        )
+        let miHome = makeHome(
+            devices: [miLight],
+            identities: [
+                miLight.id: makeIdentity(
+                    dids: ["555666777"],
+                    model: miLight.model,
+                    name: miLight.name,
+                    roomName: miLight.roomName,
+                    kind: .light
+                )
+            ]
+        )
+
+        let automatic = DeviceDeduplicator.merge(homeAssistant: haHome, xiaomiCloud: miHome)
+        let cardID = try #require(automatic.home.devices.first?.id)
+        #expect(automatic.home.deviceBackends[cardID] == .homeAssistant)
+        #expect(automatic.home.pairedDeviceIDs.contains(cardID))
+
+        let pinned = DeviceDeduplicator.merge(
+            homeAssistant: haHome,
+            xiaomiCloud: miHome,
+            pinnedBackends: [cardID: .xiaomiCloud]
+        )
+        #expect(pinned.home.deviceBackends[cardID] == .xiaomiCloud)
+        #expect(pinned.routes[cardID]?.sourceDeviceID == miLight.id)
+        #expect(pinned.routes[cardID]?.sourceDevice == miLight)
+    }
+
+    @Test("A pin falls back to the online source when the pinned source is offline")
+    func pinFallsBackWhenPinnedSourceOffline() throws {
+        let haLight = makeLight(
+            id: "ha-offline-pinned",
+            name: "客厅灯",
+            roomId: "living_room",
+            roomName: "客厅",
+            isOnline: false
+        )
+        let miLight = makeLight(id: "555666778", name: "吸顶灯", roomId: "mi_room_1", roomName: "客厅", model: "xiaomi.light")
+        let haHome = makeHome(
+            devices: [haLight],
+            identities: [
+                haLight.id: makeIdentity(
+                    dids: DeviceIdentityNormalizer.didCandidates(from: ["xiaomi_home_555666778"]),
+                    model: haLight.model,
+                    name: haLight.name,
+                    roomName: haLight.roomName,
+                    kind: .light
+                )
+            ]
+        )
+        let miHome = makeHome(
+            devices: [miLight],
+            identities: [
+                miLight.id: makeIdentity(
+                    dids: ["555666778"],
+                    model: miLight.model,
+                    name: miLight.name,
+                    roomName: miLight.roomName,
+                    kind: .light
+                )
+            ]
+        )
+
+        let automatic = DeviceDeduplicator.merge(homeAssistant: haHome, xiaomiCloud: miHome)
+        let cardID = try #require(automatic.home.devices.first?.id)
+        #expect(automatic.home.deviceBackends[cardID] == .xiaomiCloud)
+
+        let pinned = DeviceDeduplicator.merge(
+            homeAssistant: haHome,
+            xiaomiCloud: miHome,
+            pinnedBackends: [cardID: .homeAssistant]
+        )
+        #expect(pinned.home.deviceBackends[cardID] == .xiaomiCloud)
+        #expect(pinned.routes[cardID]?.sourceDeviceID == miLight.id)
+    }
 }

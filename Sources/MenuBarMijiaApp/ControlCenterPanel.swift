@@ -2131,6 +2131,7 @@ public struct ControlCenterPanel: View {
     }
 
     private var statusFooterLabel: String {
+        if let dual = store.dualSourceStatusSummary { return dual }
         switch store.connectionStatus {
         case .connected:
             if store.homeBackend == .demo {

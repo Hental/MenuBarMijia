@@ -271,11 +271,83 @@ public final class HomeStore {
     }
     /// Which provider currently drives each merged card.
     public internal(set) var deviceBackends: [String: HomeBackend] = [:]
+    /// Cards that exist in both sources; only these offer a source pin (#111).
+    public internal(set) var pairedDeviceIDs: Set<String> = []
+    /// Per-source state from the latest merged snapshot; drives the dual-source footer summary (#111).
+    public internal(set) var sourceStatuses: [HomeBackend: ConnectionStatus] = [:]
+    /// Explicit per-card source choices, keyed by canonical card id (#111).
+    public internal(set) var pinnedDeviceSources: [String: HomeBackend] = [:] {
+        didSet { DeviceSourcePinStorage.save(pinnedDeviceSources, defaults: userDefaults) }
+    }
     /// Sources that contributed the latest merged snapshot.
     public internal(set) var connectedBackends: Set<HomeBackend> = []
 
     public func deviceBackend(for deviceId: String) -> HomeBackend {
         deviceBackends[deviceId] ?? homeBackend
+    }
+
+    /// A card is pinnable only when both sources supplied the same physical device.
+    public func isPairedDualSourceDevice(_ deviceId: String) -> Bool {
+        isDualSourceActive && pairedDeviceIDs.contains(deviceId)
+    }
+
+    public func pinnedSource(for deviceId: String) -> HomeBackend? {
+        pinnedDeviceSources[deviceId]
+    }
+
+    /// `nil` restores automatic online → capability → Home Assistant selection.
+    public func pinDeviceSource(_ deviceId: String, to backend: HomeBackend?) {
+        var next = pinnedDeviceSources
+        if let backend, backend != .demo {
+            next[deviceId] = backend
+        } else {
+            next.removeValue(forKey: deviceId)
+        }
+        guard next != pinnedDeviceSources else { return }
+        pinnedDeviceSources = next
+        (provider as? any DualSourceRecomputing)?.requestRecompute()
+    }
+
+    private enum SourceState {
+        case connected, connecting, offline
+    }
+
+    private func sourceState(_ backend: HomeBackend) -> SourceState {
+        if let status = sourceStatuses[backend] {
+            switch status {
+            case .connected: return .connected
+            case .connecting: return .connecting
+            case .disconnected: return .offline
+            }
+        }
+        return connectedBackends.contains(backend) ? .connected : .connecting
+    }
+
+    /// Bottom-bar summary while both sources are configured. `nil` on a single source, where the
+    /// existing footer already names it.
+    public var dualSourceStatusSummary: String? {
+        guard isDualSourceActive else { return nil }
+        if case .disconnected = connectionStatus {
+            return L10n.tr("HA 与 米家云均未连接", "Home Assistant and Xiaomi Cloud are both offline")
+        }
+        let ha = sourceState(.homeAssistant)
+        let mi = sourceState(.xiaomiCloud)
+        switch (ha, mi) {
+        case (.connected, .connected):
+            return L10n.tr("HA + 米家云已连接", "HA + Xiaomi Cloud connected")
+        case (.connected, .offline):
+            return L10n.tr("HA 已连接（米家云离线已自动兜底）", "HA connected (Xiaomi Cloud offline, automatic fallback)")
+        case (.offline, .connected):
+            return L10n.tr("米家云已连接（HA 离线已自动兜底）", "Xiaomi Cloud connected (HA offline, automatic fallback)")
+        case (.connected, .connecting):
+            return L10n.tr("HA 已连接 · 米家云连接中", "HA connected · Xiaomi Cloud connecting")
+        case (.connecting, .connected):
+            return L10n.tr("米家云已连接 · HA 连接中", "Xiaomi Cloud connected · HA connecting")
+        case (.connecting, .offline), (.offline, .connecting), (.connecting, .connecting):
+            return L10n.tr("HA 与 米家云连接中…", "Home Assistant and Xiaomi Cloud connecting…")
+        case (.offline, .offline):
+            return L10n.tr("HA 与 米家云均未连接", "Home Assistant and Xiaomi Cloud are both offline")
+        }
     }
 
     public var connectionSourceSummary: String {
@@ -373,6 +445,7 @@ public final class HomeStore {
     ) {
         let ud = defaultsSuiteName.flatMap { UserDefaults(suiteName: $0) } ?? .standard
         self.userDefaults = ud
+        self.pinnedDeviceSources = DeviceSourcePinStorage.load(defaults: ud)
         let isTestEnvironment = (provider != nil || dualSource != nil || defaultsSuiteName != nil)
         self.isTestEnvironment = isTestEnvironment
         self.updater = updater ?? AppUpdater()
