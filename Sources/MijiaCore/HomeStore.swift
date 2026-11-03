@@ -125,6 +125,10 @@ public final class HomeStore {
         didSet { userDefaults.set(sensorAlertsOnlyWhenAway, forKey: Self.sensorAlertsOnlyWhenAwayKey) }
     }
 
+    /// Explicit per-kind overrides. Reading this from `isSensorAlertEnabled` lets SwiftUI
+    /// observe toggles that previously only reached `UserDefaults` (#199).
+    public internal(set) var sensorAlertPreferences: [SensorAlertKind: Bool] = [:]
+
     public var homeName: String {
         didSet { userDefaults.set(homeName, forKey: "home_name") }
     }
@@ -335,6 +339,11 @@ public final class HomeStore {
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")
         self.sensorAlertsOnlyWhenAway = ud.bool(forKey: Self.sensorAlertsOnlyWhenAwayKey)
+        self.sensorAlertPreferences = SensorAlertKind.allCases.reduce(into: [SensorAlertKind: Bool]()) { preferences, kind in
+            if ud.object(forKey: kind.defaultsKey) != nil {
+                preferences[kind] = ud.bool(forKey: kind.defaultsKey)
+            }
+        }
         self.awayGap = MacAwayGap(includesAway: ud.bool(forKey: MacAwayGap.storageKey))
         self.isCompactGridMode = (ud.object(forKey: "compact_grid_mode") as? Bool) ?? true
         self.showQuickActionsBar = boolOrDefaultTrue("show_quick_actions_bar")

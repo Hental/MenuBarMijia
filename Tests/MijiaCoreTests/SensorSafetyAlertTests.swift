@@ -1,6 +1,11 @@
 import Foundation
+import Observation
 import Testing
 @testable import MijiaCore
+
+private final class SensorAlertObservationFlag: @unchecked Sendable {
+    var raised = false
+}
 
 @MainActor
 struct SensorSafetyAlertTests {
@@ -44,6 +49,27 @@ struct SensorSafetyAlertTests {
         let (second, _) = try await makeStore(devices: [leak(true)], suite: suite)
         #expect(second.evaluateSafetyAlerts(now: start.addingTimeInterval(60)).isEmpty)
         #expect(second.menuBarShowsHazard)
+    }
+
+    @Test("Per-kind alert toggles are observable and persist across launches")
+    func sensorAlertTogglesAreObservable() async throws {
+        let (store, suite) = try await makeStore(devices: [])
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let flag = SensorAlertObservationFlag()
+        withObservationTracking {
+            _ = store.isSensorAlertEnabled(.contact)
+        } onChange: {
+            flag.raised = true
+        }
+
+        store.setSensorAlertEnabled(.contact, true)
+        #expect(flag.raised)
+        #expect(store.isSensorAlertEnabled(.contact))
+        #expect(store.userDefaults.object(forKey: SensorAlertKind.contact.defaultsKey) as? Bool == true)
+
+        let (relaunched, _) = try await makeStore(devices: [], suite: suite)
+        #expect(relaunched.isSensorAlertEnabled(.contact))
     }
 
     @Test("Contact first sample open emits nothing")
@@ -406,6 +432,7 @@ struct SensorSafetyAlertTests {
                 HADeviceEntry(id: "unknown", area_id: "kitchen", name: "未知漏水"),
                 HADeviceEntry(id: "diag", area_id: "kitchen", name: "诊断漏水"),
                 HADeviceEntry(id: "thermo", area_id: "kitchen", name: "温湿度"),
+                HADeviceEntry(id: "stale", area_id: "kitchen", name: "离线漏水"),
                 HADeviceEntry(id: "front", area_id: "kitchen", name: "入户门锁", model: "lumi.lock.acn02"),
                 HADeviceEntry(id: "plug", area_id: "kitchen", name: "插座", model: "cuco.plug.v3"),
                 HADeviceEntry(id: "lamp", area_id: "kitchen", name: "灯")
@@ -433,6 +460,7 @@ struct SensorSafetyAlertTests {
                 HAEntityEntry(entity_id: "sensor.thermo_temperature", device_id: "thermo"),
                 binaryEntity("binary_sensor.thermo_leak", device: "thermo"),
                 binaryEntity("binary_sensor.thermo_disabled", device: "thermo", disabled: "user"),
+                binaryEntity("binary_sensor.only_stale", device: "stale"),
                 HAEntityEntry(entity_id: "lock.front", device_id: "front"),
                 binaryEntity("binary_sensor.front_door", device: "front"),
                 HAEntityEntry(entity_id: "switch.plug", device_id: "plug"),
@@ -467,6 +495,7 @@ struct SensorSafetyAlertTests {
                 ),
                 "binary_sensor.thermo_leak": binaryState("binary_sensor.thermo_leak", "on", "moisture"),
                 "binary_sensor.thermo_disabled": binaryState("binary_sensor.thermo_disabled", "on", "moisture"),
+                "binary_sensor.only_stale": binaryState("binary_sensor.only_stale", "unavailable", "moisture"),
                 "lock.front": HAEntityState(entityId: "lock.front", state: "locked"),
                 "binary_sensor.front_door": binaryState("binary_sensor.front_door", "on", "door"),
                 "switch.plug": HAEntityState(
@@ -493,7 +522,15 @@ struct SensorSafetyAlertTests {
             SensorObservation(sourceId: "panel#binary_sensor.occupancy", kind: .motion, alarming: false),
             SensorObservation(sourceId: "panel#binary_sensor.presence", kind: .motion, alarming: true)
         ])
-        #expect(Set(home.devices.map(\.id)).isDisjoint(with: ["co", "hidden", "disabled", "unknown", "diag"]))
+        #expect(Set(home.devices.map(\.id)).isDisjoint(with: ["co", "hidden", "disabled", "diag"]))
+
+        let unknown = try #require(sensorSpec(home.devices.first { $0.id == "unknown" }))
+        #expect(unknown.observations.isEmpty)
+        #expect(home.devices.first { $0.id == "unknown" }?.isOnline == false)
+
+        let stale = try #require(sensorSpec(home.devices.first { $0.id == "stale" }))
+        #expect(stale.observations.isEmpty)
+        #expect(home.devices.first { $0.id == "stale" }?.isOnline == false)
 
         let thermo = try #require(sensorSpec(home.devices.first { $0.id == "thermo" }))
         #expect(thermo.temperature == 22.5)

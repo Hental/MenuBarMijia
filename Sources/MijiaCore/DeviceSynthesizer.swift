@@ -468,14 +468,17 @@ public enum DeviceSynthesizer {
             built.kind = .sensor(spec)
             return built
         }
-        guard !observations.isEmpty else { return nil }
+        let safetyEntities = entities.filter { safetyKind(of: $0, states: states) != nil }
+        guard !safetyEntities.isEmpty else { return nil }
+        // A safety sensor keeps its card while offline so its starred offline alert can fire (#199).
+        let isOnline = safetyEntities.contains { states[$0.entity_id]?.isAvailable == true }
         return SmartDevice(
             id: deviceId,
             name: name,
             roomId: roomId,
             roomName: roomName,
             model: model,
-            isOnline: true,
+            isOnline: isOnline,
             kind: .sensor(SensorSpec(observations: observations))
         )
     }
@@ -487,16 +490,8 @@ public enum DeviceSynthesizer {
     ) -> [SensorObservation] {
         var observations: [SensorObservation] = []
         for entity in entities {
-            guard entity.entity_id.hasPrefix("binary_sensor.") else { continue }
-            if entity.disabled_by != nil || entity.hidden_by != nil { continue }
-            switch entity.entity_category?.lowercased() {
-            case "config", "diagnostic":
-                continue
-            default:
-                break
-            }
-            guard let state = states[entity.entity_id],
-                  let kind = safetyKind(deviceClass: state.attributes["device_class"]?.stringValue) else { continue }
+            guard let kind = safetyKind(of: entity, states: states),
+                  let state = states[entity.entity_id] else { continue }
             let alarming: Bool
             switch state.state.lowercased() {
             case "on": alarming = true
@@ -511,6 +506,21 @@ public enum DeviceSynthesizer {
             ))
         }
         return observations
+    }
+
+    private static func safetyKind(
+        of entity: HAEntityEntry,
+        states: [String: HAEntityState]
+    ) -> SensorAlertKind? {
+        guard entity.entity_id.hasPrefix("binary_sensor.") else { return nil }
+        if entity.disabled_by != nil || entity.hidden_by != nil { return nil }
+        switch entity.entity_category?.lowercased() {
+        case "config", "diagnostic":
+            return nil
+        default:
+            break
+        }
+        return safetyKind(deviceClass: states[entity.entity_id]?.attributes["device_class"]?.stringValue)
     }
 
     private static func safetyKind(deviceClass: String?) -> SensorAlertKind? {
