@@ -50,7 +50,6 @@ public struct LightSpec: Equatable, Sendable {
     public var maxKelvin: Int
     public var currentEffect: String?
     public var availableEffects: [String]
-    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
     public var powerWritable: Bool
     public var brightnessWritable: Bool
     public var colorWritable: Bool
@@ -96,7 +95,6 @@ public struct ClimateSpec: Equatable, Sendable {
     public var availableFanModes: [String]
     public var swingMode: String?
     public var availableSwingModes: [String]
-    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
     public var powerWritable: Bool
     public var temperatureWritable: Bool
 
@@ -147,7 +145,6 @@ public struct FanSpec: Equatable, Sendable {
     public var temperature: Double?
     public var humidity: Double?
     public var filterLifePercent: Int?
-    /// Each flag follows that property's access. Absent or true keeps Home Assistant and verified specs writable (#154).
     public var powerWritable: Bool
     public var speedWritable: Bool
     public var swingWritable: Bool
@@ -192,7 +189,6 @@ public struct PlugSpec: Equatable, Sendable {
     public var energyKwh: Double?
     public var childLockEntityId: String?
     public var isChildLocked: Bool
-    /// False when `on` is not writable. A child-lock id is a separate capability (#154).
     public var powerWritable: Bool
 
     public init(
@@ -255,7 +251,6 @@ public struct VacuumSpec: Equatable, Sendable {
     public var modeEntityId: String?
     public var currentMode: String?
     public var availableModes: [String]
-    /// False when the spec has no sweep/charge action. Guessed fallback actions stay absent (#154).
     public var actionsWritable: Bool
 
     public init(
@@ -364,7 +359,6 @@ public struct CameraSpec: Equatable, Sendable {
     public var isMotionDetectionOn: Bool?
     public var streamEntityId: String?
     public var snapshotPath: String?
-    /// False when camera `on` is not writable. Night-shot and motion stay independent (#154).
     public var powerWritable: Bool
 
     public init(
@@ -441,7 +435,6 @@ public enum DeviceKind: Equatable, Sendable {
         }
     }
 
-    /// Power, sweep, and other primary on/off controls. A read-only `on` does not hide unrelated writes (#154).
     public var canTogglePower: Bool {
         switch self {
         case .light(let spec): return spec.powerWritable
@@ -455,7 +448,6 @@ public enum DeviceKind: Equatable, Sendable {
         }
     }
 
-    /// True when at least one property or action on this device can be written.
     public var acceptsControlWrites: Bool {
         switch self {
         case .light(let spec):

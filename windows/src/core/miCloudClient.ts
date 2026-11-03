@@ -1338,7 +1338,6 @@ function exposesWrite(access: readonly string[] | undefined): boolean {
   return Boolean(access?.includes("write"));
 }
 
-/** Omit flags that stay at the writable default so verified specs match the golden corpus. */
 function readOnlyFlags(flags: Record<string, boolean>): Record<string, false> {
   const out: Record<string, false> = {};
   for (const [key, writable] of Object.entries(flags)) {

@@ -69,7 +69,6 @@ export interface PlugSpec {
   readonly energyKwh?: number | null;
   readonly childLockEntityId: string | null;
   isChildLocked: boolean;
-  /** Absent means power is writable. Child lock stays its own entity (#154). */
   readonly powerWritable?: boolean;
 }
 
@@ -94,7 +93,6 @@ export interface VacuumSpec {
   readonly modeEntityId: string | null;
   currentMode: string | null;
   readonly availableModes: readonly string[];
-  /** Absent means sweep actions exist. False when a fallback spec has no actions (#154). */
   readonly actionsWritable?: boolean;
 }
 
@@ -109,7 +107,6 @@ export interface CameraSpec {
   readonly streamEntityId: string | null;
   /** HA-only still frame URL; always absent on the MIoT backend (model parity with macOS). */
   readonly snapshotPath?: string | null;
-  /** Absent means camera power is writable. Night-shot stays its own list (#154). */
   readonly powerWritable?: boolean;
 }
 
@@ -230,7 +227,6 @@ export interface ScheduledCommand {
 }
 
 /** Plugs often power a router, fridge or NAS, and 全关 should not send a cleaning vacuum home (#23). */
-/** Power / sweep toggle. A read-only `on` does not remove brightness or mode (#154). */
 export function deviceCanTogglePower(device: SmartDevice): boolean {
   const kind = device.kind;
   switch (kind.kind) {
@@ -252,7 +248,6 @@ export function deviceCanTogglePower(device: SmartDevice): boolean {
   }
 }
 
-/** True when at least one property or action on this device can be written. */
 export function deviceAcceptsControlWrites(device: SmartDevice): boolean {
   const kind = device.kind;
   switch (kind.kind) {
