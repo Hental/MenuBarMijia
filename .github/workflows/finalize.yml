@@ -81,7 +81,7 @@ jobs:
           fi
           echo "✅ ${RELEASE_TAG} 是未发布的草稿"
 
-      - name: Download the 8 draft assets
+      - name: Download the 10 draft assets
         env:
           RELEASE_VERSION: ${{ steps.check.outputs.version }}
         run: |
@@ -155,7 +155,7 @@ jobs:
               exit 1
             fi
           done < "$RUNNER_TEMP/remote-assets.txt"
-          echo "✅ 8 个附件与服务端摘要一致"
+          echo "✅ 10 个附件与服务端摘要一致"
 
       - name: Publish the draft (no rebuild, no asset overwrite)
         run: |
@@ -177,7 +177,7 @@ jobs:
           {
             echo "### 已发布 ${RELEASE_TAG}"
             echo "- 提交：${{ steps.check.outputs.commit }}"
-            echo "- 附件：DMG/EXE/MSI + 各自 .sha256 + 更新清单与清单签名（共 8 个）"
+            echo "- 附件：DMG/EXE/MSI + 各自 .sha256 + 两端 SPDX SBOM + 更新清单与清单签名（共 10 个）"
             echo "- Ed25519：使用 UpdateChecker.swift 内置公钥验证清单签名，check-fields 再把清单和三个安装包对上"
             echo "- 私钥：未进入 GitHub；CI 全程只做验证"
           } >> "$GITHUB_STEP_SUMMARY"

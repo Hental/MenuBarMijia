@@ -151,6 +151,8 @@ if len(set(keys.values())) != 1:
     sys.exit(f"❌ 双端 Ed25519 更新公钥不一致：{keys}")
 PY
     python3 scripts/update_manifest.py self-test
+    # 发布附件集合（含两端 SBOM）是发版硬门槛，用 fixture 验证严格清单不会悄悄放宽。
+    bash scripts/test_check_release.sh
 fi
 
 if [ "$LINT_ONLY" = "1" ]; then
