@@ -2981,6 +2981,12 @@ describe("Habit share sentence", () => {
     assert.equal(both.includes("21:30"), false);
   });
 
+  it("keeps every occurrence of a repeated device name reserved", () => {
+    const repeated = sentence({ kind: "utterance", text: "客厅吸顶灯能不能把客厅吸顶灯调暗一点" });
+    assert.equal(repeated, "夜晚常做：关闭客厅吸顶灯(3次)");
+    assert.equal(repeated.includes("空调"), false);
+  });
+
   it("does not treat a shared room-stripped base as a needle", () => {
     const living = lamp("living_lamp", "客厅台灯", "客厅");
     const studyLamp = lamp("study_lamp", "书房台灯", "书房");

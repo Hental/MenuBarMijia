@@ -6040,7 +6040,7 @@ export class MenuMijiaWindowsApp {
           phrase: shortcut.phrase,
           intents: shortcut.intents,
         })),
-        devices: this.devices,
+        devices: withAliases(this.layout, this.devices),
         scenes: this.scenes,
         mention: { kind: "utterance", text: sampleEl.value },
         now: new Date(),

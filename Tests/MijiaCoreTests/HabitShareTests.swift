@@ -105,6 +105,13 @@ struct HabitShareTests {
         #expect(!both.contains("21:30"))
     }
 
+    @Test("A repeated device name keeps every occurrence reserved against room names")
+    func repeatedDeviceNameReservesEveryOccurrence() {
+        let sentence = Self.sentence(.utterance("客厅吸顶灯能不能把客厅吸顶灯调暗一点"), now: Self.evening())
+        #expect(sentence == "夜晚常做：关闭客厅吸顶灯(3次)")
+        #expect(!sentence.contains("空调"))
+    }
+
     @Test("A shared room-stripped base is not a needle")
     func sharedBaseMatchesNothing() {
         let living = Self.light("living_lamp", "客厅台灯", "客厅")
