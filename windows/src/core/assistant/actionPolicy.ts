@@ -159,6 +159,15 @@ function decisionSuggestions(
   return suggestions;
 }
 
+/**
+ * The plain-language "不确定时先问我" preference (#180). Only the confidence gate changes; hazard
+ * rules still ask. Defaults preserve the shipped behaviour on both platforms.
+ */
+export interface ConfirmationPolicy {
+  readonly askWhenUnsure: boolean;
+  readonly threshold: number;
+}
+
 /** Mirrors MijiaCore.ModelActionPolicy: guesses below 80% and risky actions wait for a tap. */
 export const ModelActionPolicy = {
   AUTO_RUN_THRESHOLD: 0.8,
@@ -176,7 +185,16 @@ export const ModelActionPolicy = {
     return readProbability(answer["confidence"]) ?? 0;
   },
 
-  decide(devices: readonly SmartDevice[], scenes: readonly HomeScene[], payload: ModelDecisionPayload): ModelDecision {
+  decide(
+    devices: readonly SmartDevice[],
+    scenes: readonly HomeScene[],
+    payload: ModelDecisionPayload,
+    policy: Partial<ConfirmationPolicy> = {}
+  ): ModelDecision {
+    const askWhenUnsure = policy.askWhenUnsure ?? true;
+    const threshold = policy.threshold ?? this.AUTO_RUN_THRESHOLD;
+    const unsure = (confidence: number | null): boolean =>
+      askWhenUnsure && confidence !== null && confidence < threshold;
     const deviceById = new Map(devices.map((device) => [device.id, device]));
     const seen = new Set<string>();
     const surviving: ChosenAction[] = [];
@@ -194,7 +212,7 @@ export const ModelActionPolicy = {
       if (wide) return { action, confirms: true };
       const device = deviceById.get(action.intent.targetId);
       if (device) {
-        const lowConfidence = action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD;
+        const lowConfidence = unsure(action.confidence);
         const confirms =
           device.isSharedHome === true ||
           sanitizePromptText(device.name, PROMPT_NAME_LIMIT) !== device.name ||
@@ -205,7 +223,7 @@ export const ModelActionPolicy = {
       }
       const scene = scenes.find((item) => item.id === action.intent.targetId);
       if (scene) {
-        const lowConfidence = action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD;
+        const lowConfidence = unsure(action.confidence);
         return {
           action,
           confirms: sanitizePromptText(scene.name, PROMPT_NAME_LIMIT) !== scene.name || lowConfidence,
@@ -213,7 +231,7 @@ export const ModelActionPolicy = {
       }
       return {
         action,
-        confirms: action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD,
+        confirms: unsure(action.confidence),
       };
     });
     const waiting = judged.filter((item) => item.confirms).map((item) => item.action);

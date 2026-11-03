@@ -374,8 +374,8 @@ public struct OnboardingGuideView: View {
             }
 
             Text(L10n.tr(
-                "点面板底部的「全关」，10 秒内点撤销横幅就能恢复；3 台以上有 15 秒。也可以直接说「撤销」。",
-                "Tap All Off at the bottom of the panel, then tap the undo banner within 10 seconds (15 seconds for three or more devices). You can also just say \"undo\"."
+                "点面板底部的「全关」，10 秒内点撤销横幅就能恢复；3 台以上有 15 秒。",
+                "Tap All Off at the bottom of the panel, then tap the undo banner within 10 seconds (15 seconds for three or more devices)."
             ))
             .font(.system(size: 10.5))
             .foregroundStyle(.secondary)
