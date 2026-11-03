@@ -30,6 +30,10 @@ _Avoid_: Cloud sync（云同步）、Entity bridge（实体桥接）
 通过小米账号二维码扫码登录获取并持久化在钥匙串中的会话凭证（含 `userId`、`ssecurity`、`serviceToken` 与区域），用于签名与加解密 `/app/*` 请求。这里的 RC4 是小米云 `api.io.mi.com` 私有接口的**传输层**加密（`MIOT-ENCRYPT-ALGORITHM: ENCRYPT-RC4`），不是端到端加密：指令与状态经小米服务器中转，服务器可读明文。
 _Avoid_: Token（令牌）、Cookie（网页凭据）、End-to-end encryption（端到端加密）
 
+**MiAccount（米家账号）**：
+一个已登录的小米账号在某个云端区域下的凭据集合，身份由区域与 `userId` 派生，同一账号在同一区域重复扫码只刷新凭据。一个安装可同时保存多个 `MiAccount`，各自使用独立区域与云端主机；设备按所属账号合并展示，面板在账号多于一个时按账号分组。
+_Avoid_: Session（会话）、Profile（账号配置）、Home（家庭）
+
 **MiotSpec（MIoT 设备规格）**：
 由 `miot-spec.org` 定义的设备型号能力描述模型（含服务 `siid`、属性 `piid`、动作 `aiid`、取值范围与枚举列表），作为米家云端设备合成与指令映射的元数据契约并按型号缓存于本地。
 _Avoid_: Schema（模式）、Profile（配置表）
