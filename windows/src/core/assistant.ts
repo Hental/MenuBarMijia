@@ -2372,7 +2372,7 @@ function mentionedHabitTargets(
       if (at < 0) break;
       const end = at + needle.text.length;
       const overlaps = accepted.some(([start, stop]) => at < stop && start < end);
-      if (!overlaps) hits.push(at);
+      if (!overlaps && hasAsciiWordBoundary(foldedUtterance, needle.text, at)) hits.push(at);
       from = at + 1;
     }
     if (hits.length === 0) continue;
@@ -2395,6 +2395,16 @@ function asciiCasefold(text: string): string {
     out += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : text[index]!;
   }
   return out;
+}
+
+/** English names match whole words only, so a room named "Den" does not match inside "garden". */
+function hasAsciiWordBoundary(haystack: string, needle: string, start: number): boolean {
+  const isWordUnit = (code: number) =>
+    (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  const end = start + needle.length;
+  const leftOk = !isWordUnit(needle.charCodeAt(0)) || start === 0 || !isWordUnit(haystack.charCodeAt(start - 1));
+  const rightOk = !isWordUnit(needle.charCodeAt(needle.length - 1)) || end === haystack.length || !isWordUnit(haystack.charCodeAt(end));
+  return leftOk && rightOk;
 }
 
 /** Builds the ambient context macOS sends: time, indoor readings, running devices, habits. */

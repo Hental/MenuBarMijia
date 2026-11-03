@@ -15,6 +15,7 @@ import {
   type HabitDayType,
   assistantEndpointIdentity,
   buildAssistantContext,
+  decodeHabitOperation,
   resolveHabitSharing,
   shareHabitSentence,
   buildSystemOneRequestBody,
@@ -2548,6 +2549,17 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
       sequencesBefore: Array<{ afterKey: string; targetId: string; operationKey: string; count: number }>;
       expected: Array<Array<{ targetId: string; kind: string; value: unknown }>>;
     }>;
+    shareCases: Array<{
+      name: string;
+      sharing: "on" | "off";
+      utterance: string;
+      date: string;
+      hour: number;
+      deviceIds: string[];
+      entries: Array<{ bucket: string; targetId: string; operationKey: string; count: number; dayType?: string; ageDays?: number }>;
+      phrases?: Array<{ phrase: string; targets: Array<{ targetId: string; operationKey: string }> }>;
+      expected: string;
+    }>;
   };
 
   const toIntent = (item: { targetId: string; kind: string; value: unknown }): DeviceIntent => {
@@ -2720,6 +2732,33 @@ describe("Cross-platform habit memory corpus (#113, ADR-0009)", () => {
         item.expected,
         item.name,
       );
+    }
+
+    for (const item of corpus.shareCases) {
+      const now = caseDate(item.date, item.hour);
+      const devices = item.deviceIds.map((id) => {
+        const dev = corpus.devices.find((d) => d.id === id);
+        assert.ok(dev, `${item.name}: unknown device ${id}`);
+        return dev;
+      });
+      const phrases = (item.phrases ?? []).map((phrase) => ({
+        phrase: phrase.phrase,
+        intents: phrase.targets.map((target) => {
+          const operation = decodeHabitOperation(target.operationKey);
+          assert.ok(operation, `${item.name}: unknown operation ${target.operationKey}`);
+          return { targetId: target.targetId, operation };
+        }),
+      }));
+      const sentence = shareHabitSentence({
+        sharing: item.sharing,
+        memory: memoryFrom(item.entries, now),
+        phrases,
+        devices,
+        scenes: [],
+        mention: { kind: "utterance", text: item.utterance },
+        now,
+      });
+      assert.equal(sentence, item.expected, item.name);
     }
   });
 });

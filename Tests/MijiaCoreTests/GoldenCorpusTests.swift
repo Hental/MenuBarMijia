@@ -900,6 +900,29 @@ struct GoldenCorpusTests {
         let memoryCases: [HabitMemoryCase]
         let sequenceCases: [SequenceCase]
         let topSuggestionCases: [HabitTopSuggestionCase]
+        let shareCases: [HabitShareCase]
+    }
+
+    private struct HabitShareCase: Decodable {
+        let name: String
+        let sharing: String
+        let utterance: String
+        let date: String
+        let hour: Int
+        let deviceIds: [String]
+        let entries: [HabitEntryInput]
+        let phrases: [HabitSharePhrase]?
+        let expected: String
+    }
+
+    private struct HabitSharePhrase: Decodable {
+        let phrase: String
+        let targets: [HabitSharePhraseTarget]
+    }
+
+    private struct HabitSharePhraseTarget: Decodable {
+        let targetId: String
+        let operationKey: String
     }
 
     /// Input row for `entriesBefore`; `ageDays` sets `lastRecordedAt` relative to the case date.
@@ -1161,6 +1184,35 @@ struct GoldenCorpusTests {
             )
             let actual = suggestions.map { $0.intents.map(Self.encodeIntent) }
             #expect(actual == item.expected, "\(item.name)")
+        }
+
+        for item in corpus.shareCases {
+            let now = try Self.habitCaseDate(date: item.date, hour: item.hour)
+            let devices = try item.deviceIds.map { id in
+                try #require(allDevices.first { $0.id == id }, "\(item.name): unknown device \(id)")
+            }
+            let entries = try item.entries.map { try Self.makeEntry($0, now: now) }
+            let bucket = UserHabitMemory.TimeBucket.from(date: now)
+            let phrases = (item.phrases ?? []).map { phrase in
+                UserHabitMemory.PhraseMemory(
+                    phrase: phrase.phrase,
+                    bucket: bucket,
+                    summary: "",
+                    count: 0,
+                    targets: phrase.targets.map {
+                        UserHabitMemory.PhraseTarget(targetId: $0.targetId, operationKey: $0.operationKey)
+                    }
+                )
+            }
+            let sentence = shareHabitSentence(
+                sharing: item.sharing == "on" ? .on : .off,
+                memory: UserHabitMemory(entries: entries, phrases: phrases),
+                devices: devices,
+                scenes: [],
+                mention: .utterance(item.utterance),
+                now: now
+            )
+            #expect(sentence == item.expected, "\(item.name)")
         }
     }
 
