@@ -530,8 +530,8 @@ public enum MiotSynthesizer {
         let hum = r.first("relative-humidity", in: readingServices)
         let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
 
+        let observations = safetyObservations(r, s)
         var statusText: String?
-        var observations: [SensorObservation] = []
         if temp == nil && hum == nil {
             switch s.shortName {
             case "lock":
@@ -542,11 +542,6 @@ public enum MiotSynthesizer {
                 var parts: [String] = []
                 if let moving = motion?.value?.miotBool {
                     parts.append(moving ? L10n.tr("有人移动", "Motion") : L10n.tr("无人移动", "Clear"))
-                    observations.append(SensorObservation(
-                        sourceId: "\(r.did)#miot:\(s.iid)",
-                        kind: .motion,
-                        alarming: moving
-                    ))
                 } else {
                     parts.append(L10n.tr("移动监测", "Motion Sensor"))
                 }
@@ -558,11 +553,6 @@ public enum MiotSynthesizer {
                 let contact = r.ref("contact-state", in: s)
                 if let closed = contact?.value?.miotBool {
                     statusText = closed ? L10n.tr("已闭合", "Closed") : L10n.tr("已打开", "Open")
-                    observations.append(SensorObservation(
-                        sourceId: "\(r.did)#miot:\(s.iid)",
-                        kind: .contact,
-                        alarming: !closed
-                    ))
                 } else {
                     statusText = L10n.tr("门窗监测", "Contact Sensor")
                 }
@@ -570,11 +560,6 @@ public enum MiotSynthesizer {
                 let sub = r.ref("submersion-state", in: s)
                 if let wet = sub?.value?.miotBool {
                     statusText = wet ? L10n.tr("浸水告警", "Leak Detected") : L10n.tr("正常", "Dry")
-                    observations.append(SensorObservation(
-                        sourceId: "\(r.did)#miot:\(s.iid)",
-                        kind: .leak,
-                        alarming: wet
-                    ))
                 } else {
                     statusText = L10n.tr("水浸监测", "Leak Sensor")
                 }
@@ -597,6 +582,24 @@ public enum MiotSynthesizer {
             statusText: statusText,
             observations: observations
         ))
+    }
+
+    private static func safetyObservations(_ r: MiotReader, _ s: MiotService) -> [SensorObservation] {
+        let sourceId = "\(r.did)#miot:\(s.iid)"
+        switch s.shortName {
+        case "motion-sensor", "occupancy-sensor":
+            let motion = r.ref("motion-state", in: s) ?? r.ref("occupancy-status", in: s)
+            guard let moving = motion?.value?.miotBool else { return [] }
+            return [SensorObservation(sourceId: sourceId, kind: .motion, alarming: moving)]
+        case "magnet-sensor":
+            guard let closed = r.ref("contact-state", in: s)?.value?.miotBool else { return [] }
+            return [SensorObservation(sourceId: sourceId, kind: .contact, alarming: !closed)]
+        case "submersion-sensor":
+            guard let wet = r.ref("submersion-state", in: s)?.value?.miotBool else { return [] }
+            return [SensorObservation(sourceId: sourceId, kind: .leak, alarming: wet)]
+        default:
+            return []
+        }
     }
 
     /// Readable `door-state` properties the poll must refresh. A missing one is a failed read.

@@ -89,7 +89,7 @@ public actor MiCloudProvider: HomeProvider {
         }
         // After switching homes, devices of a home never polled would flash as off; wait for their values.
         if !devices.isEmpty, hasValuesForScope() {
-            emitSnapshot()
+            emitSnapshot(closesAwayGap: false)
         }
         do {
             try await discover(api)
@@ -379,9 +379,10 @@ public actor MiCloudProvider: HomeProvider {
     /// MIoT per-item code for "property not supported by this device".
     static let propertyUnsupportedCode = -704002000
 
-    private func emitSnapshot() {
+    private func emitSnapshot(closesAwayGap: Bool = true) {
         let (visibleDevices, visibleRooms) = scopedDevicesAndRooms()
         var home = MiotSynthesizer.synthesize(devices: visibleDevices, rooms: visibleRooms, specs: specsByModel, values: values)
+        home.closesAwayGap = closesAwayGap
         home.homes = Self.homeOptions(from: rooms)
         // Light groups advertise `mode` but their members reject it; hide scenes there too.
         for i in home.devices.indices {
