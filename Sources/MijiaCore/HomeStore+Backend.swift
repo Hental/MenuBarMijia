@@ -13,27 +13,27 @@ extension HomeStore {
             ?? serverURLString
                 .replacingOccurrences(of: "http://", with: "")
                 .replacingOccurrences(of: "https://", with: "")
+        let miSummary: String = if miAccounts.count > 1 {
+            L10n.tr(
+                "米家云端 (\(miAccounts.count) 个账号)",
+                "Xiaomi Cloud (\(miAccounts.count) accounts)"
+            )
+        } else if let masked = miSessionMaskedUserId {
+            L10n.tr("米家云端 (\(masked))", "Xiaomi Cloud (\(masked))")
+        } else {
+            L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+        }
         if hasHASource && hasMiSource {
-            let mi = miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
-                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
-            return "Home Assistant (\(haHost)) + \(mi)"
+            return "Home Assistant (\(haHost)) + \(miSummary)"
         }
         if hasMiSource {
-            return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
-                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+            return miSummary
         }
         if hasHASource {
             return haHost
         }
         if homeBackend == .xiaomiCloud {
-            if miAccounts.count > 1 {
-                return L10n.tr(
-                    "米家云端 (\(miAccounts.count) 个账号)",
-                    "Xiaomi Cloud (\(miAccounts.count) accounts)"
-                )
-            }
-            return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
-                ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
+            return miSummary
         }
         return haHost
     }
@@ -238,6 +238,11 @@ extension HomeStore {
                     && previousBackends[incoming.id] != snapshot.deviceBackends[incoming.id]
                 if backendChanged {
                     optimisticLockUntil.removeValue(forKey: incoming.id)
+                    optimisticLockRevision[incoming.id, default: 0] &+= 1
+                    let prefix = "\(incoming.id)."
+                    for key in debounceTasks.keys where key == incoming.id || key.hasPrefix(prefix) {
+                        debounceTasks.removeValue(forKey: key)?.cancel()
+                    }
                 }
                 // A primary toggle is waiting for this read-back, so the lock from an older
                 // command must not hide the device's own property snapshot.
@@ -842,19 +847,23 @@ extension HomeStore {
         }
     }
 
-    /// Only the cloud backend can name a session end; HA and demo never show this warning.
+    /// Any active Xiaomi Cloud source (pure or dual-source) can name a session end; HA-only and demo never show this warning.
+    private var usesMiSessionLifecycle: Bool {
+        homeBackend != .demo && (homeBackend == .xiaomiCloud || hasMiSource)
+    }
+
     public var miSessionShowsExpired: Bool {
-        homeBackend == .xiaomiCloud && miSessionExpiryState == .expired
+        usesMiSessionLifecycle && miSessionExpiryState == .expired
     }
 
     public var miSessionExpiringSoonDate: Date? {
-        guard homeBackend == .xiaomiCloud,
+        guard usesMiSessionLifecycle,
               case .expiringSoon(let expiresAt) = miSessionExpiryState else { return nil }
         return expiresAt
     }
 
     public func presentMiReauth() {
-        guard homeBackend == .xiaomiCloud,
+        guard usesMiSessionLifecycle,
               miSessionMaskedUserId != nil || !miAccounts.isEmpty else { return }
         if let target = miAccounts.first(where: { $0.session.expiresAt == miSessionExpiresAt }) ?? miAccounts.first {
             miCloudRegion = target.region

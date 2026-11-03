@@ -233,11 +233,20 @@ public actor MiAccountsProvider: HomeProvider {
         var readingIds = Set<String>()
         var sceneIds = Set<String>()
         var homeIds = Set<String>()
+        var identities: [String: DeviceSourceIdentity] = [:]
         var closesAwayGap = true
         for home in reported {
             closesAwayGap = closesAwayGap && home.closesAwayGap
             for room in home.rooms where roomIds.insert(room.id).inserted { rooms.append(room) }
-            for device in home.devices where deviceIds.insert(device.id).inserted { devices.append(device) }
+            for device in home.devices where deviceIds.insert(device.id).inserted {
+                devices.append(device)
+                if let identity = home.deviceIdentities[device.id] {
+                    identities[device.id] = identity
+                }
+            }
+            for (id, identity) in home.deviceIdentities where identities[id] == nil {
+                identities[id] = identity
+            }
             for reading in home.environmentReadings where readingIds.insert(reading.id).inserted {
                 readings.append(reading)
             }
@@ -247,6 +256,7 @@ public actor MiAccountsProvider: HomeProvider {
         var merged = SynthesizedHome(rooms: rooms, devices: devices, environmentReadings: readings, scenes: scenes)
         merged.homes = homes
         merged.accountStatuses = statuses
+        merged.deviceIdentities = identities
         // A partially reported panel or a pre-sleep cached snapshot from another account must not
         // close an away gap: the missing account may hold the door sensor that changed while asleep.
         let allFreshAfterWake = accounts.allSatisfy {

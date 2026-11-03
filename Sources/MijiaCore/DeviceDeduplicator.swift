@@ -45,70 +45,115 @@ public enum DeviceDeduplicator {
     ) -> DeviceMergeResult {
         let haCandidates = candidates(in: homeAssistant, backend: .homeAssistant)
         let miCandidates = candidates(in: xiaomiCloud, backend: .xiaomiCloud)
+        let haFallbackCounts = fallbackKeyCounts(in: haCandidates)
+        let miFallbackCounts = fallbackKeyCounts(in: miCandidates)
 
-        var pairedHA: Set<Int> = []
-        var pairedMi: Set<Int> = []
-        var miIndexForHA: [Int: Int] = [:]
+        var pairing = PairingState()
 
         pairByHardwareKeys(
             haCandidates: haCandidates,
             miCandidates: miCandidates,
-            pairedHA: &pairedHA,
-            pairedMi: &pairedMi,
-            miIndexForHA: &miIndexForHA
+            pairing: &pairing
         )
         pairByFallbackGroups(
             haCandidates: haCandidates,
             miCandidates: miCandidates,
-            pairedHA: &pairedHA,
-            pairedMi: &pairedMi,
-            miIndexForHA: &miIndexForHA,
+            pairing: &pairing,
             key: modelFallbackKey
         )
         pairByFallbackGroups(
             haCandidates: haCandidates,
             miCandidates: miCandidates,
-            pairedHA: &pairedHA,
-            pairedMi: &pairedMi,
-            miIndexForHA: &miIndexForHA,
+            pairing: &pairing,
             key: nameFallbackKey
         )
 
-        var cards: [Card] = []
+        var draftCards: [DraftCard] = []
         for (haIndex, ha) in haCandidates.enumerated() {
-            if let miIndex = miIndexForHA[haIndex] {
+            if let miIndex = pairing.miIndexForHA[haIndex] {
                 let mi = miCandidates[miIndex]
                 let winner = preferredCandidate(homeAssistant: ha, xiaomiCloud: mi)
                 let other = winner.backend == .homeAssistant ? mi : ha
-                let keys = pairCanonicalKeys(homeAssistant: ha, xiaomiCloud: mi)
-                let chosen = canonical.canonicalID(forKeys: keys)
-                    ?? preferredCanonicalID(
-                        homeAssistant: ha.device.id,
-                        xiaomiCloud: mi.device.id,
-                        knownPreferenceIDs: knownPreferenceIDs
+                let strongKeys = pairStrongCanonicalKeys(homeAssistant: ha, xiaomiCloud: mi)
+                let fallbackKeys = uniqueFallbackKeys(
+                    for: ha.identity,
+                    haCounts: haFallbackCounts,
+                    miCounts: miFallbackCounts
+                ) + uniqueFallbackKeys(
+                    for: mi.identity,
+                    haCounts: haFallbackCounts,
+                    miCounts: miFallbackCounts
+                )
+                draftCards.append(
+                    DraftCard(
+                        winner: winner,
+                        other: other,
+                        strongKeys: strongKeys,
+                        fallbackKeys: deduplicatedPreservingOrder(fallbackKeys),
+                        defaultPairedCanonical: preferredCanonicalID(
+                            homeAssistant: ha.device.id,
+                            xiaomiCloud: mi.device.id,
+                            knownPreferenceIDs: knownPreferenceIDs
+                        )
                     )
-                cards.append(Card(winner: winner, other: other, canonicalKeys: keys, chosenCanonical: chosen))
+                )
             } else {
-                let keys = deviceCanonicalKeys(for: ha)
-                cards.append(
-                    Card(
+                draftCards.append(
+                    DraftCard(
                         winner: ha,
                         other: nil,
-                        canonicalKeys: keys,
-                        chosenCanonical: canonical.canonicalID(forKeys: keys)
+                        strongKeys: deviceStrongCanonicalKeys(for: ha),
+                        fallbackKeys: uniqueFallbackKeys(
+                            for: ha.identity,
+                            haCounts: haFallbackCounts,
+                            miCounts: miFallbackCounts
+                        ),
+                        defaultPairedCanonical: nil
                     )
                 )
             }
         }
-        for (miIndex, mi) in miCandidates.enumerated() where !pairedMi.contains(miIndex) {
-            let keys = deviceCanonicalKeys(for: mi)
-            cards.append(
-                Card(
+        for (miIndex, mi) in miCandidates.enumerated() where !pairing.pairedMi.contains(miIndex) {
+            draftCards.append(
+                DraftCard(
                     winner: mi,
                     other: nil,
-                    canonicalKeys: keys,
-                    chosenCanonical: canonical.canonicalID(forKeys: keys)
+                    strongKeys: deviceStrongCanonicalKeys(for: mi),
+                    fallbackKeys: uniqueFallbackKeys(
+                        for: mi.identity,
+                        haCounts: haFallbackCounts,
+                        miCounts: miFallbackCounts
+                    ),
+                    defaultPairedCanonical: nil
                 )
+            )
+        }
+
+        var cardFallbackCounts: [String: Int] = [:]
+        var strongClaimedCanonicals: Set<String> = []
+        for draft in draftCards {
+            for key in draft.fallbackKeys {
+                cardFallbackCounts[key, default: 0] += 1
+            }
+            if let strongMatch = canonical.canonicalID(forKeys: draft.strongKeys) {
+                strongClaimedCanonicals.insert(strongMatch)
+            }
+        }
+
+        let cards: [Card] = draftCards.map { draft in
+            let validFallbackKeys = draft.fallbackKeys.filter { cardFallbackCounts[$0] == 1 }
+            let strongMatch = canonical.canonicalID(forKeys: draft.strongKeys)
+            let fallbackMatch = strongMatch == nil
+                ? canonical.canonicalID(forKeys: validFallbackKeys).flatMap {
+                    strongClaimedCanonicals.contains($0) ? nil : $0
+                }
+                : nil
+            let chosen = strongMatch ?? fallbackMatch ?? draft.defaultPairedCanonical
+            return Card(
+                winner: draft.winner,
+                other: draft.other,
+                canonicalKeys: draft.strongKeys + validFallbackKeys,
+                chosenCanonical: chosen
             )
         }
 
@@ -166,7 +211,8 @@ public enum DeviceDeduplicator {
             if updatedRooms.displayNames[roomKey] == nil {
                 updatedRooms.displayNames[roomKey] = DeviceSynthesizer.normalizeRoomName(merged.roomName)
             }
-            if let id = updatedRooms.idsByName[roomKey] {
+            if let id = updatedRooms.idsByName[roomKey],
+               !hasDistinctAccountScope(id, merged.roomId) {
                 merged.roomId = id
             }
             if let name = updatedRooms.displayNames[roomKey] {
@@ -182,7 +228,9 @@ public enum DeviceDeduplicator {
                     model: merged.model,
                     isOnline: merged.isOnline,
                     kind: merged.kind,
-                    isSharedHome: merged.isSharedHome
+                    isSharedHome: merged.isSharedHome,
+                    accountId: merged.accountId,
+                    accountLabel: merged.accountLabel
                 )
             )
             routes[canonicalID] = DeviceMergeRoute(
@@ -213,6 +261,7 @@ public enum DeviceDeduplicator {
             roomNameOrder: roomNameOrder
         )
         home.homes = xiaomiCloud?.homes ?? []
+        home.accountStatuses = xiaomiCloud?.accountStatuses ?? [:]
         home.closesAwayGap = (homeAssistant?.closesAwayGap ?? true) && (xiaomiCloud?.closesAwayGap ?? true)
         var activeBackends: Set<HomeBackend> = []
         if homeAssistant != nil { activeBackends.insert(.homeAssistant) }
@@ -317,6 +366,26 @@ public enum DeviceDeduplicator {
         let identity: DeviceSourceIdentity?
     }
 
+    private struct PairingState {
+        var pairedHA: Set<Int> = []
+        var pairedMi: Set<Int> = []
+        var miIndexForHA: [Int: Int] = [:]
+
+        mutating func pair(ha haIndex: Int, mi miIndex: Int) {
+            pairedHA.insert(haIndex)
+            pairedMi.insert(miIndex)
+            miIndexForHA[haIndex] = miIndex
+        }
+    }
+
+    private struct DraftCard {
+        let winner: Candidate
+        let other: Candidate?
+        let strongKeys: [String]
+        let fallbackKeys: [String]
+        let defaultPairedCanonical: String?
+    }
+
     private struct Card {
         let winner: Candidate
         let other: Candidate?
@@ -353,6 +422,8 @@ public enum DeviceDeduplicator {
         }
         let name = isBlank(winner.name) ? (card.other?.device.name ?? winner.name) : winner.name
         let model = isBlank(winner.model) ? (card.other?.device.model ?? winner.model) : winner.model
+        let accountId = winner.accountId ?? card.other?.device.accountId
+        let accountLabel = winner.accountLabel ?? card.other?.device.accountLabel
         return SmartDevice(
             id: winner.id,
             name: name,
@@ -361,8 +432,20 @@ public enum DeviceDeduplicator {
             model: model,
             isOnline: winner.isOnline,
             kind: winner.kind,
-            isSharedHome: winner.isSharedHome
+            isSharedHome: winner.isSharedHome,
+            accountId: accountId,
+            accountLabel: accountLabel
         )
+    }
+
+    /// Two Xiaomi account room IDs (`"<accountA>/<room>"` vs `"<accountB>/<room>"`) stay separate
+    /// when no HA room unified them, so removing one account only removes its own room pills.
+    private static func hasDistinctAccountScope(_ lhs: String, _ rhs: String) -> Bool {
+        guard let lhsSlash = lhs.firstIndex(of: "/"),
+              let rhsSlash = rhs.firstIndex(of: "/") else {
+            return false
+        }
+        return lhs[..<lhsSlash] != rhs[..<rhsSlash]
     }
 
     private static func isBlank(_ value: String) -> Bool {
@@ -376,39 +459,57 @@ public enum DeviceDeduplicator {
 
     // MARK: - Pairing
 
+    /// Pass 1 pairs by `did`, pass 2 by `macAddress`, so a shared gateway MAC never blocks a
+    /// sub-device's exact `did` match from pairing first.
     private static func pairByHardwareKeys(
         haCandidates: [Candidate],
         miCandidates: [Candidate],
-        pairedHA: inout Set<Int>,
-        pairedMi: inout Set<Int>,
-        miIndexForHA: inout [Int: Int]
+        pairing: inout PairingState
     ) {
-        for (haIndex, candidate) in haCandidates.enumerated() {
+        pairByHardwarePass(
+            haCandidates: haCandidates,
+            miCandidates: miCandidates,
+            pairing: &pairing,
+            predicate: sharesDID
+        )
+        pairByHardwarePass(
+            haCandidates: haCandidates,
+            miCandidates: miCandidates,
+            pairing: &pairing,
+            predicate: sharesMAC
+        )
+    }
+
+    private static func pairByHardwarePass(
+        haCandidates: [Candidate],
+        miCandidates: [Candidate],
+        pairing: inout PairingState,
+        predicate: (DeviceSourceIdentity, DeviceSourceIdentity) -> Bool
+    ) {
+        for (haIndex, candidate) in haCandidates.enumerated() where !pairing.pairedHA.contains(haIndex) {
             guard let haIdentity = candidate.identity else { continue }
             let matches = miCandidates.indices.filter { miIndex in
-                guard !pairedMi.contains(miIndex),
+                guard !pairing.pairedMi.contains(miIndex),
                       let miIdentity = miCandidates[miIndex].identity else { return false }
-                return sharesHardwareKey(haIdentity, miIdentity)
+                return predicate(haIdentity, miIdentity)
             }
             guard matches.count == 1 else { continue }
-            let miIndex = matches[0]
-            pairedHA.insert(haIndex)
-            pairedMi.insert(miIndex)
-            miIndexForHA[haIndex] = miIndex
+            pairing.pair(ha: haIndex, mi: matches[0])
         }
     }
 
-    private static func sharesHardwareKey(_ a: DeviceSourceIdentity, _ b: DeviceSourceIdentity) -> Bool {
-        if !Set(a.dids).isDisjoint(with: b.dids) { return true }
-        return !Set(a.macAddresses).isDisjoint(with: b.macAddresses)
+    private static func sharesDID(_ a: DeviceSourceIdentity, _ b: DeviceSourceIdentity) -> Bool {
+        !Set(a.dids).isDisjoint(with: b.dids)
+    }
+
+    private static func sharesMAC(_ a: DeviceSourceIdentity, _ b: DeviceSourceIdentity) -> Bool {
+        !Set(a.macAddresses).isDisjoint(with: b.macAddresses)
     }
 
     private static func pairByFallbackGroups(
         haCandidates: [Candidate],
         miCandidates: [Candidate],
-        pairedHA: inout Set<Int>,
-        pairedMi: inout Set<Int>,
-        miIndexForHA: inout [Int: Int],
+        pairing: inout PairingState,
         key: (DeviceSourceIdentity) -> String?
     ) {
         struct Group {
@@ -417,11 +518,11 @@ public enum DeviceDeduplicator {
         }
 
         var groups: [String: Group] = [:]
-        for (index, candidate) in haCandidates.enumerated() where !pairedHA.contains(index) {
+        for (index, candidate) in haCandidates.enumerated() where !pairing.pairedHA.contains(index) {
             guard let identity = candidate.identity, let groupKey = key(identity) else { continue }
             groups[groupKey, default: Group()].homeAssistant.append(index)
         }
-        for (index, candidate) in miCandidates.enumerated() where !pairedMi.contains(index) {
+        for (index, candidate) in miCandidates.enumerated() where !pairing.pairedMi.contains(index) {
             guard let identity = candidate.identity, let groupKey = key(identity) else { continue }
             groups[groupKey, default: Group()].xiaomiCloud.append(index)
         }
@@ -431,10 +532,8 @@ public enum DeviceDeduplicator {
                   group.xiaomiCloud.count == 1 else { continue }
             let haIndex = group.homeAssistant[0]
             let miIndex = group.xiaomiCloud[0]
-            guard !pairedHA.contains(haIndex), !pairedMi.contains(miIndex) else { continue }
-            pairedHA.insert(haIndex)
-            pairedMi.insert(miIndex)
-            miIndexForHA[haIndex] = miIndex
+            guard !pairing.pairedHA.contains(haIndex), !pairing.pairedMi.contains(miIndex) else { continue }
+            pairing.pair(ha: haIndex, mi: miIndex)
         }
     }
 
@@ -451,7 +550,7 @@ public enum DeviceDeduplicator {
         return haID
     }
 
-    private static func pairCanonicalKeys(homeAssistant: Candidate, xiaomiCloud: Candidate) -> [String] {
+    private static func pairStrongCanonicalKeys(homeAssistant: Candidate, xiaomiCloud: Candidate) -> [String] {
         var keys = [
             "pair:\(homeAssistant.device.id)|\(xiaomiCloud.device.id)",
             "ha:\(homeAssistant.device.id)",
@@ -468,12 +567,10 @@ public enum DeviceDeduplicator {
         for mac in sharedMACs.sorted() {
             keys.append("mac:\(mac)")
         }
-        appendFallbackKeys(for: haIdentity, to: &keys)
-        appendFallbackKeys(for: miIdentity, to: &keys)
         return keys
     }
 
-    private static func deviceCanonicalKeys(for candidate: Candidate) -> [String] {
+    private static func deviceStrongCanonicalKeys(for candidate: Candidate) -> [String] {
         var keys: [String] = []
         switch candidate.backend {
         case .homeAssistant:
@@ -486,13 +583,46 @@ public enum DeviceDeduplicator {
         guard let identity = candidate.identity else { return keys }
         for did in identity.dids { keys.append("did:\(did)") }
         for mac in identity.macAddresses { keys.append("mac:\(mac)") }
-        appendFallbackKeys(for: identity, to: &keys)
         return keys
     }
 
-    private static func appendFallbackKeys(for identity: DeviceSourceIdentity, to keys: inout [String]) {
-        if let key = modelFallbackKey(identity) { keys.append(key) }
-        if let key = nameFallbackKey(identity) { keys.append(key) }
+    private static func fallbackKeyCounts(in candidates: [Candidate]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for candidate in candidates {
+            guard let identity = candidate.identity else { continue }
+            if let modelKey = modelFallbackKey(identity) {
+                counts[modelKey, default: 0] += 1
+            }
+            if let nameKey = nameFallbackKey(identity) {
+                counts[nameKey, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func uniqueFallbackKeys(
+        for identity: DeviceSourceIdentity?,
+        haCounts: [String: Int],
+        miCounts: [String: Int]
+    ) -> [String] {
+        guard let identity else { return [] }
+        var keys: [String] = []
+        if let key = modelFallbackKey(identity),
+           haCounts[key, default: 0] <= 1,
+           miCounts[key, default: 0] <= 1 {
+            keys.append(key)
+        }
+        if let key = nameFallbackKey(identity),
+           haCounts[key, default: 0] <= 1,
+           miCounts[key, default: 0] <= 1 {
+            keys.append(key)
+        }
+        return keys
+    }
+
+    private static func deduplicatedPreservingOrder(_ keys: [String]) -> [String] {
+        var seen: Set<String> = []
+        return keys.filter { seen.insert($0).inserted }
     }
 
     private static func modelFallbackKey(_ identity: DeviceSourceIdentity) -> String? {

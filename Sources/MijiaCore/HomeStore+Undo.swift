@@ -350,7 +350,11 @@ extension HomeStore {
         self.undoBanner = nil
         let undoRevision = undoStateRevision
         let preUndoById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        let applicable = applyUndoCommands(banner.restoreCommands)
+        let applicable = applyUndoCommands(banner.restoreCommands, previousDevices: banner.previousDevices)
+        if applicable.isEmpty, !banner.restoreCommands.isEmpty {
+            showToast(L10n.tr("设备状态已变化，无法撤销", "Device state changed; cannot undo"), isError: true)
+            return nil
+        }
 
         let context = controlContextID
         return Task {
@@ -426,11 +430,14 @@ extension HomeStore {
         let lockRevision: UInt64
     }
 
-    func applyUndoCommands(_ commands: [DeviceCommand]) -> [UndoApplicableCommand] {
+    func applyUndoCommands(
+        _ commands: [DeviceCommand],
+        previousDevices: [SmartDevice] = []
+    ) -> [UndoApplicableCommand] {
         var applicable: [UndoApplicableCommand] = []
         for command in commands {
-            for idx in devices.indices {
-                guard let restored = Self.undoEffect(of: command, on: devices[idx]) else { continue }
+            if let idx = devices.indices.first(where: { Self.undoEffect(of: command, on: devices[$0]) != nil }),
+               let restored = Self.undoEffect(of: command, on: devices[idx]) {
                 let name = devices[idx].name
                 devices[idx] = restored
                 let rev = lockOptimistic(restored.id, duration: .seconds(3.0))
@@ -442,8 +449,25 @@ extension HomeStore {
                         lockRevision: rev
                     )
                 )
-                break
+                continue
             }
+
+            guard let prev = previousDevices.first(where: { Self.undoEffect(of: command, on: $0) != nil }),
+                  let idx = devices.indices.first(where: { devices[$0].id == prev.id && devices[$0].isOnline }),
+                  let retargeted = Self.retargetedUndoEffect(of: command, on: devices[idx]) else {
+                continue
+            }
+            let name = devices[idx].name
+            devices[idx] = retargeted.updated
+            let rev = lockOptimistic(retargeted.updated.id, duration: .seconds(3.0))
+            applicable.append(
+                UndoApplicableCommand(
+                    command: retargeted.command,
+                    deviceId: retargeted.updated.id,
+                    deviceName: name,
+                    lockRevision: rev
+                )
+            )
         }
         return applicable
     }

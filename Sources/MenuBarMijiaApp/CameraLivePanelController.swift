@@ -755,6 +755,9 @@ struct CameraLivePanelView: View {
         .onChange(of: cameraSpec?.isOn) { _, _ in
             controller.reloadStream()
         }
+        .onChange(of: cameraSpec?.entityId) { _, _ in
+            controller.reloadStream()
+        }
     }
 
     private var topHUDBar: some View {

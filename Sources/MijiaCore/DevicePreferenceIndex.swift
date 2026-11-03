@@ -41,7 +41,7 @@ public enum DevicePreferenceIndex {
         }
 
         func addDictionaryKeys(_ key: String) {
-            (defaults.dictionary(forKey: key) as? [String: Any])?.keys.forEach { add($0) }
+            defaults.dictionary(forKey: key)?.keys.forEach { add($0) }
         }
 
         func jsonKeys(_ key: String) -> [String] {

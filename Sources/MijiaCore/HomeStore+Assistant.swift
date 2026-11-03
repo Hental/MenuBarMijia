@@ -412,7 +412,11 @@ extension HomeStore {
         undoBanner = nil
         let undoRevision = undoStateRevision
         let preUndoById = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        let applicable = applyUndoCommands(last.restore)
+        let applicable = applyUndoCommands(last.restore, previousDevices: last.previous)
+        if applicable.isEmpty, !last.restore.isEmpty {
+            setAssistantState(.failed(L10n.tr("设备状态已变化，无法撤销", "Device state changed; cannot undo")))
+            return
+        }
         let context = controlContextID
         var failedCommands: [DeviceCommand] = []
         var failedDeviceIds: Set<String> = []
@@ -804,9 +808,12 @@ extension HomeStore {
         guard previous.isOnline else { return .offline(previous.name) }
         guard let effect = Self.assistantEffect(of: intent.operation, on: previous) else { return .skipped }
 
+        let lockRevision: UInt64?
         if !previous.isMomentaryButton {
             devices[idx] = effect.updated
-            lockOptimistic(previous.id, duration: .seconds(3.0))
+            lockRevision = lockOptimistic(previous.id, duration: .seconds(3.0))
+        } else {
+            lockRevision = nil
         }
         do {
             try await executeDeviceCommand(effect.command)
@@ -814,7 +821,7 @@ extension HomeStore {
             return .applied(intent: intent, deviceId: previous.isMomentaryButton ? nil : previous.id, restore: effect.restore)
         } catch {
             guard context == controlContextID else { return .skipped }
-            if !previous.isMomentaryButton {
+            if !previous.isMomentaryButton, optimisticLockRevision[previous.id] == lockRevision {
                 if let revertIdx = devices.firstIndex(where: { $0.id == previous.id }) {
                     devices[revertIdx] = previous
                 }
@@ -824,27 +831,46 @@ extension HomeStore {
         }
     }
 
-    static func undoEffect(of command: DeviceCommand, on device: SmartDevice) -> SmartDevice? {
-        let operation: IntentOperation
+    static func undoOperation(for command: DeviceCommand) -> IntentOperation? {
         switch command {
-        case .setLightPower(_, let on), .setFanPower(_, let on), .setSwitch(_, let on): operation = .power(on)
-        case .setLightBrightness(_, let percent): operation = .brightness(percent)
-        case .setLightColorTemp(_, let kelvin): operation = .colorTemperature(kelvin)
-        case .setLightEffect(_, let effect): operation = .lightEffect(effect)
-        case .setClimatePower(_, let on, let mode): operation = .hvacMode(on ? mode : "off")
-        case .setClimateMode(_, let mode): operation = .hvacMode(mode)
-        case .setClimateTemperature(_, let temperature): operation = .targetTemperature(temperature)
-        case .setClimateFanMode(_, let mode), .setFanPresetMode(_, let mode): operation = .fanSpeed(mode)
-        case .setFanOscillating(_, let on): operation = .oscillation(on)
-        case .vacuumAction(_, .start): operation = .power(true)
-        case .vacuumAction(_, .returnToBase): operation = .power(false)
+        case .setLightPower(_, let on), .setFanPower(_, let on), .setSwitch(_, let on): return .power(on)
+        case .setLightBrightness(_, let percent): return .brightness(percent)
+        case .setLightColorTemp(_, let kelvin): return .colorTemperature(kelvin)
+        case .setLightEffect(_, let effect): return .lightEffect(effect)
+        case .setClimatePower(_, let on, let mode): return .hvacMode(on ? mode : "off")
+        case .setClimateMode(_, let mode): return .hvacMode(mode)
+        case .setClimateTemperature(_, let temperature): return .targetTemperature(temperature)
+        case .setClimateFanMode(_, let mode), .setFanPresetMode(_, let mode): return .fanSpeed(mode)
+        case .setFanOscillating(_, let on): return .oscillation(on)
+        case .vacuumAction(_, .start): return .power(true)
+        case .vacuumAction(_, .returnToBase): return .power(false)
         default: return nil
         }
-        guard let effect = assistantEffect(of: operation, on: device),
+    }
+
+    static func undoEffect(of command: DeviceCommand, on device: SmartDevice) -> SmartDevice? {
+        guard let operation = undoOperation(for: command),
+              let effect = assistantEffect(of: operation, on: device),
               effect.command.targetEntityId == command.targetEntityId else { return nil }
         if case .setClimatePower = command { return effect.updated }
         guard effect.command == command else { return nil }
         return effect.updated
+    }
+
+    static func retargetedUndoEffect(
+        of command: DeviceCommand,
+        on device: SmartDevice
+    ) -> (updated: SmartDevice, command: DeviceCommand)? {
+        guard let operation = undoOperation(for: command),
+              let effect = assistantEffect(of: operation, on: device) else { return nil }
+        if case .setClimatePower(_, let on, let mode) = command,
+           case .climate(let spec) = device.kind {
+            return (
+                effect.updated,
+                .setClimatePower(entityId: spec.entityId, isOn: on, fallbackMode: mode)
+            )
+        }
+        return (effect.updated, effect.command)
     }
 
     /// Verify the same intermediate states and reverse command order used by real execution.

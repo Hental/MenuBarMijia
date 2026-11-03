@@ -23,6 +23,7 @@ public actor DualSourceHomeProvider: HomeProvider {
     private var canonical: CanonicalDeviceRegistry
     private var rooms = RoomIdentityRegistry()
     private var routes: [String: DeviceMergeRoute] = [:]
+    private var activeCameraRoutes: [String: DeviceMergeRoute] = [:]
 
     public init(
         homeAssistant: (any HomeProvider)?,
@@ -85,6 +86,9 @@ public actor DualSourceHomeProvider: HomeProvider {
             }
             emitStatus()
             recompute()
+
+        case .sessionExpired(let session):
+            continuation?.yield(.sessionExpired(session))
 
         case .snapshotUpdated(let home):
             if backend == .homeAssistant {
@@ -153,6 +157,24 @@ public actor DualSourceHomeProvider: HomeProvider {
         }
         rooms = result.rooms
         routes = result.routes
+        for (deviceID, activeRoute) in activeCameraRoutes {
+            let nextRoute = result.routes[deviceID]
+            if nextRoute?.backend != activeRoute.backend || nextRoute?.sourceDeviceID != activeRoute.sourceDeviceID {
+                activeCameraRoutes.removeValue(forKey: deviceID)
+                let ha = homeAssistant
+                let mi = xiaomiCloud
+                Task {
+                    switch activeRoute.backend {
+                    case .homeAssistant:
+                        await ha?.stopCameraStream(for: activeRoute.sourceDevice)
+                    case .xiaomiCloud:
+                        await mi?.stopCameraStream(for: activeRoute.sourceDevice)
+                    case .demo:
+                        break
+                    }
+                }
+            }
+        }
         continuation?.yield(.snapshotUpdated(result.home))
     }
 
@@ -175,6 +197,20 @@ public actor DualSourceHomeProvider: HomeProvider {
                 )
             }
             try await homeAssistant.execute(command)
+        }
+    }
+
+    public func readBack(deviceId: String) async -> ControlReadBack {
+        guard let route = routes[deviceId] else { return .failed }
+        switch route.backend {
+        case .homeAssistant:
+            guard let homeAssistant else { return .failed }
+            return await homeAssistant.readBack(deviceId: route.sourceDeviceID)
+        case .xiaomiCloud:
+            guard let xiaomiCloud else { return .failed }
+            return await xiaomiCloud.readBack(deviceId: route.sourceDeviceID)
+        case .demo:
+            return .unavailable
         }
     }
 
@@ -235,14 +271,22 @@ public actor DualSourceHomeProvider: HomeProvider {
         quality: XiaomiCameraStreamQuality
     ) async throws -> CameraStreamSource {
         if let route = routes[device.id] {
+            if let previous = activeCameraRoutes[device.id],
+               (previous.backend != route.backend || previous.sourceDeviceID != route.sourceDeviceID) {
+                await stopCameraStream(for: previous)
+            }
             switch route.backend {
             case .homeAssistant:
                 if let homeAssistant {
-                    return try await homeAssistant.resolveCameraStream(for: route.sourceDevice, quality: quality)
+                    let source = try await homeAssistant.resolveCameraStream(for: route.sourceDevice, quality: quality)
+                    activeCameraRoutes[device.id] = route
+                    return source
                 }
             case .xiaomiCloud:
                 if let xiaomiCloud {
-                    return try await xiaomiCloud.resolveCameraStream(for: route.sourceDevice, quality: quality)
+                    let source = try await xiaomiCloud.resolveCameraStream(for: route.sourceDevice, quality: quality)
+                    activeCameraRoutes[device.id] = route
+                    return source
                 }
             case .demo:
                 break
@@ -251,13 +295,31 @@ public actor DualSourceHomeProvider: HomeProvider {
         if case .camera(let spec) = device.kind,
            MiotAddress.parse(spec.entityId) != nil,
            let xiaomiCloud {
-            return try await xiaomiCloud.resolveCameraStream(for: device, quality: quality)
+            let source = try await xiaomiCloud.resolveCameraStream(for: device, quality: quality)
+            activeCameraRoutes[device.id] = DeviceMergeRoute(
+                backend: .xiaomiCloud,
+                sourceDeviceID: device.id,
+                sourceDevice: device
+            )
+            return source
         }
         if let homeAssistant {
-            return try await homeAssistant.resolveCameraStream(for: device, quality: quality)
+            let source = try await homeAssistant.resolveCameraStream(for: device, quality: quality)
+            activeCameraRoutes[device.id] = DeviceMergeRoute(
+                backend: .homeAssistant,
+                sourceDeviceID: device.id,
+                sourceDevice: device
+            )
+            return source
         }
         if let xiaomiCloud {
-            return try await xiaomiCloud.resolveCameraStream(for: device, quality: quality)
+            let source = try await xiaomiCloud.resolveCameraStream(for: device, quality: quality)
+            activeCameraRoutes[device.id] = DeviceMergeRoute(
+                backend: .xiaomiCloud,
+                sourceDeviceID: device.id,
+                sourceDevice: device
+            )
+            return source
         }
         throw HomeProviderError.serviceCallFailed(
             501,
@@ -266,17 +328,17 @@ public actor DualSourceHomeProvider: HomeProvider {
     }
 
     public func stopCameraStream(for device: SmartDevice) async {
-        if let route = routes[device.id] {
-            switch route.backend {
-            case .homeAssistant:
-                await homeAssistant?.stopCameraStream(for: route.sourceDevice)
-                return
-            case .xiaomiCloud:
-                await xiaomiCloud?.stopCameraStream(for: route.sourceDevice)
-                return
-            case .demo:
-                break
-            }
+        let activeRoute = activeCameraRoutes.removeValue(forKey: device.id)
+        let currentRoute = routes[device.id]
+        if let activeRoute {
+            await stopCameraStream(for: activeRoute)
+        }
+        if let currentRoute,
+           (currentRoute.backend != activeRoute?.backend || currentRoute.sourceDeviceID != activeRoute?.sourceDeviceID) {
+            await stopCameraStream(for: currentRoute)
+        }
+        if activeRoute != nil || currentRoute != nil {
+            return
         }
         if case .camera(let spec) = device.kind, MiotAddress.parse(spec.entityId) != nil {
             await xiaomiCloud?.stopCameraStream(for: device)
@@ -284,6 +346,17 @@ public actor DualSourceHomeProvider: HomeProvider {
         }
         await homeAssistant?.stopCameraStream(for: device)
         await xiaomiCloud?.stopCameraStream(for: device)
+    }
+
+    private func stopCameraStream(for route: DeviceMergeRoute) async {
+        switch route.backend {
+        case .homeAssistant:
+            await homeAssistant?.stopCameraStream(for: route.sourceDevice)
+        case .xiaomiCloud:
+            await xiaomiCloud?.stopCameraStream(for: route.sourceDevice)
+        case .demo:
+            break
+        }
     }
 
     public func shutdown() {
@@ -294,7 +367,9 @@ public actor DualSourceHomeProvider: HomeProvider {
         if let ha = homeAssistant as? HAWebSocketProvider {
             Task { await ha.shutdown() }
         }
-        if let mi = xiaomiCloud as? MiCloudProvider {
+        if let mi = xiaomiCloud as? MiAccountsProvider {
+            Task { await mi.shutdown() }
+        } else if let mi = xiaomiCloud as? MiCloudProvider {
             Task { await mi.shutdown() }
         }
     }

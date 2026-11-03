@@ -876,4 +876,94 @@ struct DualSourceMergeTests {
         #expect(miOnly.home.deviceBackends.count == miOnly.home.devices.count)
         #expect(miOnly.home.deviceIdentities.isEmpty)
     }
+
+    @Test("Same-room same-model sibling does not hijack canonical ID via fallback key")
+    func siblingDoesNotHijackCanonicalID() throws {
+        let haLightA = makeLight(id: "ha-light-a", name: "筒灯A", roomId: "living_room", roomName: "客厅", model: "yeelink.light.spot1")
+        let haLightB = makeLight(id: "ha-light-b", name: "筒灯B", roomId: "living_room", roomName: "客厅", model: "yeelink.light.spot1")
+        let miLightA = makeLight(id: "111000111", name: "筒灯A", roomId: "mi_living", roomName: "客厅", model: "yeelink.light.spot1")
+
+        let haHome = makeHome(
+            devices: [haLightA, haLightB],
+            identities: [
+                haLightA.id: makeIdentity(dids: ["111000111"], model: haLightA.model, name: haLightA.name, roomName: "客厅", kind: .light),
+                haLightB.id: makeIdentity(dids: ["222000222"], model: haLightB.model, name: haLightB.name, roomName: "客厅", kind: .light),
+            ]
+        )
+        let miHome = makeHome(
+            devices: [miLightA],
+            identities: [
+                miLightA.id: makeIdentity(dids: ["111000111"], model: miLightA.model, name: miLightA.name, roomName: "客厅", kind: .light),
+            ]
+        )
+
+        let first = DeviceDeduplicator.merge(
+            homeAssistant: haHome,
+            xiaomiCloud: miHome,
+            knownPreferenceIDs: ["ha-light-a"]
+        )
+        #expect(Set(first.home.devices.map(\.id)) == Set(["ha-light-a", "ha-light-b"]))
+        #expect(first.canonical.assignments["fallback-model:客厅|yeelink.light.spot1|light"] == nil)
+
+        // Even if only Light B remains in a later HA-only snapshot, it keeps its own ID and never steals ha-light-a.
+        let bOnlyHome = makeHome(
+            devices: [haLightB],
+            identities: [
+                haLightB.id: makeIdentity(dids: ["222000222"], model: haLightB.model, name: haLightB.name, roomName: "客厅", kind: .light),
+            ]
+        )
+        let second = DeviceDeduplicator.merge(
+            homeAssistant: bOnlyHome,
+            xiaomiCloud: nil,
+            canonical: first.canonical
+        )
+        #expect(second.home.devices.map(\.id) == ["ha-light-b"])
+    }
+
+    @Test("DID hardware match pairs before shared gateway MAC address")
+    func didPassRunsBeforeSharedGatewayMAC() throws {
+        let sharedMAC = "aabbccddeeff"
+        let haSubDevice = makeLight(id: "ha-sub-1", name: "子设备灯", roomId: "living_room", roomName: "客厅")
+        let miSubDevice1 = makeLight(id: "888000111", name: "子设备灯", roomId: "mi_living", roomName: "客厅")
+        let miSubDevice2 = makeLight(id: "888000222", name: "走廊灯", roomId: "mi_hall", roomName: "走廊")
+
+        let haHome = makeHome(
+            devices: [haSubDevice],
+            identities: [
+                haSubDevice.id: makeIdentity(
+                    dids: ["888000111"],
+                    macs: [sharedMAC],
+                    model: haSubDevice.model,
+                    name: haSubDevice.name,
+                    roomName: "客厅",
+                    kind: .light
+                )
+            ]
+        )
+        let miHome = makeHome(
+            devices: [miSubDevice1, miSubDevice2],
+            identities: [
+                miSubDevice1.id: makeIdentity(
+                    dids: ["888000111"],
+                    macs: [sharedMAC],
+                    model: miSubDevice1.model,
+                    name: miSubDevice1.name,
+                    roomName: "客厅",
+                    kind: .light
+                ),
+                miSubDevice2.id: makeIdentity(
+                    dids: ["888000222"],
+                    macs: [sharedMAC],
+                    model: miSubDevice2.model,
+                    name: miSubDevice2.name,
+                    roomName: "走廊",
+                    kind: .light
+                ),
+            ]
+        )
+
+        let result = DeviceDeduplicator.merge(homeAssistant: haHome, xiaomiCloud: miHome)
+        #expect(result.home.devices.count == 2)
+        #expect(Set(result.home.devices.map(\.id)) == Set(["ha-sub-1", "888000222"]))
+    }
 }

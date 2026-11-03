@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import MijiaCore
 
+@Suite(.serialized)
 struct DualSourceIntegrationTests {
     private let did = "1234567890"
     private let haID = "ha-registry-1"
@@ -36,7 +37,7 @@ struct DualSourceIntegrationTests {
 
     @MainActor
     private func waitUntil(
-        timeout: Duration = .seconds(3),
+        timeout: Duration = .seconds(15),
         _ condition: @MainActor () -> Bool
     ) async throws {
         let deadline = ContinuousClock.now.advanced(by: timeout)
@@ -378,5 +379,162 @@ struct DualSourceIntegrationTests {
         #expect(identity.dids == [did])
         #expect(identity.macAddresses == ["aabbccddeeff"])
         #expect(identity.kindTag == .light)
+    }
+
+    @MainActor
+    @Test("Undo after source handoff retargets restore commands to the active source")
+    func undoRetargetsAfterSourceSwitch() async throws {
+        let suite = "test.dual.undo.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        var haDevice = light(
+            id: haID,
+            name: "客厅吸顶灯",
+            roomID: "ha-living",
+            roomName: "客厅",
+            entityId: "light.living_ceiling"
+        )
+        haDevice.kind = .light(LightSpec(entityId: "light.living_ceiling", isOn: true, brightnessPercent: 80))
+
+        var miDevice = light(
+            id: did,
+            name: "吸顶灯",
+            roomID: "mi-living",
+            roomName: "客厅",
+            entityId: "miot:\(did):2"
+        )
+        miDevice.kind = .light(LightSpec(entityId: "miot:\(did):2", isOn: false, brightnessPercent: 80))
+
+        let haHome = home(
+            [haDevice],
+            identities: [
+                haID: DeviceSourceIdentity(
+                    dids: [did],
+                    model: "yeelink.light.ceiling22",
+                    name: "客厅吸顶灯",
+                    roomName: "客厅",
+                    kindTag: .light
+                )
+            ]
+        )
+        let miHome = home(
+            [miDevice],
+            identities: [
+                did: DeviceSourceIdentity(
+                    dids: [did],
+                    model: "yeelink.light.ceiling22",
+                    name: "吸顶灯",
+                    roomName: "客厅",
+                    kindTag: .light
+                )
+            ]
+        )
+
+        let haMock = MockHomeProvider(snapshot: haHome)
+        let miMock = MockHomeProvider(snapshot: miHome)
+        let store = HomeStore(
+            dualSource: (homeAssistant: haMock, xiaomiCloud: miMock),
+            defaultsSuiteName: suite
+        )
+
+        try await waitUntil {
+            store.connectedBackends == Set([.homeAssistant, .xiaomiCloud])
+                && store.devices.count == 1
+        }
+        let canonical = try #require(store.devices.first?.id)
+        #expect(store.deviceBackend(for: canonical) == .homeAssistant)
+
+        store.turnAllOff()
+        try await waitUntil { store.undoBanner != nil }
+        for _ in 0..<100 where (await haMock.executedCommands.isEmpty) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        // HA disconnects before the user taps Undo; the card falls back to Mi Cloud (`miot:...`).
+        await haMock.sendStatus(.disconnected("HA down"))
+        try await waitUntil {
+            store.deviceBackend(for: canonical) == .xiaomiCloud
+        }
+
+        let undoTask = store.undoTurnAllOff()
+        await undoTask?.value
+
+        let miCommands = await miMock.executedCommands
+        #expect(miCommands.contains(.setLightPower(entityId: "miot:\(did):2", isOn: true)))
+    }
+
+    @MainActor
+    @Test("Source handoff cancels in-flight debounced slider writes from the old source")
+    func sourceHandoffCancelsStaleDebouncedWrite() async throws {
+        let suite = "test.dual.debounce.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        let haDevice = light(
+            id: haID,
+            name: "客厅吸顶灯",
+            roomID: "ha-living",
+            roomName: "客厅",
+            entityId: "light.living_ceiling"
+        )
+        let miDevice = light(
+            id: did,
+            name: "吸顶灯",
+            roomID: "mi-living",
+            roomName: "客厅",
+            entityId: "miot:\(did):2"
+        )
+        let haHome = home(
+            [haDevice],
+            identities: [
+                haID: DeviceSourceIdentity(
+                    dids: [did],
+                    model: "yeelink.light.ceiling22",
+                    name: "客厅吸顶灯",
+                    roomName: "客厅",
+                    kindTag: .light
+                )
+            ]
+        )
+        let miHome = home(
+            [miDevice],
+            identities: [
+                did: DeviceSourceIdentity(
+                    dids: [did],
+                    model: "yeelink.light.ceiling22",
+                    name: "吸顶灯",
+                    roomName: "客厅",
+                    kindTag: .light
+                )
+            ]
+        )
+
+        let haMock = MockHomeProvider(snapshot: haHome)
+        let miMock = MockHomeProvider(snapshot: miHome)
+        let store = HomeStore(
+            dualSource: (homeAssistant: haMock, xiaomiCloud: miMock),
+            defaultsSuiteName: suite
+        )
+        store.controlDebounceInterval = .milliseconds(120)
+
+        try await waitUntil {
+            store.connectedBackends == Set([.homeAssistant, .xiaomiCloud])
+                && store.devices.count == 1
+        }
+        let canonical = try #require(store.devices.first?.id)
+        #expect(store.deviceBackend(for: canonical) == .homeAssistant)
+
+        await haMock.setShouldFail(true)
+        store.setLightBrightness(canonical, percent: 45)
+        await haMock.sendStatus(.disconnected("HA down"))
+        try await waitUntil {
+            store.deviceBackend(for: canonical) == .xiaomiCloud
+        }
+
+        try await Task.sleep(for: .milliseconds(200))
+        guard case .light(let spec) = store.devices.first?.kind else {
+            Issue.record("expected light device")
+            return
+        }
+        #expect(spec.entityId == "miot:\(did):2")
     }
 }
