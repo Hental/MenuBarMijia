@@ -1584,12 +1584,6 @@ export const EMPTY_ASSISTANT_CONTEXT: AssistantContext = {
   habitSummary: "",
 };
 
-/** The part of `learnedShortcuts` the habit summary reads. */
-export interface HabitPhraseSummary {
-  readonly phrase: string;
-  readonly reply: string;
-}
-
 /** Time-of-day buckets, identical to macOS `UserHabitMemory.TimeBucket`. */
 export function timeBucketLabel(hour: number): string {
   if (hour >= 6 && hour < 11) return "清晨";
@@ -1616,62 +1610,6 @@ export function buildEnvironmentSummary(readings: readonly EnvironmentReading[])
       return text;
     })
     .join("，");
-}
-
-/**
- * Windows' habit memory mirrors macOS `UserHabitMemory` time-bucket entries (#113).
- * Phrase → action pairs (`learnedShortcuts`) stay separate; the `user_habits` field
- * name and bucket words must stay aligned with macOS (#38).
- */
-export function buildHabitSummary(
-  enabled: boolean,
-  shortcuts: readonly HabitPhraseSummary[],
-  memory?: Readonly<{
-    entries: readonly HabitEntry[];
-    sequences?: readonly { afterKey: string; targetId: string; operationKey: string; count: number }[];
-    lastAction?: { targetId: string; operationKey: string; recordedAtMs: number } | null;
-  }>,
-  devices: readonly SmartDevice[] = [],
-  scenes: readonly HomeScene[] = [],
-  now: Date = new Date(),
-): string {
-  if (!enabled) return "";
-  const parts: string[] = [];
-  if (memory && memory.entries.length > 0) {
-    const bucket = timeBucketLabel(now.getHours());
-    const topForBucket = memory.entries
-      .filter((entry) => entry.bucket === bucket)
-      .slice(0, 4)
-      .map((entry) => {
-        const operation = decodeHabitOperation(entry.operationKey);
-        if (!operation) return null;
-        const title = IntentReply.describe([{ targetId: entry.targetId, operation }], devices, scenes).replace(/^已/, "");
-        return `${title}(${entry.count}次)`;
-      })
-      .filter((v): v is string => v !== null);
-    if (topForBucket.length > 0) parts.push(`${bucket}常做：${topForBucket.join("、")}`);
-  }
-  // Next-action hint from the freshest learned transition (ADR-0009).
-  if (memory?.lastAction && memory.sequences && now.getTime() - memory.lastAction.recordedAtMs <= HABIT_SEQUENCE_BOOST_WINDOW_MS) {
-    const afterKey = `${memory.lastAction.targetId}|${memory.lastAction.operationKey}`;
-    const next = [...memory.sequences]
-      .filter((s) => s.afterKey === afterKey)
-      .sort((a, b) => b.count - a.count)[0];
-    if (next) {
-      const prevOp = decodeHabitOperation(memory.lastAction.operationKey);
-      const nextOp = decodeHabitOperation(next.operationKey);
-      if (prevOp && nextOp) {
-        const prevTitle = IntentReply.describe([{ targetId: memory.lastAction.targetId, operation: prevOp }], devices, scenes).replace(/^已/, "");
-        const nextTitle = IntentReply.describe([{ targetId: next.targetId, operation: nextOp }], devices, scenes).replace(/^已/, "");
-        parts.push(`刚做完${prevTitle}后常做：${nextTitle}(${next.count}次)`);
-      }
-    }
-  }
-  if (shortcuts.length > 0) {
-    const top = shortcuts.slice(0, 4).map((shortcut) => `「${shortcut.phrase}」→${shortcut.reply}`);
-    parts.push(`个人口头禅：${top.join("；")}`);
-  }
-  return parts.join("。");
 }
 
 // MARK: - Full-Channel Habit Memory & Top-4 Engine (#113)
@@ -2281,21 +2219,219 @@ export class UserHabitMemory {
   }
 }
 
+export type HabitSharing = "off" | "on";
+
+export type CommandMention =
+  | { readonly kind: "none" }
+  | { readonly kind: "utterance"; readonly text: string };
+
+export function resolveHabitSharing(stored: unknown): { sharing: HabitSharing; persistOff: boolean } {
+  if (stored === true) return { sharing: "on", persistOff: false };
+  if (stored === false) return { sharing: "off", persistOff: false };
+  return { sharing: "off", persistOff: true };
+}
+
+export function shareHabitSentence(input: {
+  sharing: HabitSharing;
+  memory: {
+    readonly entries: readonly HabitEntry[];
+    readonly sequences?: readonly HabitSequenceEntry[];
+    readonly lastAction?: HabitLastAction | null;
+  };
+  phrases: readonly { readonly phrase: string; readonly intents: readonly DeviceIntent[] }[];
+  devices: readonly SmartDevice[];
+  scenes: readonly HomeScene[];
+  mention: CommandMention;
+  now: Date;
+}): string {
+  if (input.sharing !== "on") return "";
+  if (input.mention.kind !== "utterance") return "";
+  const utterance = input.mention.text.trim();
+  if (!utterance) return "";
+  const ids = mentionedHabitTargets(utterance, input.devices, input.scenes);
+  if (ids.size === 0) return "";
+
+  const bucket = timeBucketLabel(input.now.getHours());
+  const parts: string[] = [];
+  const bucketTitles: string[] = [];
+  for (const entry of input.memory.entries) {
+    if (entry.bucket !== bucket || !ids.has(entry.targetId)) continue;
+    const operation = decodeHabitOperation(entry.operationKey);
+    if (!operation) continue;
+    const title = habitSuggestionTitle({ targetId: entry.targetId, operation }, input.devices, input.scenes);
+    if (!title) continue;
+    bucketTitles.push(`${title}(${entry.count}次)`);
+    if (bucketTitles.length === 4) break;
+  }
+  if (bucketTitles.length > 0) parts.push(`${bucket}常做：${bucketTitles.join("、")}`);
+
+  const phraseBits: string[] = [];
+  for (const phrase of input.phrases) {
+    const titles: string[] = [];
+    let qualified = true;
+    for (const intent of phrase.intents) {
+      if (encodeHabitOperation(intent.operation) === null) continue;
+      const title = habitSuggestionTitle(intent, input.devices, input.scenes);
+      if (!ids.has(intent.targetId) || !title) {
+        qualified = false;
+        break;
+      }
+      titles.push(title);
+    }
+    if (!qualified || titles.length === 0) continue;
+    phraseBits.push(`「${phrase.phrase}」→${titles.join("+")}`);
+    if (phraseBits.length === 4) break;
+  }
+  if (phraseBits.length > 0) parts.push(`个人口头禅：${phraseBits.join("；")}`);
+
+  const last = input.memory.lastAction;
+  if (last && input.now.getTime() - last.recordedAtMs <= HABIT_SEQUENCE_BOOST_WINDOW_MS) {
+    const afterKey = `${last.targetId}|${last.operationKey}`;
+    const next = [...(input.memory.sequences ?? [])]
+      .filter((item) => item.afterKey === afterKey)
+      .sort((a, b) => b.count - a.count)[0];
+    if (next && ids.has(last.targetId) && ids.has(next.targetId)) {
+      const previousOperation = decodeHabitOperation(last.operationKey);
+      const nextOperation = decodeHabitOperation(next.operationKey);
+      if (previousOperation && nextOperation) {
+        const previousTitle = habitSuggestionTitle(
+          { targetId: last.targetId, operation: previousOperation },
+          input.devices,
+          input.scenes,
+        );
+        const nextTitle = habitSuggestionTitle(
+          { targetId: next.targetId, operation: nextOperation },
+          input.devices,
+          input.scenes,
+        );
+        if (previousTitle && nextTitle) {
+          parts.push(`刚做完${previousTitle}后常做：${nextTitle}(${next.count}次)`);
+        }
+      }
+    }
+  }
+  return parts.join("。");
+}
+
+function mentionedHabitTargets(
+  utterance: string,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): Set<string> {
+  const idsByText = new Map<string, Set<string>>();
+  const absorb = (raw: string, ids: Iterable<string>) => {
+    const folded = asciiCasefold(raw);
+    if (folded.length < 2) return;
+    let bucket = idsByText.get(folded);
+    if (!bucket) {
+      bucket = new Set();
+      idsByText.set(folded, bucket);
+    }
+    for (const id of ids) bucket.add(id);
+  };
+  for (const device of devices) absorb(device.name, [device.id]);
+  for (const scene of scenes) absorb(scene.name, [scene.id]);
+  for (const device of devices) absorb(device.roomName, [device.id]);
+
+  const baseIds = new Map<string, Set<string>>();
+  for (const device of devices) {
+    const base = roomStrippedBase(device.name, device.roomName);
+    if (!base) continue;
+    const folded = asciiCasefold(base);
+    if (folded.length < 2) continue;
+    let bucket = baseIds.get(folded);
+    if (!bucket) {
+      bucket = new Set();
+      baseIds.set(folded, bucket);
+    }
+    bucket.add(device.id);
+  }
+  for (const [base, ids] of baseIds) {
+    if (ids.size === 1) absorb(base, ids);
+  }
+
+  const needles = [...idsByText.entries()].map(([text, ids]) => ({ text, ids }));
+  needles.sort((a, b) => {
+    if (a.text.length !== b.text.length) return b.text.length - a.text.length;
+    const count = Math.min(a.text.length, b.text.length);
+    for (let index = 0; index < count; index++) {
+      const delta = b.text.charCodeAt(index) - a.text.charCodeAt(index);
+      if (delta !== 0) return delta;
+    }
+    return b.text.length - a.text.length;
+  });
+
+  const foldedUtterance = asciiCasefold(utterance);
+  const accepted: Array<[number, number]> = [];
+  const ids = new Set<string>();
+  for (const needle of needles) {
+    let from = 0;
+    let hit: number | null = null;
+    while (from <= foldedUtterance.length - needle.text.length) {
+      const at = foldedUtterance.indexOf(needle.text, from);
+      if (at < 0) break;
+      const end = at + needle.text.length;
+      const overlaps = accepted.some(([start, stop]) => at < stop && start < end);
+      if (!overlaps) {
+        hit = at;
+        break;
+      }
+      from = at + 1;
+    }
+    if (hit === null) continue;
+    accepted.push([hit, hit + needle.text.length]);
+    for (const id of needle.ids) ids.add(id);
+  }
+  return ids;
+}
+
+function roomStrippedBase(name: string, roomName: string): string | null {
+  if (roomName.length < 1 || !name.startsWith(roomName)) return null;
+  const base = name.slice(roomName.length);
+  return base.length > 0 ? base : null;
+}
+
+function asciiCasefold(text: string): string {
+  let out = "";
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    out += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : text[index]!;
+  }
+  return out;
+}
+
 /** Builds the ambient context macOS sends: time, indoor readings, running devices, habits. */
 export function buildAssistantContext(options: {
   readonly now: Date;
   readonly readings: readonly EnvironmentReading[];
   readonly devices: readonly SmartDevice[];
-  readonly habitSummary?: string;
+  readonly scenes: readonly HomeScene[];
+  readonly sharing: HabitSharing;
+  readonly memory: {
+    readonly entries: readonly HabitEntry[];
+    readonly sequences?: readonly HabitSequenceEntry[];
+    readonly lastAction?: HabitLastAction | null;
+  };
+  readonly phrases: readonly { readonly phrase: string; readonly intents: readonly DeviceIntent[] }[];
+  readonly mention: CommandMention;
 }): AssistantContext {
   const active = options.devices
     .filter((device) => device.isOnline && isDeviceActiveOn(device))
     .map((device) => `${device.name}(${catalogStateSummary(device)})`);
+  const habitSummary = shareHabitSentence({
+    sharing: options.sharing,
+    memory: options.memory,
+    phrases: options.phrases,
+    devices: options.devices,
+    scenes: options.scenes,
+    mention: options.mention,
+    now: options.now,
+  });
   return {
     timeSummary: cleanPromptField(buildTimeSummary(options.now)),
     environmentSummary: cleanPromptField(buildEnvironmentSummary(options.readings)),
     activeDevicesSummary: cleanPromptField(active.length > 0 ? active.join("、") : "全屋设备均关闭"),
-    habitSummary: cleanPromptField(options.habitSummary ?? ""),
+    habitSummary: cleanPromptField(habitSummary),
   };
 }
 
