@@ -42,6 +42,28 @@ struct SnapshotTests {
         )
     }
 
+    @Test("Panel shows the expired Mi session banner")
+    func panelExpiredMiSessionSnapshot() async throws {
+        let fixture = try await SnapshotFixture(
+            miSession: MiSession(
+                userId: "42",
+                cUserId: "c",
+                ssecurity: "c2VjcmV0",
+                serviceToken: "tok",
+                expiresAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        )
+        defer { fixture.restore() }
+
+        UserDefaults.standard.set(AppAppearance.system.rawValue, forKey: AppAppearance.storageKey)
+
+        assertRendered(
+            snapshotReady(ControlCenterPanel(store: fixture.store)),
+            size: CGSize(width: 376, height: 560),
+            named: "panel-mi-session-expired-zh-light"
+        )
+    }
+
     // MARK: - Device cards: light / climate / plug / sensor / TV
 
     @Test("Five device card families render")
@@ -354,7 +376,7 @@ private struct SnapshotFixture {
     private let previousTemperatureUnit: String?
     private let previousLanguage: AppLanguage
 
-    init() async throws {
+    init(miSession: MiSession? = nil) async throws {
         previousLanguage = L10n.currentLanguage
         L10n.currentLanguage = .zhHans
         previousAppearance = UserDefaults.standard.string(forKey: AppAppearance.storageKey)
@@ -371,6 +393,10 @@ private struct SnapshotFixture {
         defaults.set(TemperatureUnitPreference.celsius.rawValue, forKey: TemperatureUnitPreference.storageKey)
         // The panel's `.task` checks for updates; keep the snapshot offline and deterministic.
         defaults.set(false, forKey: "automatically_checks_for_updates")
+        if let miSession {
+            defaults.set(HomeBackend.xiaomiCloud.rawValue, forKey: "home_backend")
+            guard MiSessionStore.save(miSession, defaults: defaults) else { throw MissingDefaults() }
+        }
 
         store = HomeStore(
             provider: MockHomeProvider(snapshot: DemoHomeProvider.defaultHome(includeCamera: false)),

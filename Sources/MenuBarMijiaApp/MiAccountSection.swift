@@ -18,9 +18,18 @@ public struct MiAccountSection: View {
 
     @State private var phase: ScanPhase
     @State private var loginTask: Task<Void, Never>?
+    private let autoStartsQRLogin: Bool
+    private let showsRegionPicker: Bool
 
-    public init(store: HomeStore, previewTicket: QRLoginTicket? = nil) {
+    public init(
+        store: HomeStore,
+        previewTicket: QRLoginTicket? = nil,
+        autoStartsQRLogin: Bool = false,
+        showsRegionPicker: Bool = true
+    ) {
         self.store = store
+        self.autoStartsQRLogin = autoStartsQRLogin
+        self.showsRegionPicker = showsRegionPicker
         if let previewTicket {
             self._phase = State(initialValue: .waitingForScan(ticket: previewTicket, expiresAt: Date().addingTimeInterval(previewTicket.timeout)))
         } else {
@@ -31,24 +40,26 @@ public struct MiAccountSection: View {
     public var body: some View {
         let _ = store.effectiveLanguage
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text(L10n.tr("云端服务器地区", "Cloud Region"))
-                    .font(.system(size: DesignTokens.TypeSize.body))
-                Spacer()
-                Picker(
-                    L10n.tr("云端服务器地区", "Cloud Region"),
-                    selection: Binding(
-                        get: { store.miCloudRegion },
-                        set: { store.miCloudRegion = $0 }
-                    )
-                ) {
-                    ForEach(MiCloudRegion.allCases) { region in
-                        Text(region.label).tag(region)
+            if showsRegionPicker {
+                HStack {
+                    Text(L10n.tr("云端服务器地区", "Cloud Region"))
+                        .font(.system(size: DesignTokens.TypeSize.body))
+                    Spacer()
+                    Picker(
+                        L10n.tr("云端服务器地区", "Cloud Region"),
+                        selection: Binding(
+                            get: { store.miCloudRegion },
+                            set: { store.miCloudRegion = $0 }
+                        )
+                    ) {
+                        ForEach(MiCloudRegion.allCases) { region in
+                            Text(region.label).tag(region)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: DesignTokens.Settings.fieldWidth)
+                    .controlSize(.regular)
                 }
-                .labelsHidden()
-                .frame(width: DesignTokens.Settings.fieldWidth)
-                .controlSize(.regular)
             }
 
             switch phase {
@@ -104,6 +115,10 @@ public struct MiAccountSection: View {
                     }
                 }
             }
+        }
+        .task {
+            guard autoStartsQRLogin, case .idle = phase else { return }
+            startQRLogin()
         }
         .onDisappear {
             cancelLogin()

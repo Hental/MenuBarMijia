@@ -77,6 +77,13 @@ public struct ControlCenterPanel: View {
 
             groupPromptOverlay
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if store.isShowingMiReauth {
+                miReauthOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+                    .zIndex(3)
+            }
         }
         // Keep the in-memory mirrors in step with edits made elsewhere (card context menus).
         .onChange(of: groupMapRaw) { _, raw in
@@ -173,6 +180,86 @@ public struct ControlCenterPanel: View {
         MenuBarPanelController.shared.updatePanelSize(width: Self.panelWidth, height: panelHeight)
     }
 
+    // MARK: - Mi Session Expiry (#181)
+
+    private var miSessionExpiryBanner: some View {
+        let expired = store.miSessionShowsExpired
+        let dateText = store.miSessionExpiringSoonDate?
+            .formatted(date: .abbreviated, time: .omitted) ?? ""
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        return HStack(spacing: 8) {
+            Image(systemName: expired ? "exclamationmark.triangle.fill" : "clock")
+                .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                .foregroundStyle(expired ? Color.orange : Color.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(expired
+                    ? L10n.tr("米家登录已过期", "Xiaomi Home session expired")
+                    : L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
+                    .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                Text(expired
+                    ? L10n.tr("设备控制已暂停，扫码后恢复", "Device controls are paused; scan to restore them")
+                    : L10n.tr("提前扫码可以避免控制中断", "Scan now to avoid an interruption"))
+                    .font(.system(size: DesignTokens.TypeSize.micro))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(expired
+                ? L10n.tr("扫码重新登录", "Scan to sign in")
+                : L10n.tr("现在重新扫码", "Re-scan now")) {
+                withAnimation(AppleMotion.snappySpring) { store.presentMiReauth() }
+            }
+            .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .adaptiveGlass(in: shape)
+    }
+
+    private var miReauthOverlay: some View {
+        ZStack {
+            Rectangle()
+                .fill(reduceTransparency
+                    ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                    : AnyShapeStyle(.ultraThinMaterial))
+                .overlay(Color.black.opacity(reduceTransparency ? 0.32 : 0.18))
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "qrcode")
+                        .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    Text(store.miSessionShowsExpired
+                        ? L10n.tr("米家登录已过期", "Xiaomi Home session expired")
+                        : L10n.tr("扫码登录米家账号", "Sign in to Xiaomi Home"))
+                        .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                    Spacer()
+                    Button {
+                        withAnimation(AppleMotion.snappySpring) { store.dismissMiReauth() }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(L10n.tr("关闭", "Close")))
+                }
+
+                MiAccountSection(store: store, autoStartsQRLogin: true, showsRegionPicker: false)
+            }
+            .padding(14)
+            .frame(maxWidth: 332)
+            .adaptiveGlass(in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
+            .shadow(color: .black.opacity(0.20), radius: 14, y: 5)
+            .padding(16)
+        }
+    }
+
     // MARK: - Main Dashboard
 
     private var mainDashboard: some View {
@@ -181,6 +268,13 @@ public struct ControlCenterPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+
+            if store.miSessionShowsExpired || store.miSessionExpiringSoonDate != nil {
+                miSessionExpiryBanner
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .transition(AppleMotion.drawerTransition)
+            }
 
             if store.isShowingAssistantBar {
                 AssistantCommandBar(store: store)

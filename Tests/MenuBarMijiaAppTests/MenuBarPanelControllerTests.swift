@@ -24,6 +24,27 @@ struct MenuBarPanelControllerTests {
         return (store, suite)
     }
 
+    private func makeExpiredMiSessionStore() async throws -> (HomeStore, String) {
+        let suite = "test.panel.controller.expired.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(HomeBackend.xiaomiCloud.rawValue, forKey: "home_backend")
+        let session = MiSession(
+            userId: "42",
+            cUserId: "c",
+            ssecurity: "c2VjcmV0",
+            serviceToken: "tok",
+            expiresAt: Date().addingTimeInterval(-60)
+        )
+        #expect(MiSessionStore.save(session, defaults: defaults))
+        let mock = MockHomeProvider(snapshot: DemoHomeProvider.defaultHome())
+        let store = HomeStore(provider: mock, defaultsSuiteName: suite)
+        for _ in 0..<200 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.miSessionShowsExpired)
+        return (store, suite)
+    }
+
     private func makeController(store: HomeStore) -> MenuBarPanelController {
         // `swift test` does not launch an app; AppKit still needs its shared application object
         // before a status item or a window can exist.
@@ -196,6 +217,21 @@ struct MenuBarPanelControllerTests {
         controller.togglePanel()
         #expect(controller.isPanelVisible)
         #expect(panel.contentView === hosting)
+    }
+
+    @Test("An expired Mi session paints house.slash in the status item")
+    func expiredMiSessionUsesSlashedIcon() async throws {
+        let (store, suite) = try await makeExpiredMiSessionStore()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let controller = makeController(store: store)
+        defer { controller.uninstall() }
+
+        controller.syncStatusItem()
+
+        let button = try #require(controller.statusItem?.button)
+        #expect(store.menuBarSymbolName == "house.slash")
+        #expect(controller.labelSymbol == "house.slash")
+        #expect(button.image != nil, "the slashed-house symbol must exist on the deployment target")
     }
 
     @Test("The panel window is the only window recognised as the control center")
