@@ -4,6 +4,20 @@ This page is the security policy for MenuBarMijia.
 
 It names the supported release, how you report a vulnerability, when you can expect an acknowledgement, and which reports are in scope.
 
+## Affiliation and trademarks
+
+MenuBarMijia is an independent open-source project.
+
+It is not an official Xiaomi or Mijia product.
+
+It is not affiliated with, endorsed by, or sponsored by Xiaomi Corporation or its affiliates.
+
+"Xiaomi", "Mijia", "Mi Home", and "米家" are trademarks of Xiaomi Corporation and its affiliates.
+
+The project uses these names only to describe compatibility with Xiaomi / Mijia devices.
+
+No endorsement is implied.
+
 ## Supported versions
 
 The only supported release is the GitHub Release marked Latest.

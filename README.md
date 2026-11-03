@@ -15,6 +15,9 @@ English | [简体中文](README.zh-CN.md)
 
 <h1 align="center">MenuBarMijia</h1>
 
+> [!IMPORTANT]
+> **Not affiliated with Xiaomi.** MenuBarMijia is an independent open-source project, not an official Xiaomi or Mijia product, and is not affiliated with, endorsed by, or sponsored by Xiaomi Corporation or its affiliates. "Xiaomi", "Mijia", "Mi Home", and "米家" are trademarks of Xiaomi Corporation and its affiliates. The project uses these names only to describe compatibility with Xiaomi / Mijia devices; no endorsement is implied.
+
 <p align="center">
   <b>Control your entire home right from your computer, without picking up your phone.</b><br>
   A native macOS menu-bar app for Xiaomi / Mijia smart home devices, with a companion Windows 11 tray build.<br>
@@ -31,7 +34,7 @@ English | [简体中文](README.zh-CN.md)
 </p>
 
 <p align="center">
-  <a href="https://jryang1997.github.io/menubarmijia-web/">Official website</a> ·
+  <a href="https://jryang1997.github.io/menubarmijia-web/">Project website</a> ·
   <a href="https://github.com/jryang1997/MenuBarMijia/releases/latest">Download latest</a> ·
   <a href="#quick-start">Install & Connect</a> ·
   <a href="#features--platform-matrix">Platform Comparison</a> ·
