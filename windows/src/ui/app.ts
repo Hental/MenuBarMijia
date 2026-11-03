@@ -1631,9 +1631,16 @@ export class MenuMijiaWindowsApp {
   }
 
   private cloudPanelStructureFingerprint(): string {
+    const kindChipsForPanel = kindChips(
+      this.devices,
+      this.listCut,
+      this.settings.hideOfflineDevices,
+    );
     return JSON.stringify({
       homes: this.homes,
       scenes: this.scenes,
+      kindChips: kindChipsForPanel,
+      kindRowVisible: showsKindRow(kindChipsForPanel, this.listCut),
       allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
       devices: this.devices.map((device) => {
         const kind = device.kind;

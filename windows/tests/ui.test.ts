@@ -428,6 +428,38 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
   });
 
+  it("adds and removes kind chips when polling changes device availability", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
+      const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
+      sensor.isOnline = false;
+      fixture.deviceRecords.push(sensor);
+    });
+    await click('[data-kind="light"]');
+    await click("#btn-toggle-hide-offline");
+    assert.ok(document.querySelector('[data-kind="light"]'));
+    assert.equal(document.querySelector('[data-kind="sensor"]'), null);
+
+    const sensor = cloud.deviceRecords.find((record) => record.did === "sensor-bedroom");
+    assert.ok(sensor);
+    sensor.isOnline = true;
+    const broughtOnline = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(broughtOnline.started, "Polling did not request properties");
+    broughtOnline.release();
+    await withTimeout(broughtOnline.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-kind="sensor"]') !== null);
+    assert.ok(document.querySelector('[data-kind="light"]'));
+
+    sensor.isOnline = false;
+    const takenOffline = cloud.holdNextRead();
+    triggerRefresh();
+    await withTimeout(takenOffline.started, "Polling did not request properties");
+    takenOffline.release();
+    await withTimeout(takenOffline.finished, "Polling did not finish");
+    await waitFor(() => document.querySelector('[data-kind="sensor"]') === null);
+    assert.ok(document.querySelector('[data-kind="light"]'));
+  });
+
   it("shows a collapsed group again when its only device comes online", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
