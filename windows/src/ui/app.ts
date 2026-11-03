@@ -3,12 +3,9 @@ import type { SynthesizedHome } from "../core/models.js";
 import { GrokBallView } from "./grokBall.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
-  DelayPhrase,
   IntentReply,
   IntentValidator,
-  LocalIntentParser,
   ModelIntentResolver,
-  UndoPhrase,
   UserHabitMemory,
   buildAssistantContext,
   resolveHabitSharing,
@@ -19,8 +16,6 @@ import {
   endpointAllowsSendingSecrets,
   isLocalAssistantEndpoint,
   timeBucketLabel,
-  INSECURE_ENDPOINT_MESSAGE,
-  ModelActionPolicy,
   partitionHabitReceipt,
   resolveGrokBallEmotion,
   type HabitEntry,
@@ -175,6 +170,8 @@ import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as ren
 import { renderSettingsModal } from "./settingsViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
+import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
+import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
@@ -254,7 +251,7 @@ export class MenuMijiaWindowsApp {
   private isRefreshingProactive = false;
   public isGrokBallStageExpanded = false;
   private readonly grokBall = new GrokBallView();
-  private grokBallCelebrationUntil = 0;
+  public grokBallCelebrationUntil = 0;
   private grokBallPointerUntil = 0;
   public grokBallOnLeft = false;
   private panelGeometryUpdates: Promise<void> = Promise.resolve();
@@ -269,7 +266,7 @@ export class MenuMijiaWindowsApp {
   private syncGeneration = 0;
   private lastCloudRefreshAt: number | null = null;
   public localControlRevision = 0;
-  private sourceRevision = 0;
+  public sourceRevision = 0;
   /** A silent cloud result that is waiting for the user to finish interacting. */
   private pendingCloudRender = false;
   public endpointSubmission: Promise<unknown> = Promise.resolve();
@@ -784,7 +781,7 @@ export class MenuMijiaWindowsApp {
     return watts;
   }
 
-  private get computedEnvironmentReadings(): EnvironmentReading[] {
+  public get computedEnvironmentReadings(): EnvironmentReading[] {
     if (this.environmentReadings.length > 0) {
       const priorityById = new Map(
         this.devices.map((d) => [d.id, environmentReadingPriority(d.kind)]),
@@ -1308,170 +1305,7 @@ export class MenuMijiaWindowsApp {
   }
 
   public async handleNaturalCommand(rawInput: string, fromScheduled = false): Promise<void> {
-    const trimmed = rawInput.trim();
-    if (!trimmed) return;
-    const sourceRevision = this.sourceRevision;
-    // A new command replaces any question still waiting for cloud consent, and old suggestions.
-    this.pendingCloudConsent = null;
-    this.pendingSuggestions = [];
-
-    if (UndoPhrase.isUndo(trimmed)) {
-      await this.performUndo();
-      return;
-    }
-
-    if (DelayPhrase.isCancel(trimmed)) {
-      const count = this.scheduledCommands.length + this.missedScheduledCommands.length;
-      this.scheduledCommands = [];
-      this.missedScheduledCommands = [];
-      this.replyBanner = {
-        text: count > 0 ? t("已取消 {count} 项定时指令", { count: count }) : t("当前没有待执行的定时指令"),
-        source: t("0ms 本地直达"),
-      };
-      this.render();
-      return;
-    }
-
-    if (!fromScheduled) {
-      const delaySpec = DelayPhrase.extract(trimmed);
-      if (delaySpec) {
-        const scheduled: ScheduledCommand = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          command: delaySpec.remainder,
-          delaySeconds: delaySpec.seconds,
-          fireTimestampMs: Date.now() + delaySpec.seconds * 1000,
-          reply: t("{delay}后：{command}", { delay: DelayPhrase.formatDelay(delaySpec.seconds), command: delaySpec.remainder }),
-        };
-        this.scheduledCommands.push(scheduled);
-        this.replyBanner = {
-          text: t("已设定 {delay}后执行「{command}」", { delay: DelayPhrase.formatDelay(delaySpec.seconds), command: delaySpec.remainder }),
-          source: t("定时任务"),
-        };
-        this.render();
-        return;
-      }
-    }
-
-    const learnedMatch = this.settings.learnedShortcuts.find(
-      (s) => s.phrase.replace(/\s+/g, "") === trimmed.replace(/\s+/g, ""),
-    );
-    if (learnedMatch) {
-      // A timer firing a learned phrase is not a user action, so it never trains habits (#34/#113).
-      await this.executeIntents(learnedMatch.intents, learnedMatch.reply, t("习惯记忆 0ms"), { recordHabits: !fromScheduled });
-      return;
-    }
-
-    this.isResolvingIntent = true;
-    this.render();
-
-    try {
-      const aliasedDevices = withAliases(this.layout, this.devices);
-      const localPlan = LocalIntentParser.parse(trimmed, aliasedDevices, this.scenes);
-      let plan: IntentPlan | null = localPlan;
-      let sourceLabel = t("0ms 本地直达");
-
-      if (!plan) {
-        const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
-        const apiKey = this.apiKeyFor(baseURL);
-        const isLoopback = isLocalAssistantEndpoint(baseURL);
-        if (!endpointAllowsSendingSecrets(baseURL)) {
-          this.replyBanner = { text: INSECURE_ENDPOINT_MESSAGE, source: t("地址不安全"), isError: true };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        if (!apiKey && !isLoopback) {
-          this.replyBanner = {
-            text: t("未命中本地规则。请在设置中填写 AI 服务的 API Key（支持 OpenRouter Jev、原生 Jev、DeepSeek 等）。"),
-            source: t("需要 API Key"),
-            isError: true,
-          };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        const endpoint = assistantEndpointIdentity(baseURL);
-        if (!isLoopback && endpoint && !this.settings.cloudConsentEndpoints.includes(endpoint)) {
-          this.pendingCloudConsent = { utterance: trimmed, endpoint };
-          this.replyBanner = {
-            text: t("这句话本机没听懂，要交给云端 AI（{endpoint}）处理吗？会发送：这句话、设备名称/房间/状态。只问这一次，可在设置里撤销。", { endpoint: endpoint }),
-            source: t("需要确认"),
-          };
-          this.isResolvingIntent = false;
-          this.render();
-          return;
-        }
-        const resolver = new ModelIntentResolver(
-          {
-            baseURL,
-            model: this.settings.assistantModel,
-            apiKey,
-          },
-          this.transport,
-        );
-        // Same ambient context macOS sends with Jev requests (#38); the getter falls
-        // back to sensor devices when no refreshed EnvironmentReading list exists.
-        const readings = this.computedEnvironmentReadings;
-        const context = buildAssistantContext({
-          now: new Date(),
-          readings,
-          devices: aliasedDevices,
-          scenes: this.scenes,
-          sharing: this.settings.habitShareEnabled ? "on" : "off",
-          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
-            phrase: shortcut.phrase,
-            intents: shortcut.intents,
-          })),
-          mention: { kind: "utterance", text: trimmed },
-        });
-        plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
-        if (sourceRevision !== this.sourceRevision) return;
-        sourceLabel = resolver.usesSystemOne ? "Jev SystemOne" : this.settings.assistantModel;
-      }
-
-      const sanitized = IntentValidator.sanitize(plan.intents, aliasedDevices, this.scenes);
-      this.pendingSuggestions = [...plan.suggestions];
-      if (sanitized.length === 0 && plan.suggestions.length > 0) {
-        this.replyBanner = { text: plan.reply || ModelActionPolicy.confirmationReply(null), source: t("需要确认") };
-        return;
-      }
-      if (sanitized.length === 0) {
-        this.replyBanner =
-          plan.intents.length > 0
-            ? { text: t("无法找到指令对应的设备"), source: t("控制失败"), isError: true }
-            : { text: plan.reply || t("无法找到指令对应的设备"), source: sourceLabel, isError: !plan.reply };
-        return;
-      }
-      const replyText =
-        plan.reply || IntentReply.describe(sanitized, aliasedDevices, this.scenes);
-      const succeeded = await this.executeIntents(sanitized, replyText, sourceLabel, {
-        recordHabits: plan.source === "local" && !fromScheduled,
-      });
-      if (sourceRevision !== this.sourceRevision) return;
-
-      if (
-        succeeded &&
-        this.settings.habitLearningEnabled &&
-        plan.source === "model" &&
-        sanitized.length > 0
-      ) {
-        this.learnShortcut(trimmed, replyText, sanitized);
-      }
-    } catch (err) {
-      if (sourceRevision !== this.sourceRevision) return;
-      const msg = err instanceof Error ? err.message : String(err);
-      this.replyBanner = {
-        text: msg,
-        source: t("出错提示"),
-        isError: true,
-      };
-    } finally {
-      if (sourceRevision === this.sourceRevision) {
-        this.isResolvingIntent = false;
-        this.render();
-      }
-    }
+    return handleNaturalCommand(this, rawInput, fromScheduled);
   }
 
   private learnShortcut(
@@ -1479,111 +1313,11 @@ export class MenuMijiaWindowsApp {
     reply: string,
     intents: readonly DeviceIntent[],
   ): void {
-    const clean = phrase.trim();
-    if (clean.length < 2 || clean.length > 18) return;
-    if (this.settings.learnedShortcuts.some((s) => s.phrase === clean)) return;
-    this.settings.learnedShortcuts.unshift({
-      phrase: clean,
-      reply,
-      intents,
-      learnedAt: new Date().toISOString(),
-    });
-    if (this.settings.learnedShortcuts.length > 25) {
-      this.settings.learnedShortcuts.length = 25;
-    }
-    this.saveSettings();
+    learnShortcut(this, phrase, reply, intents);
   }
 
   private buildInverseCommand(dev: SmartDevice, command: DeviceCommand): DeviceCommand[] {
-    const k = dev.kind;
-    switch (command.kind) {
-      case "setLightPower":
-        return k.kind === "light" ? [{ kind: "setLightPower", entityId: k.entityId, isOn: k.isOn }] : [];
-      case "setLightBrightness":
-        return k.kind === "light" && k.brightnessPercent !== null ? [
-          { kind: "setLightBrightness", entityId: k.entityId, percent: k.brightnessPercent },
-          { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setLightColorTemp":
-        return k.kind === "light" && k.colorTempKelvin !== null ? [
-          { kind: "setLightColorTemp", entityId: k.entityId, kelvin: k.colorTempKelvin },
-          ...(k.currentEffect !== null ? [{ kind: "setLightEffect" as const, entityId: k.entityId, effect: k.currentEffect }] : []),
-          { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setLightEffect":
-        if (k.kind !== "light") return [];
-        if (k.currentEffect !== null) return [
-          { kind: "setLightEffect", entityId: k.entityId, effect: k.currentEffect },
-          { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
-        ];
-        return k.colorTempKelvin !== null ? [
-          { kind: "setLightColorTemp", entityId: k.entityId, kelvin: k.colorTempKelvin },
-          { kind: "setLightPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setClimatePower":
-      case "setClimateMode":
-        return k.kind === "climate" ? [{ kind: "setClimateMode", entityId: k.entityId, hvacMode: k.isOn ? k.hvacMode : "off" }] : [];
-      case "setClimateTemperature":
-        return k.kind === "climate" ? [
-          { kind: "setClimateTemperature", entityId: k.entityId, temperature: k.targetTemperature },
-          { kind: "setClimatePower", entityId: k.entityId, isOn: k.isOn, resumeMode: k.hvacMode },
-        ] : [];
-      case "setClimateFanMode":
-        return k.kind === "climate" && k.fanMode !== null ? [{ kind: "setClimateFanMode", entityId: k.entityId, fanMode: k.fanMode }] : [];
-      case "setFanPower":
-        return k.kind === "fan" ? [{ kind: "setFanPower", entityId: k.entityId, isOn: k.isOn }] : [];
-      case "setFanPercentage":
-        return k.kind === "fan" && k.percentage !== null ? [
-          { kind: "setFanPercentage", entityId: k.entityId, percent: k.percentage },
-          ...(k.presetMode !== null ? [{ kind: "setFanPresetMode" as const, entityId: k.entityId, presetMode: k.presetMode }] : []),
-          { kind: "setFanPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setFanPresetMode":
-        return k.kind === "fan" && k.presetMode !== null ? [
-          { kind: "setFanPresetMode", entityId: k.entityId, presetMode: k.presetMode },
-          { kind: "setFanPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setFanOscillating":
-        return k.kind === "fan" && k.isOscillating !== null ? [
-          { kind: "setFanOscillating", entityId: k.entityId, oscillating: k.isOscillating },
-          { kind: "setFanPower", entityId: k.entityId, isOn: k.isOn },
-        ] : [];
-      case "setSwitch":
-        if (k.kind === "plug") {
-          if (command.entityId.startsWith("button.")) return [];
-          return [{ kind: "setSwitch", entityId: command.entityId, isOn: command.entityId === k.childLockEntityId ? k.isChildLocked : k.isOn }];
-        }
-        if (k.kind === "camera") {
-          const prevOn = command.entityId === k.motionDetectionEntityId ? Boolean(k.isMotionDetectionOn) : k.isOn;
-          return [{ kind: "setSwitch", entityId: command.entityId, isOn: prevOn }];
-        }
-        return [];
-      case "setSelectOption":
-        if (k.kind === "camera" && k.nightShot !== null) {
-          return [{ kind: "setSelectOption", entityId: command.entityId, option: k.nightShot }];
-        }
-        if (k.kind === "fridge") {
-          return [{ kind: "setSelectOption", entityId: command.entityId, option: k.currentMode }];
-        }
-        return [];
-      case "setNumberValue":
-        if (k.kind === "fridge") {
-          if (command.entityId === k.fridgeTargetEntityId) {
-            return [{ kind: "setNumberValue", entityId: command.entityId, value: k.fridgeTargetTemp }];
-          }
-          if (command.entityId === k.freezerTargetEntityId) {
-            return [{ kind: "setNumberValue", entityId: command.entityId, value: k.freezerTargetTemp }];
-          }
-        }
-        return [];
-      case "vacuumAction":
-      case "activateScene":
-        return [];
-      default: {
-        const exhaustive: never = command;
-        return exhaustive;
-      }
-    }
+    return buildInverseCommand(dev, command);
   }
 
   public async executeIntents(
@@ -1592,109 +1326,7 @@ export class MenuMijiaWindowsApp {
     sourceLabel: string,
     options: { recordHabits?: boolean } = {},
   ): Promise<boolean> {
-    const sourceRevision = this.sourceRevision;
-    const commands: Array<{ deviceId: string; command: DeviceCommand; intentIndex: number }> = [];
-    const candidateIntents: Array<{ intent: DeviceIntent; commandCount: number; succeededCount: number }> = [];
-    let failed = 0;
-    let failureMessage = "";
-    for (const intent of intents) {
-      if (intent.operation.kind === "activateScene") {
-        const scene = this.scenes.find((s) => s.id === intent.targetId);
-        if (scene) {
-          const intentIndex = candidateIntents.length;
-          candidateIntents.push({ intent, commandCount: 1, succeededCount: 0 });
-          commands.push({ deviceId: scene.id, command: { kind: "activateScene", entityId: scene.entityId }, intentIndex });
-        }
-        continue;
-      }
-      const dev = this.devices.find((d) => d.id === intent.targetId);
-      if (!dev) continue;
-      if (!dev.isOnline) {
-        failed += 1;
-        failureMessage = `${dev.name} (${t("离线")})`;
-        continue;
-      }
-      const intentCommands = IntentValidator.commandsForIntent(intent, dev);
-      if (intentCommands.length === 0) {
-        failed += 1;
-        failureMessage = t("无法找到指令对应的设备");
-        continue;
-      }
-      const intentIndex = candidateIntents.length;
-      candidateIntents.push({ intent, commandCount: intentCommands.length, succeededCount: 0 });
-      for (const command of intentCommands) {
-        commands.push({ deviceId: dev.id, command, intentIndex });
-      }
-    }
-
-    const steps: UndoStep[] = [];
-    let succeeded = 0;
-    let canUndo = true;
-    for (const { deviceId, command, intentIndex } of commands) {
-      if (sourceRevision !== this.sourceRevision) return false;
-      // Scenes have no device row and no inverse; they simply run and count as applied (#113).
-      if (command.kind === "activateScene") {
-        if (await this.applyCommand(command)) {
-          succeeded += 1;
-          const entry = candidateIntents[intentIndex];
-          if (entry) entry.succeededCount += 1;
-        } else {
-          failed += 1;
-          failureMessage = this.replyBanner?.text ?? "设备未响应";
-        }
-        continue;
-      }
-      const device = this.devices.find((d) => d.id === deviceId);
-      if (!device) {
-        failed += 1;
-        failureMessage = t("设备列表已更新，请重新执行");
-        continue;
-      }
-      const isMomentaryButton = command.kind === "setSwitch" && command.entityId.startsWith("button.");
-      const inverseCommands = isMomentaryButton ? [] : this.buildInverseCommand(device, command);
-      if (await this.applyCommand(command)) {
-        succeeded += 1;
-        const entry = candidateIntents[intentIndex];
-        if (entry) entry.succeededCount += 1;
-        if (!isMomentaryButton) {
-          canUndo = canUndo && inverseCommands.length > 0;
-          if (inverseCommands.length > 0) {
-            steps.unshift({ deviceId, commands: inverseCommands });
-          }
-        }
-      } else {
-        failed += 1;
-        failureMessage = this.replyBanner?.text ?? "设备未响应";
-      }
-    }
-    if (sourceRevision !== this.sourceRevision) return false;
-    if (succeeded > 0) {
-      if (failed === 0) this.grokBallCelebrationUntil = Date.now() + 2400;
-      const succeededIntents = candidateIntents
-        .filter((entry) => entry.succeededCount === entry.commandCount && entry.commandCount > 0)
-        .map((entry) => entry.intent);
-      // Only explicit user asks train habits, and only for intents that actually succeeded (#34/#113/#116).
-      const habitReceipt = options.recordHabits && succeededIntents.length > 0 ? this.recordHabits(succeededIntents) : null;
-      // Scene activations have no inverse: an undo action must exist only when at least one
-      // device step is restorable, otherwise Undo would report success without doing anything
-      // (Codex #116 re-review).
-      this.lastUndoAction = canUndo && steps.length > 0 ? {
-        summary: replyText,
-        steps,
-        expiresAtMs: Date.now() + 10 * 60 * 1000,
-        habitReceipt: habitReceipt ?? undefined,
-      } : null;
-    }
-    if (succeeded === 0 && failed === 0) {
-      this.replyBanner = { text: t("无法找到指令对应的设备"), source: t("控制失败"), isError: true };
-      this.render();
-      return false;
-    }
-    this.replyBanner = failed > 0
-      ? { text: t("已执行 {ok} 项，{failed} 项失败。{message}", { ok: succeeded, failed: failed, message: failureMessage }), source: t("控制失败"), isError: true }
-      : { text: replyText, source: sourceLabel };
-    this.render();
-    return failed === 0;
+    return executeIntents(this, intents, replyText, sourceLabel, options);
   }
 
   public async executeSingleCommand(
@@ -1704,84 +1336,31 @@ export class MenuMijiaWindowsApp {
     intent?: DeviceIntent,
     readBackPower = false,
   ): Promise<void> {
-    const sourceRevision = this.sourceRevision;
-    const inverseCommands = this.buildInverseCommand(device, command);
-    if (!(await this.applyCommand(command, readBackPower))) return;
-    if (sourceRevision !== this.sourceRevision) return;
-    // Momentary buttons (Wake-on-LAN) complete without reporting an on/off state to compare.
-    const isMomentaryButton = command.kind === "setSwitch" && command.entityId.startsWith("button.");
-    if (readBackPower && !isMomentaryButton && !this.readBackMatches(device.id, intent)) {
-      this.replyBanner = { text: t("未能读回设备状态"), source: t("控制失败"), isError: true };
-      this.render();
-      return;
-    }
-    this.grokBallCelebrationUntil = Date.now() + 2400;
-    const habitReceipt = intent ? this.recordHabits([intent]) : null;
-    this.lastUndoAction = inverseCommands.length > 0 ? {
-      summary,
-      steps: [{ deviceId: device.id, commands: inverseCommands }],
-      expiresAtMs: Date.now() + 10 * 60 * 1000,
-      habitReceipt: habitReceipt ?? undefined,
-    } : null;
-    this.replyBanner = { text: summary, source: t("实时控制") };
-    this.render();
+    return executeSingleCommand(this, device, command, summary, intent, readBackPower);
   }
 
   private readBackMatches(deviceId: string, intent?: DeviceIntent): boolean {
-    if (!intent || intent.operation.kind !== "power") return true;
-    const current = this.devices.find((item) => item.id === deviceId);
-    return current !== undefined && isDeviceActiveOn(current) === intent.operation.isOn;
+    return readBackMatches(this, deviceId, intent);
   }
 
-  /** Records manual card actions into the habit memory for the current time bucket (#113). */
   private recordHabits(intents: readonly DeviceIntent[]): HabitRecordingReceipt | null {
-    if (!this.settings.habitLearningEnabled || intents.length === 0) return null;
-    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
-    const receipt = memory.record(intents, this.devices, this.scenes, new Date());
-    if (receipt) this.saveHabitMemory(memory);
-    return receipt;
+    return recordHabits(this, intents);
   }
 
-  /** Sequence entries and lastAction persist alongside the entries (ADR-0009). */
   public habitSequences(): HabitSequenceEntry[] {
-    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw) as { sequences?: HabitSequenceEntry[]; lastAction?: HabitLastAction | null };
-      return Array.isArray(parsed.sequences) ? parsed.sequences : [];
-    } catch {
-      return [];
-    }
+    return habitSequences();
   }
 
   public lastHabitAction(): HabitLastAction | null {
-    const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as { lastAction?: HabitLastAction | null };
-      return parsed.lastAction ?? null;
-    } catch {
-      return null;
-    }
+    return lastHabitAction();
   }
 
   private saveHabitMemory(memory: UserHabitMemory): void {
-    this.settings.habitEntries = [...memory.entries];
-    this.saveSettings();
-    try {
-      localStorage.setItem("menumijia.windows.habit.sequences.v1", JSON.stringify({
-        sequences: memory.sequences,
-        lastAction: memory.lastAction,
-      }));
-    } catch {
-      // Quota errors only cost the sequence context, never the entries.
-    }
+    saveHabitMemory(this, memory);
   }
 
   private unrecordHabits(receipt: HabitRecordingReceipt): void {
-    const memory = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction());
-    memory.unrecord(receipt);
-    this.saveHabitMemory(memory);
+    unrecordHabits(this, receipt);
   }
 
   /** Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient signature (#113). */
@@ -2072,7 +1651,7 @@ export class MenuMijiaWindowsApp {
     this.render();
   }
 
-  private async applyCommand(command: DeviceCommand, readBackPower = false): Promise<boolean> {
+  public async applyCommand(command: DeviceCommand, readBackPower = false): Promise<boolean> {
     const sourceRevision = this.sourceRevision;
     try {
       if (this.settings.connectionMode === "homeAssistant") command = homeAssistantCommand(command, this.devices);
