@@ -177,6 +177,7 @@ import { loadSettings, stripCredentialFieldsFromStoredCopies, upgradeCachedDevic
 import { CameraLiveController } from "./cameraLive.js";
 import { renderClimateStrip, renderDeviceDrawer, renderSensorCard } from "./deviceViews.js";
 import { renderSettingsModal } from "./settingsViews.js";
+import { bindLayoutGestures } from "./layoutGestures.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
 export { waitForCameraFrameGap } from "./dom.js";
 function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
@@ -233,7 +234,7 @@ export class MenuMijiaWindowsApp {
     }
   }
 
-  private expandedDeviceId: string | null = null;
+  public expandedDeviceId: string | null = null;
   private isShowingAssistantBar = true;
   private activeSheet: "none" | "onboarding" | "settings" = "none";
   private onboardingStep = 0;
@@ -273,7 +274,7 @@ export class MenuMijiaWindowsApp {
   /** A silent cloud result that is waiting for the user to finish interacting. */
   private pendingCloudRender = false;
   public endpointSubmission: Promise<unknown> = Promise.resolve();
-  private pointerIsDown = false;
+  public pointerIsDown = false;
   private isListeningVoice = false;
   private scheduledCommands: ScheduledCommand[] = [];
   /** Timers that came due while the PC slept; they only run when the user taps 立即执行 (#22). */
@@ -299,16 +300,16 @@ export class MenuMijiaWindowsApp {
   // Personalisation / layout editing state (see panelPrefs.ts).
   private homes: HomeOption[] = [];
   private isHomeMenuOpen = false;
-  private isEditingLayout = false;
-  private draggingId: string | null = null;
-  private dragPointer: { x: number; y: number; grabX: number; grabY: number } | null = null;
-  private lastSwap: { slot: string; at: number } | null = null;
-  private ctxMenu: { x: number; y: number; deviceId?: string; groupId?: string } | null = null;
+  public isEditingLayout = false;
+  public draggingId: string | null = null;
+  public dragPointer: { x: number; y: number; grabX: number; grabY: number } | null = null;
+  public lastSwap: { slot: string; at: number } | null = null;
+  public ctxMenu: { x: number; y: number; deviceId?: string; groupId?: string } | null = null;
   private prompt: { kind: "newGroup"; deviceId: string } | { kind: "renameGroup"; groupId: string } | { kind: "renameDevice"; deviceId: string } | null = null;
   private animateEntrance = false;
   private poppedDeviceId: string | null = null;
-  private dimPreview: { id: string; percent: number } | null = null;
-  private suppressNextClick = false;
+  public dimPreview: { id: string; percent: number } | null = null;
+  public suppressNextClick = false;
   public isRecordingHotkey = false;
   public hotkeyNeedsHint = false;
   public hotkeyRegistrationError: string | null = null;
@@ -1697,7 +1698,7 @@ export class MenuMijiaWindowsApp {
     return failed === 0;
   }
 
-  private async executeSingleCommand(
+  public async executeSingleCommand(
     device: SmartDevice,
     command: DeviceCommand,
     summary: string,
@@ -2428,7 +2429,7 @@ export class MenuMijiaWindowsApp {
     return t("演示预览 · 点击下方「扫码直连」同步你的真机");
   }
 
-  private get skin(): AppSkin {
+  public get skin(): AppSkin {
     return this.settings.skin;
   }
 
@@ -2439,20 +2440,20 @@ export class MenuMijiaWindowsApp {
     return resolveAppearance(this.settings.appearance, prefersLight);
   }
 
-  private get layout(): LayoutPrefs {
+  public get layout(): LayoutPrefs {
     return this.settings.layout;
   }
 
   /** Card sizes are per page: "all" or a room name. */
-  private get pageKey(): string {
+  public get pageKey(): string {
     return this.selectedRoom === "全部" ? "all" : this.selectedRoom;
   }
 
-  private tileSize(dev: SmartDevice): Exclude<TileSize, "auto"> {
+  public tileSize(dev: SmartDevice): Exclude<TileSize, "auto"> {
     return resolvedSize(chosenSize(this.layout, this.pageKey, dev.id), dev, this.settings.isCompactGridMode, this.settings.climatePanel);
   }
 
-  private saveLayout(): void {
+  public saveLayout(): void {
     this.saveSettings();
   }
 
@@ -4369,7 +4370,7 @@ export class MenuMijiaWindowsApp {
     });
   }
 
-  private startEditing(): void {
+  public startEditing(): void {
     this.isEditingLayout = true;
     this.expandedDeviceId = null;
     invokeTauriVoid("set_pin_popover", { pin: true });
@@ -4419,7 +4420,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Keeps the picked-up card under the pointer; runs after every render. */
-  private applyDragOffset(): void {
+  public applyDragOffset(): void {
     if (!this.draggingId || !this.dragPointer) return;
     const el = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(this.draggingId)}"]`);
     if (!el) return;
@@ -4436,7 +4437,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Before/after the hovered card (top or left half = before); first when above every card. */
-  private swapIfNeeded(x: number, y: number): void {
+  public swapIfNeeded(x: number, y: number): void {
     const dragged = this.draggingId;
     if (!dragged) return;
     const now = performance.now();
@@ -4475,234 +4476,7 @@ export class MenuMijiaWindowsApp {
    * live on the persistent root/window, so re-rendering mid-gesture never cancels the drag.
    */
   private bindLayoutGestures(): void {
-    let press: { id: string; x: number; y: number; timer: number; dimming: boolean; el: HTMLElement } | null = null;
-    let resizing: {
-      id: string;
-      startX: number;
-      startY: number;
-      startSize: Exclude<TileSize, "auto">;
-      didStep: boolean;
-      moved: boolean;
-      lastDx: number;
-      lastDy: number;
-      samples: Array<{ x: number; y: number; t: number }>;
-    } | null = null;
-    let suppressNextHandleClick = false;
-
-    const endHandleGesture = (id: string): void => {
-      const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(id)}"]`);
-      tile?.classList.remove("is-resizing");
-      this.root.querySelector<HTMLElement>(".cc-resize-handle.is-active")?.classList.remove("is-active");
-    };
-
-    const beginDrag = (id: string, el: HTMLElement, x: number, y: number) => {
-      const r = el.getBoundingClientRect();
-      this.draggingId = id;
-      this.dragPointer = { x, y, grabX: x - r.left, grabY: y - r.top };
-      this.lastSwap = null;
-      this.suppressNextClick = true;
-    };
-
-    this.root.addEventListener(
-      "pointerdown",
-      () => {
-        this.pointerIsDown = true;
-      },
-      { capture: true },
-    );
-    window.addEventListener(
-      "pointerup",
-      () => {
-        this.pointerIsDown = false;
-      },
-      { capture: true },
-    );
-    window.addEventListener("pointercancel", () => {
-      this.pointerIsDown = false;
-      if (resizing) { endHandleGesture(resizing.id); resizing = null; }
-    });
-    window.addEventListener("blur", () => {
-      this.pointerIsDown = false;
-      if (resizing) { endHandleGesture(resizing.id); resizing = null; }
-    });
-
-    this.root.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      suppressNextHandleClick = false;
-      const handleEl = (e.target as HTMLElement).closest<HTMLElement>(".cc-resize-handle");
-      if (handleEl && this.isEditingLayout) {
-        const id = handleEl.dataset.resizeHandle ?? handleEl.dataset.cycleSize ?? "";
-        const dev = this.devices.find((d) => d.id === id);
-        if (dev) {
-          resizing = {
-            id: dev.id,
-            startX: e.clientX,
-            startY: e.clientY,
-            startSize: this.tileSize(dev),
-            didStep: false,
-            moved: false,
-            lastDx: 0,
-            lastDy: 0,
-            samples: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
-          };
-          handleEl.classList.add("is-active");
-          handleEl.closest<HTMLElement>("[data-tile-id]")?.classList.add("is-resizing");
-        }
-        return;
-      }
-      const el = (e.target as HTMLElement).closest<HTMLElement>("[data-tile-id]");
-      if (!el || (e.target as HTMLElement).closest(".cc-resize-handle, input")) return;
-      const id = el.dataset.tileId as string;
-      const timer = this.isEditingLayout
-        ? 0
-        : window.setTimeout(() => {
-            if (!press || press.dimming) return;
-            beginDrag(id, el, press.x, press.y);
-            this.startEditing();
-          }, 450);
-      press = { id, x: e.clientX, y: e.clientY, timer, dimming: false, el };
-    });
-
-    window.addEventListener("pointermove", (e) => {
-      if (resizing) {
-        const dx = e.clientX - resizing.startX;
-        const dy = e.clientY - resizing.startY;
-        resizing.lastDx = dx;
-        resizing.lastDy = dy;
-        const now = performance.now();
-        resizing.samples.push({ x: e.clientX, y: e.clientY, t: now });
-        resizing.samples = resizing.samples.filter((sample) => now - sample.t <= 120);
-        if (Math.hypot(dx, dy) > 3) {
-          resizing.moved = true;
-        }
-        const dev = this.devices.find((d) => d.id === resizing?.id);
-        if (!dev) return;
-        const next = targetSize(
-          resizing.startSize,
-          { width: dx, height: dy },
-          this.settings.isCompactGridMode,
-        );
-        if (next !== this.tileSize(dev)) {
-          resizing.didStep = true;
-          this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = next;
-          this.saveLayout();
-          this.render();
-        }
-        return;
-      }
-      if (!press) return;
-      const dx = e.clientX - press.x;
-      const dy = e.clientY - press.y;
-      const moved = Math.hypot(dx, dy);
-      if (this.draggingId) {
-        if (this.dragPointer) { this.dragPointer.x = e.clientX; this.dragPointer.y = e.clientY; }
-        this.applyDragOffset();
-        this.swapIfNeeded(e.clientX, e.clientY);
-        return;
-      }
-      if (this.isEditingLayout) {
-        if (moved > 3) {
-          beginDrag(press.id, press.el, press.x, press.y);
-          this.render();
-        }
-        return;
-      }
-      const dev = this.devices.find((d) => d.id === press?.id);
-      const isExpanded = dev ? (this.expandedDeviceId === dev.id || this.tileSize(dev) === "panel") : false;
-      const canDim =
-        this.skin !== "classic" &&
-        !isExpanded &&
-        dev?.kind.kind === "light" &&
-        dev.isOnline &&
-        dev.kind.brightnessWritable !== false;
-      if (!press.dimming && moved > 8) {
-        window.clearTimeout(press.timer);
-        if (canDim && Math.abs(dx) > Math.abs(dy)) press.dimming = true; else { press = null; return; }
-      }
-      if (press.dimming) {
-        const tile = this.root.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(press.id)}"]`);
-        if (!tile) return;
-        const r = tile.getBoundingClientRect();
-        const percent = Math.max(1, Math.min(100, Math.round(((e.clientX - r.left) / r.width) * 100)));
-        this.dimPreview = { id: press.id, percent };
-        this.suppressNextClick = true;
-        this.render();
-      }
-    });
-
-    window.addEventListener("pointerup", () => {
-      if (resizing) {
-        const { id, moved, didStep, startSize, samples, lastDx, lastDy } = resizing;
-        resizing = null;
-        endHandleGesture(id);
-        // A drag without a size step leaves the same handle element mounted, so the browser
-        // fires a real click on it after pointerup (microtasks run before that click); swallow it.
-        if (moved && !didStep) {
-          suppressNextHandleClick = true;
-          window.setTimeout(() => {
-            suppressNextHandleClick = false;
-          }, 0);
-          // QuotaKeeper-style flick: release velocity projects onto at most one step.
-          const projection = projectedOffset(releaseVelocity(samples, performance.now()));
-          const dev = this.devices.find((d) => d.id === id);
-          if (!dev) return;
-          const target = targetSize(
-            startSize,
-            { width: lastDx + projection.width, height: lastDy + projection.height },
-            this.settings.isCompactGridMode,
-          );
-          if (target !== this.tileSize(dev)) {
-            this.layout.tileSizes[scopedKey(this.pageKey, dev.id)] = target;
-            this.saveLayout();
-            this.render();
-          }
-        }
-        return;
-      }
-      if (!press) return;
-      window.clearTimeout(press.timer);
-      const finished = press;
-      press = null;
-      if (this.draggingId) {
-        this.draggingId = null;
-        this.dragPointer = null;
-        this.render();
-        return;
-      }
-      if (finished.dimming && this.dimPreview) {
-        const dev = this.devices.find((d) => d.id === finished.id);
-        const percent = this.dimPreview.percent;
-        this.dimPreview = null;
-        if (dev && dev.kind.kind === "light" && dev.kind.brightnessWritable !== false) {
-          void this.executeSingleCommand(dev, { kind: "setLightBrightness", entityId: dev.kind.entityId, percent }, t("已将{name}亮度设为 {percent}%", { name: dev.name, percent: percent }), { targetId: dev.id, operation: { kind: "brightness", percent } });
-        }
-      }
-    });
-
-    // A long-press or dim drag ends with a click on the card; swallow it so nothing toggles.
-    this.root.addEventListener("click", (e) => {
-      if (suppressNextHandleClick && (e.target as HTMLElement).closest(".cc-resize-handle")) {
-        suppressNextHandleClick = false;
-        e.stopPropagation();
-        e.preventDefault();
-        return;
-      }
-      if (this.suppressNextClick || this.isEditingLayout) {
-        if ((e.target as HTMLElement).closest("[data-tile-id]") && !(e.target as HTMLElement).closest(".cc-resize-handle")) {
-          e.stopPropagation();
-          e.preventDefault();
-        }
-        this.suppressNextClick = false;
-      }
-    }, true);
-
-    this.root.addEventListener("contextmenu", (e) => {
-      const el = (e.target as HTMLElement).closest<HTMLElement>("[data-tile-id]");
-      if (!el) return;
-      e.preventDefault();
-      this.ctxMenu = { x: e.clientX, y: e.clientY, deviceId: el.dataset.tileId as string };
-      this.render();
-    });
+    bindLayoutGestures(this);
   }
 
   /**
