@@ -1501,6 +1501,15 @@ interface ConfirmationFixtureRow {
   readonly confirm: boolean;
 }
 
+interface ConfirmationFixtureDecisionRow {
+  readonly id: string;
+  readonly device: ConfirmationFixtureDevice | null;
+  readonly operation: DeviceIntent["operation"];
+  readonly confidence: number;
+  readonly askWhenUnsure: boolean;
+  readonly expectAutoRun: boolean;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1575,6 +1584,27 @@ function parseConfirmationRows(raw: string): ConfirmationFixtureRow[] {
       device: entry.device === null ? null : parseConfirmationDevice(entry.device, id),
       operation: parseConfirmationOperation(entry.operation, id),
       confirm: entry.confirm,
+    };
+  });
+}
+
+function parseConfirmationDecisionRows(raw: string): ConfirmationFixtureDecisionRow[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !Array.isArray(parsed.decisionRows)) throw new Error("confirmation decisionRows");
+  return parsed.decisionRows.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") throw new Error(`decision row ${index} id`);
+    const id = entry.id;
+    if (!Object.prototype.hasOwnProperty.call(entry, "device")) throw new Error(`${id} device`);
+    if (typeof entry.confidence !== "number") throw new Error(`${id} confidence`);
+    if (typeof entry.askWhenUnsure !== "boolean") throw new Error(`${id} askWhenUnsure`);
+    if (typeof entry.expectAutoRun !== "boolean") throw new Error(`${id} expectAutoRun`);
+    return {
+      id,
+      device: entry.device === null ? null : parseConfirmationDevice(entry.device, id),
+      operation: parseConfirmationOperation(entry.operation, id),
+      confidence: entry.confidence,
+      askWhenUnsure: entry.askWhenUnsure,
+      expectAutoRun: entry.expectAutoRun,
     };
   });
 }
@@ -1712,6 +1742,24 @@ it("matches the shared confirmation table in confirmation_golden.json", () => {
     if (row.device?.kind === "sensor") {
       assert.deepEqual(IntentValidator.sanitize([intent], devices, []), [], row.id);
     }
+  }
+
+  // #180: the plain-language "ask me when unsure" policy shares the same fixture. Windows keeps
+  // the preference on by default; this asserts both the opt-out branch and that hazard rules win.
+  const decisionRows = parseConfirmationDecisionRows(raw);
+  assert.equal(decisionRows.length, 3);
+  assert.equal(new Set(decisionRows.map((row) => row.id)).size, decisionRows.length);
+  for (const row of decisionRows) {
+    const devices = row.device ? [smartDeviceFromConfirmation(row.device)] : [];
+    const intent: DeviceIntent = { targetId: row.device?.id ?? "missing", operation: row.operation };
+    const decision = ModelActionPolicy.decide(
+      devices,
+      [],
+      { actions: [{ intent, confidence: row.confidence, primaryChoice: true }] },
+      { askWhenUnsure: row.askWhenUnsure }
+    );
+    assert.deepEqual(decision.intents, row.expectAutoRun ? [intent] : [], row.id);
+    if (!row.expectAutoRun) assert.ok(decision.suggestions.length > 0, row.id);
   }
 });
 

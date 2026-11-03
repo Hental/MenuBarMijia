@@ -265,6 +265,7 @@ extension HomeStore {
             showToast(L10n.tr("当前没有开启的设备", "No active devices are currently on"))
             return
         }
+        recordOnboardingMilestone(.turnedAllOff)
 
         let previousSnapshot = devices
         var offCommands: [(deviceId: String, command: DeviceCommand)] = []
@@ -289,7 +290,8 @@ extension HomeStore {
             restoreCommands: restoreCommands,
             previousDevices: previousSnapshot,
             deviceCount: targetIds.count,
-            habitReceipt: nil
+            habitReceipt: nil,
+            isAllOff: true
         )
         guard let bannerId = undoBanner?.id else { return }
 
@@ -323,14 +325,16 @@ extension HomeStore {
         previousDevices: [SmartDevice],
         deviceCount: Int,
         habitReceipt: UserHabitMemory.RecordingReceipt? = nil,
-        duration: TimeInterval? = nil
+        duration: TimeInterval? = nil,
+        isAllOff: Bool = false
     ) {
         let banner = UndoBanner(
             title: title,
             restoreCommands: restoreCommands,
             previousDevices: previousDevices,
             habitReceipt: habitReceipt,
-            duration: duration
+            duration: duration,
+            isAllOff: isAllOff
         )
         self.undoBanner = banner
         undoTimerTask?.cancel()
@@ -359,6 +363,7 @@ extension HomeStore {
             showToast(L10n.tr("设备状态已变化，无法撤销", "Device state changed; cannot undo"), isError: true)
             return nil
         }
+        if !applicable.isEmpty, banner.isAllOff { recordOnboardingMilestone(.undidAllOff) }
 
         let context = controlContextID
         return Task {
@@ -412,7 +417,8 @@ extension HomeStore {
                     previousDevices: banner.previousDevices,
                     deviceCount: failedDeviceIds.count,
                     habitReceipt: remainingReceipt,
-                    duration: banner.duration
+                    duration: banner.duration,
+                    isAllOff: banner.isAllOff
                 )
             }
             let sep = L10n.isEnglish ? ", " : "、"

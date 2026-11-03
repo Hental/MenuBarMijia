@@ -158,7 +158,7 @@ final class GrokBallSidecarController {
     func synchronize() {
         guard !isTornDown, let parent else { return }
         panelWindow.appearance = parent.appearance
-        guard parent.isVisible, !store.shouldShowOnboarding, store.enableGrokBall else { hide(); return }
+        guard parent.isVisible, !store.showsFullOnboardingGuide, store.enableGrokBall else { hide(); return }
         let requested = ballOffset.map { NSPoint(x: parent.frame.midX + $0.x, y: parent.frame.midY + $0.y) }
         let visible = screen(at: requested)?.visibleFrame ?? parent.screen?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -202,7 +202,7 @@ final class GrokBallSidecarController {
         guard !isTornDown else { return }
         withObservationTracking {
             _ = store.isGrokBallStageExpanded
-            _ = store.shouldShowOnboarding
+            _ = store.showsFullOnboardingGuide
             _ = store.enableGrokBall
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in

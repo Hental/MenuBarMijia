@@ -75,7 +75,7 @@ public struct ControlCenterPanel: View {
     public var body: some View {
         let _ = (store.effectiveLanguage, store.selectedRoomId, store.rooms.count)
         ZStack(alignment: .bottom) {
-            if store.shouldShowOnboarding {
+            if store.showsFullOnboardingGuide {
                 OnboardingGuideView(store: store)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -192,6 +192,10 @@ public struct ControlCenterPanel: View {
                 isSearchFieldFocused = false
             }
         }
+        // #180: typing a query — through the key monitor or the field — ticks the guide's search step.
+        .onChange(of: search.query) { _, query in
+            if !query.isEmpty { store.recordOnboardingMilestone(.searchedDevice) }
+        }
         // Mi cloud polls every 6 s only while the panel is on screen (#26).
         .onChange(of: isPresented) { _, visible in store.setPanelVisible(visible) }
         .onDisappear { store.setPanelVisible(false) }
@@ -290,6 +294,18 @@ public struct ControlCenterPanel: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+
+            // #180 review: after connecting, the lessons stay above the dashboard so search and
+            // All Off/Undo can be tried while these instructions are still on screen.
+            if store.showsOnboardingChecklist {
+                OnboardingChecklistCard(
+                    store: store,
+                    onBeginSearch: { withAnimation(AppleMotion.snappySpring) { search.begin() } }
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .transition(AppleMotion.drawerTransition)
+            }
 
             if store.miSessionShowsExpired || store.miSessionExpiringSoonDate != nil {
                 miSessionExpiryBanner

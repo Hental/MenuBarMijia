@@ -22,6 +22,8 @@ public struct UndoBanner: Equatable, Sendable {
     public var habitReceipt: UserHabitMemory.RecordingReceipt?
     /// Explicit window for actions outside the panel (automation, #59); nil uses the device-count rule.
     public var duration: TimeInterval?
+    /// True only for 全关, so the onboarding marker records an undo of the all-off lesson (#180).
+    public var isAllOff: Bool
 
     public init(
         id: UUID = UUID(),
@@ -29,7 +31,8 @@ public struct UndoBanner: Equatable, Sendable {
         restoreCommands: [DeviceCommand],
         previousDevices: [SmartDevice],
         habitReceipt: UserHabitMemory.RecordingReceipt? = nil,
-        duration: TimeInterval? = nil
+        duration: TimeInterval? = nil,
+        isAllOff: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -37,6 +40,7 @@ public struct UndoBanner: Equatable, Sendable {
         self.previousDevices = previousDevices
         self.habitReceipt = habitReceipt
         self.duration = duration
+        self.isAllOff = isAllOff
     }
 }
 
@@ -218,16 +222,43 @@ public final class HomeStore {
         didSet { userDefaults.set(hasCompletedOnboarding, forKey: "has_completed_onboarding") }
     }
 
+    /// Steps the guide has seen the user try (#180). Persisted so the checkmarks survive a relaunch.
+    /// Connecting is deliberately not stored here: it is derived from the live connection state.
+    public internal(set) var onboardingMilestones: Set<OnboardingMilestone> = []
+
+    /// Plain-language "不确定时先问我" switch (#180). On by default, matching the shared
+    /// confirmation rules both platforms ship with; the numeric threshold lives in advanced settings.
+    public var askWhenUnsureBeforeAIActions: Bool = true {
+        didSet { userDefaults.set(askWhenUnsureBeforeAIActions, forKey: Self.askWhenUnsureKey) }
+    }
+
     /// Transient flag allowing the user to reopen the onboarding guide from Settings at any time.
     public var isShowingOnboarding: Bool = false
 
+    /// Which onboarding surface to draw. The full guide only replaces the dashboard while nothing
+    /// is configured; after connecting, the remaining lessons ride above the dashboard so search and
+    /// All Off/Undo can be tried while the instructions stay visible (#180 review).
+    public var onboardingPresentation: OnboardingPresentation {
+        OnboardingPresentation.resolve(
+            checklist: onboardingChecklist,
+            hasCompletedOnboarding: hasCompletedOnboarding,
+            isReopened: isShowingOnboarding
+        )
+    }
+
+    /// Any onboarding surface is on screen: the full guide or the dashboard checklist.
     public var shouldShowOnboarding: Bool {
-        if isShowingOnboarding { return true }
-        guard !hasCompletedOnboarding, devices.isEmpty else { return false }
-        if case .connected = connectionStatus { return false }
-        let hasMiSession = !miAccounts.isEmpty
-        let hasHAToken = !KeychainHelper.loadToken(defaults: userDefaults).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return !hasMiSession && !hasHAToken
+        onboardingPresentation != .hidden
+    }
+
+    /// The full-screen guide replaces the dashboard. Only true before a source is configured.
+    public var showsFullOnboardingGuide: Bool {
+        onboardingPresentation == .fullGuide
+    }
+
+    /// The compact next-steps card rides above the live dashboard.
+    public var showsOnboardingChecklist: Bool {
+        onboardingPresentation == .dashboardChecklist
     }
 
     public func completeOnboarding() {
@@ -547,6 +578,11 @@ public final class HomeStore {
         // Privacy-first default: ask for on-device recognition unless the user explicitly opted out (#50).
         self.prefersOnDeviceSpeech = boolOrDefaultTrue("assistant_on_device_speech")
         self.hasCompletedOnboarding = ud.bool(forKey: "has_completed_onboarding")
+        self.onboardingMilestones = Set(
+            (ud.stringArray(forKey: Self.onboardingMilestonesKey) ?? [])
+                .compactMap(OnboardingMilestone.init(rawValue:))
+        )
+        self.askWhenUnsureBeforeAIActions = boolOrDefaultTrue(Self.askWhenUnsureKey)
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")

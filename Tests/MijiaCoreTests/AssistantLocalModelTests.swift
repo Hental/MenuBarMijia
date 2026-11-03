@@ -504,7 +504,8 @@ private actor LocalResolverSpy: AssistantCommandResolving {
         _ utterance: String,
         devices: [SmartDevice],
         scenes: [HomeScene],
-        context: AssistantContext
+        context: AssistantContext,
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) async throws -> IntentPlan {
         utterances.append(utterance)
         return plan
@@ -516,7 +517,8 @@ private struct ThrowingLocalResolver: AssistantCommandResolving {
         _ utterance: String,
         devices: [SmartDevice],
         scenes: [HomeScene],
-        context: AssistantContext
+        context: AssistantContext,
+        confirmation: ModelActionPolicy.ConfirmationPolicy = .default
     ) async throws -> IntentPlan {
         throw AssistantLocalModelError.failed
     }
