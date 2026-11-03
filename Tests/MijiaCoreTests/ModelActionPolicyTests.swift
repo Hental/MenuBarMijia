@@ -140,7 +140,7 @@ struct ModelActionPolicyTests {
     @Test("A primary answer below 80% waits as one chip for the whole room")
     func lowConfidencePrimaryIsGroupChip() async throws {
         let resolver = try Self.systemOneResolver([
-            "target": ["choice": "room_lights:书房", "confidence": 0.95],
+            "target": ["choice": "room_lights:1", "confidence": 0.95],
             "op": ["choice": "power_on", "confidence": 0.6],
             "temp": ["choice": "none", "confidence": 0.99]
         ])

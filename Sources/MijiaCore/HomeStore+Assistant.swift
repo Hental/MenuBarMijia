@@ -161,10 +161,10 @@ extension HomeStore {
             : ""
 
         return AssistantContext(
-            timeSummary: timeSummary,
-            environmentSummary: environmentSummary,
-            activeDevicesSummary: activeSummary,
-            habitSummary: habitSummary
+            timeSummary: PromptText.sanitize(timeSummary, limit: PromptText.stateLimit),
+            environmentSummary: PromptText.sanitize(environmentSummary, limit: PromptText.stateLimit),
+            activeDevicesSummary: PromptText.sanitize(activeSummary, limit: PromptText.stateLimit),
+            habitSummary: PromptText.sanitize(habitSummary, limit: PromptText.stateLimit)
         )
     }
 

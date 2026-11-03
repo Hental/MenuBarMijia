@@ -124,7 +124,6 @@ public struct ModelIntentResolver: Sendable {
             let request = try makeSystemOneRequest(
                 utterance: utterance,
                 catalog: catalog,
-                devices: devices,
                 context: context
             )
             let (data, response) = try await transport(request)
@@ -152,7 +151,7 @@ public struct ModelIntentResolver: Sendable {
     ) async throws -> [AssistantSuggestion] {
         let catalog = IntentCatalog(devices: devices, scenes: scenes)
         if Self.isSystemOneModel(config.model) {
-            let request = try makeProactiveSystemOneRequest(catalog: catalog, devices: devices, context: context)
+            let request = try makeProactiveSystemOneRequest(catalog: catalog, context: context)
             let (data, response) = try await transport(request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw AssistantError.httpStatus(http.statusCode)
@@ -227,7 +226,6 @@ public struct ModelIntentResolver: Sendable {
     func makeSystemOneRequest(
         utterance: String,
         catalog: IntentCatalog,
-        devices: [SmartDevice] = [],
         context: AssistantContext = AssistantContext()
     ) throws -> URLRequest {
         let url = try endpointURL(path: "/systemone")
@@ -297,10 +295,10 @@ public struct ModelIntentResolver: Sendable {
         // Add per-device parallel decision heads for every controllable device so Jev can
         // orchestrate the whole home for ambient commands ("准备写代码，有点热") and surface
         // secondary probabilities. No truncation: device 11+ must stay visible (#33).
-        for (alias, device) in Self.controllableDevicesWithAliases(devices: devices) {
+        for (alias, device) in catalog.aliasDevices {
             questions["dev_\(alias)"] = [
                 "type": "choice",
-                "instructions": "What action should be taken on \(device.name) (room: \(device.roomName)) for this command? Choose none if unrelated.",
+                "instructions": Self.deviceHeadInstruction(alias: alias),
                 "criteria": Self.deviceSpecificCriteria(for: device)
             ]
         }
@@ -309,10 +307,10 @@ public struct ModelIntentResolver: Sendable {
             "catalog": catalog.text,
             "command": utterance
         ]
-        if !context.timeSummary.isEmpty { stateDict["time"] = context.timeSummary }
-        if !context.environmentSummary.isEmpty { stateDict["environment"] = context.environmentSummary }
-        if !context.activeDevicesSummary.isEmpty { stateDict["active_devices"] = context.activeDevicesSummary }
-        if !context.habitSummary.isEmpty { stateDict["user_habits"] = context.habitSummary }
+        if let time = Self.promptField(context.timeSummary) { stateDict["time"] = time }
+        if let environment = Self.promptField(context.environmentSummary) { stateDict["environment"] = environment }
+        if let active = Self.promptField(context.activeDevicesSummary) { stateDict["active_devices"] = active }
+        if let habits = Self.promptField(context.habitSummary) { stateDict["user_habits"] = habits }
 
         let body: [String: Any] = [
             "model": resolvedModel,
@@ -325,7 +323,6 @@ public struct ModelIntentResolver: Sendable {
 
     func makeProactiveSystemOneRequest(
         catalog: IntentCatalog,
-        devices: [SmartDevice],
         context: AssistantContext
     ) throws -> URLRequest {
         let url = try endpointURL(path: "/systemone")
@@ -337,20 +334,20 @@ public struct ModelIntentResolver: Sendable {
 
         let resolvedModel = resolvedSystemOneModel(for: url)
         var questions: [String: Any] = [:]
-        for (alias, device) in Self.controllableDevicesWithAliases(devices: devices) {
+        for (alias, device) in catalog.aliasDevices {
             questions["dev_\(alias)"] = [
                 "type": "choice",
-                "instructions": "Given the current time, indoor temperature/humidity, active devices, and user habits, what proactive adjustment would the user most likely want right now for \(device.name) (\(device.roomName))? Select none if current state is already ideal.",
+                "instructions": Self.proactiveHeadInstruction(alias: alias),
                 "criteria": Self.deviceSpecificCriteria(for: device)
             ]
         }
 
         let stateDict: [String: Any] = [
             "catalog": catalog.text,
-            "time": context.timeSummary,
-            "environment": context.environmentSummary,
-            "active_devices": context.activeDevicesSummary,
-            "user_habits": context.habitSummary
+            "time": Self.promptField(context.timeSummary) ?? "",
+            "environment": Self.promptField(context.environmentSummary) ?? "",
+            "active_devices": Self.promptField(context.activeDevicesSummary) ?? "",
+            "user_habits": Self.promptField(context.habitSummary) ?? ""
         ]
 
         let body: [String: Any] = [
@@ -379,7 +376,7 @@ public struct ModelIntentResolver: Sendable {
         schema: {"suggestions":[{"device":"id","op":"power|brightness|color_temp|effect|hvac_mode|temperature|fan_speed|oscillation|scene","value":...,"confidence":85}]}
         规则：confidence 为 20-99 的整数置信度；如果当前环境已处于理想状态无需操作，输出 {"suggestions":[]}。只能使用上面列出的 id。
         """
-        let userState = "时间：\(context.timeSummary)\n环境：\(context.environmentSummary)\n开启中：\(context.activeDevicesSummary)\n习惯：\(context.habitSummary)"
+        let userState = "时间：\(Self.promptField(context.timeSummary) ?? "")\n环境：\(Self.promptField(context.environmentSummary) ?? "")\n开启中：\(Self.promptField(context.activeDevicesSummary) ?? "")\n习惯：\(Self.promptField(context.habitSummary) ?? "")"
 
         let body: [String: Any] = [
             "model": config.model.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -463,8 +460,7 @@ public struct ModelIntentResolver: Sendable {
 
     static func systemPrompt(catalog: IntentCatalog, context: AssistantContext = AssistantContext()) -> String {
         let contextParts = [context.timeSummary, context.environmentSummary, context.activeDevicesSummary, context.habitSummary]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+            .compactMap { promptField($0) }
         let contextBlock = contextParts.isEmpty ? "" : "\n当前环境与习惯：\(contextParts.joined(separator: "；"))\n"
         return """
         你是智能家居指令解析器。把用户的中文指令转换为 JSON，只输出 JSON，不要解释。\(contextBlock)
@@ -647,8 +643,7 @@ public struct ModelIntentResolver: Sendable {
             }
         }
 
-        let aliasDevices = controllableDevicesWithAliases(devices: devices)
-        for (alias, device) in aliasDevices {
+        for (alias, device) in catalog.aliasDevices {
             guard let answer = answers["dev_\(alias)"] as? [String: Any] else { continue }
             let choice = answer["choice"] as? String ?? "none"
             let probs = answer["probabilities"] as? [String: Any] ?? [:]
@@ -735,7 +730,7 @@ public struct ModelIntentResolver: Sendable {
         }
 
         var scored: [(prob: Double, suggestion: AssistantSuggestion)] = []
-        for (alias, device) in controllableDevicesWithAliases(devices: devices) {
+        for (alias, device) in catalog.aliasDevices {
             guard let answer = answers["dev_\(alias)"] as? [String: Any] else { continue }
             let probs = answer["probabilities"] as? [String: Any] ?? [:]
             let topChoice = answer["choice"] as? String ?? "none"
@@ -788,23 +783,25 @@ public struct ModelIntentResolver: Sendable {
             .map(\.suggestion)
     }
 
-    private static func controllableDevicesWithAliases(devices: [SmartDevice]) -> [(alias: String, device: SmartDevice)] {
-        var result: [(String, SmartDevice)] = []
-        var idx = 0
-        for device in devices {
-            let category = IntentDeviceCategory(device)
-            guard category.isAssistantControllable else { continue }
-            idx += 1
-            result.append(("d\(idx)", device))
-        }
-        return result
+    public static func deviceHeadInstruction(alias: String) -> String {
+        "What action should be taken on device \(alias) for this command? Choose none if unrelated."
+    }
+
+    public static func proactiveHeadInstruction(alias: String) -> String {
+        "What proactive adjustment for device \(alias)? Select none if current state is already ideal."
+    }
+
+    private static func promptField(_ raw: String) -> String? {
+        let cleaned = PromptText.sanitize(raw, limit: PromptText.stateLimit)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     private static func deviceSpecificCriteria(for device: SmartDevice) -> [String: String] {
         var criteria: [String: String] = [
-            "none": "保持不变，不操作\(device.name)",
-            "power_on": "打开\(device.name)",
-            "power_off": "关闭\(device.name)"
+            "none": "保持不变，不操作此设备",
+            "power_on": "打开此设备",
+            "power_off": "关闭此设备"
         ]
         switch device.kind {
         case .light(let spec):
