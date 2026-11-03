@@ -5,9 +5,9 @@ mod placement;
 mod update_manifest;
 use home_assistant::{ha_execute, ha_snapshot};
 use placement::{
-    drag_settle_finished, key_state_is_down, move_is_user_driven, move_suppression_deadline, place,
-    primary_button_virtual_key, resized_top, taskbar_edge, PanelAnchor, PanelPlacement,
-    PlacementInput, Rect, DRAG_SETTLE_MS,
+    drag_settle_finished, fit_panel_height, key_state_is_down, move_is_user_driven,
+    move_suppression_deadline, place, primary_button_virtual_key, resized_top, taskbar_edge,
+    PanelAnchor, PanelPlacement, PlacementInput, Rect, DRAG_SETTLE_MS,
 };
 
 #[cfg(test)]
@@ -2356,17 +2356,23 @@ fn position_popover(window: &WebviewWindow, anchor: Option<PhysicalPosition<f64>
 
     let (full, work) = monitor_rects(&monitor);
     let scale = monitor.scale_factor();
+    let margin = (12.0 * scale).round() as i32;
+    // A panel sized for a larger display has to fit this monitor before it is placed (#204 review).
+    let fitted_h = fit_panel_height(work, margin, win_h);
     let (x, y) = place(&PlacementInput {
         monitor: full,
         work,
-        window: (win_w, win_h),
-        margin: (12.0 * scale).round() as i32,
+        window: (win_w, fitted_h),
+        margin,
         anchor: anchor.map(|pos| (pos.x.round() as i32, pos.y.round() as i32)),
         preference: current_panel_placement().anchor,
         main_inset: main_column_inset(win_w, scale),
         main_width: (472.0 * scale).round() as i32,
     });
     suppress_move_snaps();
+    if fitted_h != win_h {
+        let _ = window.set_size(PhysicalSize::new(win_size.width, fitted_h as u32));
+    }
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
@@ -2462,24 +2468,33 @@ fn snap_panel_to_work_area(window: &WebviewWindow) {
         return;
     };
     let (full, work) = monitor_rects(&monitor);
-    let anchor = PanelAnchor::nearest(work, center);
+    let scale = monitor.scale_factor();
+    let margin = (12.0 * scale).round() as i32;
+    // Fit the destination work area before placing: an over-tall panel would otherwise pin its top and
+    // leave its bottom offscreen (#204 review).
+    let fitted_h = fit_panel_height(work, margin, win_h);
+    // Judge the drop by where the fitted panel lands, not by the oversized source rect.
+    let dropped_center = (position.x + win_w / 2, position.y + fitted_h / 2);
+    let anchor = PanelAnchor::nearest(work, dropped_center);
     // A drop inside the current quadrant still snaps the window back to its corner; only a different
     // corner needs a write, so an unchanged preference never rewrites the file (#204 review).
     if anchor != current_panel_placement().anchor {
         let _ = store_panel_placement(PanelPlacement { anchor });
     }
-    let scale = monitor.scale_factor();
     let (x, y) = place(&PlacementInput {
         monitor: full,
         work,
-        window: (win_w, win_h),
-        margin: (12.0 * scale).round() as i32,
+        window: (win_w, fitted_h),
+        margin,
         anchor: None,
         preference: anchor,
         main_inset: main_column_inset(win_w, scale),
         main_width: (472.0 * scale).round() as i32,
     });
     suppress_move_snaps();
+    if fitted_h != win_h {
+        let _ = window.set_size(PhysicalSize::new(size.width, fitted_h as u32));
+    }
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 

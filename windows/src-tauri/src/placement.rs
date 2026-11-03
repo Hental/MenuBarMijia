@@ -216,6 +216,14 @@ fn beside_icon_vertically(icon_y: i32, win_h: i32, margin: i32, min_y: i32, max_
     }
 }
 
+/// Height that fits the panel inside the monitor work area with `margin` above and below. A tall panel
+/// dragged from a larger display has to shrink before it is placed: `place()` keeps its top inside the
+/// work area, but without this the bottom would hang off the shorter screen (#204 review).
+pub fn fit_panel_height(work: Rect, margin: i32, height: i32) -> i32 {
+    let available = (work.height - margin * 2).max(1);
+    height.min(available).max(1)
+}
+
 /// Keeps the anchored vertical edge fixed while the panel changes height.
 pub fn resized_top(
     work: Rect,
@@ -400,6 +408,17 @@ mod tests {
         let mut request = input(TaskbarEdge::Bottom, None);
         request.window = (3000, 2000);
         assert_eq!(place(&request), (MARGIN, MARGIN));
+    }
+
+    #[test]
+    fn a_tall_panel_shrinks_to_the_destination_work_area() {
+        let short = Rect::new(0, 0, 1366, 728);
+        // A 1008 px panel sized on a 1080p monitor does not fit this 728 px work area…
+        assert_eq!(fit_panel_height(short, 12, 1008), 704);
+        // …while a panel that already fits is left alone: the clamp never grows it.
+        assert_eq!(fit_panel_height(short, 12, 620), 620);
+        // A degenerate work area still yields a positive height.
+        assert_eq!(fit_panel_height(Rect::new(0, 0, 100, 20), 12, 620), 1);
     }
 
     #[test]
