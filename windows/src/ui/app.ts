@@ -167,13 +167,14 @@ import {
 
 import { SpeechRecognitionInstance, type ConnectionMode, type LearnedShortcut, type LoadedSettings, type PersistedSettings, type ReplyBannerState, type UndoAction, type UndoStep } from "./appTypes.js";
 import { APP_VERSION, CAMERA_QUALITY_TITLES, CACHED_DEVICES_VERSION, LEGACY_STORAGE_KEY, SF_ICONS, STORAGE_KEY } from "./appConstants.js";
-import { demoDevices, demoScenes, quickActions } from "./demo.js";
+import { demoDevices, demoScenes } from "./demo.js";
 import { createTransport, invokeTauriVoid } from "./transport.js";
 import { loadSettings, stripCredentialFieldsFromStoredCopies, upgradeCachedDevices, writeSettingsForStorage } from "./settings.js";
 import { CameraLiveController } from "./cameraLive.js";
 import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as renderEnvironmentStripView } from "./deviceViews.js";
 import { renderSettingsModal } from "./settingsViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
+import { renderPanel } from "./panelView.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
@@ -200,7 +201,7 @@ export class MenuMijiaWindowsApp {
   public devices: SmartDevice[];
   public scenes: HomeScene[];
   public environmentReadings: EnvironmentReading[] = [];
-  private listCut: DeviceListCut = { kind: "all" };
+  public listCut: DeviceListCut = { kind: "all" };
 
   public get selectedRoom(): string {
     return this.listCut.kind === "room" ? this.listCut.roomName : "全部";
@@ -237,7 +238,7 @@ export class MenuMijiaWindowsApp {
   public activeSheet: "none" | "onboarding" | "settings" = "none";
   private onboardingStep = 0;
   public replyBanner: ReplyBannerState | null = null;
-  private haConnectionError: string | null = null;
+  public haConnectionError: string | null = null;
   public waitingDeviceIds = new Set<string>();
   /** A Xiaomi refresh failed after devices were already on screen. */
   public cloudValuesStale = false;
@@ -255,7 +256,7 @@ export class MenuMijiaWindowsApp {
   private readonly grokBall = new GrokBallView();
   private grokBallCelebrationUntil = 0;
   private grokBallPointerUntil = 0;
-  private grokBallOnLeft = false;
+  public grokBallOnLeft = false;
   private panelGeometryUpdates: Promise<void> = Promise.resolve();
   /** Panel anchor the backend persists (#204); the window position itself is owned by Rust. */
   public panelAnchor: PanelAnchor = "auto";
@@ -263,8 +264,8 @@ export class MenuMijiaWindowsApp {
   private proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
   private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
-  private isResolvingIntent = false;
-  private isSyncingCloud = false;
+  public isResolvingIntent = false;
+  public isSyncingCloud = false;
   private syncGeneration = 0;
   private lastCloudRefreshAt: number | null = null;
   public localControlRevision = 0;
@@ -273,11 +274,11 @@ export class MenuMijiaWindowsApp {
   private pendingCloudRender = false;
   public endpointSubmission: Promise<unknown> = Promise.resolve();
   public pointerIsDown = false;
-  private isListeningVoice = false;
+  public isListeningVoice = false;
   public scheduledCommands: ScheduledCommand[] = [];
   /** Timers that came due while the PC slept; they only run when the user taps 立即执行 (#22). */
   public missedScheduledCommands: ScheduledCommand[] = [];
-  private lastUndoAction: UndoAction | null = null;
+  public lastUndoAction: UndoAction | null = null;
   public qrTicket: QRLoginTicket | null = null;
   public qrStatusText = t("点击下方按钮获取安全二维码，用手机「米家 App → 扫一扫」即可同步真实全屋设备。");
   public isPollingQR = false;
@@ -745,7 +746,7 @@ export class MenuMijiaWindowsApp {
     this.render();
   }
 
-  private get rooms(): string[] {
+  public get rooms(): string[] {
     const unique = Array.from(new Set(this.devices.map((d) => d.roomName)));
     return ["全部", ...unique];
   }
@@ -1222,7 +1223,7 @@ export class MenuMijiaWindowsApp {
     void this.refreshDevices(false);
   }
 
-  private get homeTitle(): string {
+  public get homeTitle(): string {
     const h = this.homes.find((x) => x.id === this.settings.selectedHomeId);
     return h ? h.name : this.homes.length > 1 ? t("全部家庭") : t("我的米家");
   }
@@ -1252,7 +1253,7 @@ export class MenuMijiaWindowsApp {
     return `${t("全关·{room}", { room: this.escapeHtml(scope) })} (${count})`;
   }
 
-  private renderAllOffControl(): string {
+  public renderAllOffControl(): string {
     if (this.isEditingLayout) return `<button class="cc-all-off-pill is-done" id="btn-done-editing" aria-label="${t("完成布局编辑")}">${t("完成")}</button>`;
     const count = this.allOffTargets.length;
     if (count === 0) return "";
@@ -1909,7 +1910,7 @@ export class MenuMijiaWindowsApp {
     </section>`;
   }
 
-  private renderGrokBallSidebar(): string {
+  public renderGrokBallSidebar(): string {
     if (!this.settings.enableGrokBall) return "";
     return `<aside class="cc-grok-sidebar" aria-label="${t("猜你想控")}">
       <button class="cc-grok-toggle" id="btn-grok-ball" data-grok-toggle aria-label="${t("猜你想控")}" aria-expanded="${this.isGrokBallStageExpanded}"><span data-grok-slot></span></button>
@@ -2402,7 +2403,7 @@ export class MenuMijiaWindowsApp {
     }
   }
 
-  private formatRemainingMs(ms: number): string {
+  public formatRemainingMs(ms: number): string {
     const secs = Math.max(0, Math.ceil(ms / 1000));
     if (secs >= 60) {
       const m = Math.floor(secs / 60);
@@ -2412,7 +2413,7 @@ export class MenuMijiaWindowsApp {
     return `${secs}秒`;
   }
 
-  private get statusSummaryText(): string {
+  public get statusSummaryText(): string {
     if (this.valuesAreStale) return t("可能过期");
     if (this.settings.connectionMode === "homeAssistant") return this.isSyncingCloud ? "Home Assistant · Connecting" : `Home Assistant · ${this.onlineDeviceCount} online`;
     if (this.settings.connectionMode === "xiaomiCloud") {
@@ -2553,347 +2554,10 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderNow(): void {
-    const isDemo = this.settings.connectionMode === "demo";
-    const activeUndo =
-      this.lastUndoAction && this.lastUndoAction.expiresAtMs > Date.now()
-        ? this.lastUndoAction
-        : null;
-    const scheme = this.effectiveAppearance;
-    this.root.dataset.scheme = scheme;
-    this.root.classList.toggle("is-grok-enabled", this.settings.enableGrokBall);
-    this.root.classList.toggle("is-grok-expanded", this.settings.enableGrokBall && this.isGrokBallStageExpanded);
-    this.root.classList.toggle("is-native-host", Boolean(window.__TAURI_INTERNALS__));
-    this.root.dataset.grokSide = this.grokBallOnLeft ? "left" : "right";
-    const popoverClass = `cc-popover skin-${this.skin} scheme-${scheme} ${this.skin === "classic" ? "" : "is-skinned"} ${this.isEditingLayout ? "is-editing" : ""}`.trim();
-    const innerContent = `
-        <header class="cc-header">
-          <div class="cc-header-top">
-            <div class="cc-title-group">
-              <div class="cc-home-emblem" aria-hidden="true">${SF_ICONS.houseFill}</div>
-              <div class="cc-title-stack">
-                <div class="cc-title-row">
-                  ${
-                    this.homes.length > 1
-                      ? `<button class="cc-home-switch" id="btn-home-menu" aria-expanded="${this.isHomeMenuOpen}" aria-label="${t("切换家庭")}">
-                          <span class="cc-home-title">${this.escapeHtml(this.homeTitle)}</span>
-                          <span class="cc-home-caret ${this.isHomeMenuOpen ? "is-open" : ""}">${SF_ICONS.chevronDown}</span>
-                        </button>`
-                      : `<span class="cc-home-title">${this.escapeHtml(this.homeTitle)}</span>`
-                  }
-                  <span class="cc-mode-pill ${isDemo ? "is-demo" : "is-cloud"}">
-                    ${isDemo ? t("演示预览") : this.settings.connectionMode === "homeAssistant" ? "Home Assistant" : t("Miot 直连")}
-                  </span>
-                </div>
-                <div class="cc-subtitle">${this.escapeHtml(this.isEditingLayout ? t("拖动卡片排序 · 点右下角圆弧手柄改大小") : this.statusSummaryText)}</div>
-              </div>
-            </div>
-
-            <div class="cc-header-controls">
-              <button
-                class="cc-circle-btn ${this.isListeningVoice ? "is-recording" : ""}"
-                id="btn-mic"
-                title="${t("语音控制")}"
-                aria-label="${t("语音控制")}"
-                aria-pressed="${this.isListeningVoice}"
-              >
-                ${SF_ICONS.micFill}
-              </button>
-              <button
-                class="cc-circle-btn ${this.isShowingAssistantBar ? "is-selected" : ""}"
-                id="btn-toggle-assistant"
-                title="${t("AI 自然语言指令栏 (/)")}"
-                aria-label="${t("AI 自然语言指令栏")}"
-                aria-pressed="${this.isShowingAssistantBar}"
-              >
-                ${SF_ICONS.sparkles}
-              </button>
-              ${this.renderAllOffControl()}
-              <button
-                class="cc-circle-btn"
-                id="btn-hide-panel"
-                title="${t("收起面板到右下角托盘 (Esc)")}"
-                aria-label="${t("收起面板")}"
-              >
-                ${SF_ICONS.chevronDown}
-              </button>
-            </div>
-          </div>
-
-          ${this.renderEnvironmentStrip()}
-        </header>
-
-        ${
-          this.isShowingAssistantBar
-            ? `
-          <section class="cc-assistant-section">
-            <div class="cc-spotlight-bar">
-              <span class="cc-spotlight-icon">${SF_ICONS.sparkles}</span>
-              <input
-                id="command-input"
-                class="cc-spotlight-input"
-                type="text"
-                placeholder="${t("说一句：我困了 / 调低两度 / 10分钟后关灯 / 撤销...")}"
-                aria-label="${t("自然语言指令")}"
-                ${this.isResolvingIntent ? "disabled" : ""}
-              />
-              <button
-                id="btn-send"
-                class="cc-spotlight-send"
-                title="${t("执行指令 (Enter)")}"
-                aria-label="${t("执行指令")}"
-                ${this.isResolvingIntent ? "disabled" : ""}
-              >
-                ${SF_ICONS.arrowUpCircle}
-              </button>
-            </div>
-
-            ${
-              this.replyBanner ||
-              this.scheduledCommands.length > 0 ||
-              this.missedScheduledCommands.length > 0 ||
-              activeUndo ||
-              this.pendingSuggestions.length > 0
-                ? `
-              <div class="cc-feedback-card ${this.replyBanner?.isError ? "is-error" : ""}">
-                ${
-                  this.replyBanner
-                    ? `
-                  <div class="cc-feedback-row">
-                    <span class="cc-feedback-badge">${this.escapeHtml(this.replyBanner.source)}</span>
-                    <span class="cc-feedback-text">${this.escapeHtml(this.replyBanner.text)}</span>
-                    ${
-                      this.pendingCloudConsent
-                        ? `<button class="cc-inline-pill" id="btn-cloud-allow">${t("允许并发送")}</button>
-                           <button class="cc-inline-pill" id="btn-cloud-decline">${t("不用了")}</button>`
-                        : ""
-                    }
-                    ${
-                      activeUndo
-                        ? `<button class="cc-inline-pill" id="btn-undo">${t("撤销")}</button>`
-                        : ""
-                    }
-                  </div>
-                `
-                    : ""
-                }
-                ${
-                  this.pendingSuggestions.length > 0
-                    ? `
-                  <div class="cc-suggestion-row">
-                    ${this.pendingSuggestions
-                      .map(
-                        (item) => `<button class="cc-inline-pill" data-suggestion-id="${this.escapeHtml(item.id)}">${this.escapeHtml(item.title)}${
-                          item.confidencePercent !== null ? ` · ${item.confidencePercent}%` : ""
-                        }</button>`,
-                      )
-                      .join("")}
-                  </div>
-                `
-                    : ""
-                }
-                ${
-                  this.missedScheduledCommands.length > 0
-                    ? `
-                  <div class="cc-timers-stack">
-                    ${this.missedScheduledCommands
-                      .map(
-                        (item) => `
-                      <div class="cc-timer-row">
-                        <span>${t("已错过定时：{command}（电脑睡眠时到点，没有自动执行）", { command: this.escapeHtml(item.command) })}</span>
-                        <button class="cc-inline-pill" data-run-missed="${item.id}">立即执行</button>
-                        <button class="cc-inline-pill" data-dismiss-missed="${item.id}">忽略</button>
-                      </div>
-                    `,
-                      )
-                      .join("")}
-                  </div>
-                `
-                    : ""
-                }
-                ${
-                  this.scheduledCommands.length > 0
-                    ? `
-                  <div class="cc-timers-stack">
-                    ${this.scheduledCommands
-                      .map(
-                        (item) => `
-                      <div class="cc-timer-row">
-                        <span>${this.escapeHtml(item.command)} ${t("· 剩余 {remaining}", { remaining: this.formatRemainingMs(item.fireTimestampMs - Date.now()) })}</span>
-                        <button class="cc-inline-pill" data-cancel-timer="${item.id}">取消</button>
-                      </div>
-                    `,
-                      )
-                      .join("")}
-                  </div>
-                `
-                    : ""
-                }
-              </div>
-            `
-                : ""
-            }
-          </section>
-        `
-            : ""
-        }
-
-        ${this.haConnectionError ? `<div class="cc-feedback-card is-error" role="alert" data-ha-error><span class="cc-feedback-badge">Home Assistant</span><span class="cc-feedback-text">${this.escapeHtml(this.haConnectionError)}</span></div>` : ""}
-
-        ${
-          this.settings.showQuickActionsBar
-            ? `<section class="cc-quick-strip">
-          ${quickActions().map(
-            (act) => `
-            <button class="cc-quick-pill tint-${act.tint}" data-scene-cmd="${this.escapeHtml(act.command)}">
-              <span class="cc-quick-icon">${act.icon}</span>
-              <span>${this.escapeHtml(act.title)}</span>
-            </button>
-          `,
-          ).join("")}
-          ${this.settings.connectionMode === "homeAssistant" ? this.scenes.map((scene) => `<button class="cc-quick-pill tint-blue" data-ha-scene="${this.escapeHtml(scene.id)}"><span class="cc-quick-icon">${SF_ICONS.sparkles}</span><span>${this.escapeHtml(scene.name)}</span></button>`).join("") : ""}
-        </section>`
-            : ""
-        }
-
-
-        <div class="cc-room-bar">
-          <div class="cc-room-track">
-          <div class="cc-room-scroll">
-            ${this.rooms
-              .map(
-                (room) => {
-                  const pressed = room === "全部" ? this.listCut.kind === "all" : this.selectedRoom === room;
-                  return `
-              <button
-                class="cc-room-pill ${pressed ? "is-active" : ""}"
-                data-room="${this.escapeHtml(room)}"
-                aria-pressed="${pressed}"
-              >
-                ${this.escapeHtml(room === "全部" ? t("全部") : room)}
-              </button>
-            `;
-                },
-              )
-              .join("")}
-          </div>
-          </div>
-          <div class="cc-room-tools">
-          <button
-            class="cc-circle-btn is-small"
-            id="btn-toggle-grid"
-            title="${this.settings.isCompactGridMode ? t("切换为单列详情视图") : t("切换为双列控制中心磁贴")}"
-            aria-label="${this.settings.isCompactGridMode ? t("切换为单列详情视图") : t("切换为双列控制中心磁贴")}"
-            aria-pressed="${this.settings.isCompactGridMode}"
-          >
-            ${this.settings.isCompactGridMode ? SF_ICONS.grid2x2 : SF_ICONS.grid1x2}
-          </button>
-          <button
-            class="cc-circle-btn is-small ${this.settings.hideOfflineDevices ? "is-selected" : ""}"
-            id="btn-toggle-hide-offline"
-            title="${this.settings.hideOfflineDevices ? t("当前只显示在线设备（点击显示全部）") : t("点击隐藏未通电/离线设备")}"
-            aria-label="${t("只显示在线设备")}"
-            aria-pressed="${this.settings.hideOfflineDevices}"
-          >
-            ${this.settings.hideOfflineDevices ? SF_ICONS.wifi : SF_ICONS.wifiSlash}
-          </button>
-          </div>
-        </div>
-        ${this.renderKindBar()}
-
-        <div class="cc-divider"></div>
-
-        <main class="cc-scroll-area">
-          ${this.renderDeviceGrid()}
-        </main>
-
-        <div class="cc-divider"></div>
-
-        <footer class="cc-footer">
-          <div class="cc-footer-status">
-            <span class="cc-status-dot ${this.isSyncingCloud ? "is-syncing" : this.settings.connectionMode === "homeAssistant" ? (this.haConnectionError || !this.settings.haBaseURL || !this.settings.haToken ? "is-demo" : "is-online") : isDemo ? "is-demo" : "is-online"}"></span>
-            <span class="cc-footer-label">
-              ${
-                this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession
-                  ? t("米家账号 {user} · {count} 台设备", { user: maskedMiUserId(this.settings.miSession.userId), count: this.devices.length })
-                  : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云")
-              }
-            </span>
-          </div>
-
-          <div class="cc-footer-actions">
-            ${
-              this.availableUpdate
-                ? `<button class="cc-footer-pill is-accent" id="btn-footer-update" title="${t("发现新版本 v{version}", { version: this.availableUpdate.version })}">
-                    <span>${t("更新 v{version}", { version: this.availableUpdate.version })}</span>
-                  </button>`
-                : ""
-            }
-            ${
-              this.settings.connectionMode !== "homeAssistant" && (!this.settings.miSession || isDemo)
-                ? `<button class="cc-footer-pill is-accent" id="btn-footer-qr" title="${t("用手机米家 App 扫码直连真实设备")}">
-                    ${SF_ICONS.qrcode}
-                    <span>${t("扫码直连")}</span>
-                  </button>`
-                : ""
-            }
-            <button
-              class="cc-footer-icon-btn"
-              id="btn-toggle-appearance"
-              title="${scheme === "light" ? t("切换深色模式") : t("切换浅色模式")}"
-              aria-label="${scheme === "light" ? t("切换深色模式") : t("切换浅色模式")}"
-            >
-              ${scheme === "light" ? SF_ICONS.moonStarsFill : SF_ICONS.sunMaxFill}
-            </button>
-            <button
-              class="cc-footer-icon-btn ${this.isSyncingCloud ? "is-spinning" : ""}"
-              id="btn-refresh"
-              title="${t("立即同步最新设备状态")}"
-              aria-label="${t("立即同步最新设备状态")}"
-            >
-              ${SF_ICONS.arrowClockwise}
-            </button>
-            <button
-              class="cc-footer-icon-btn"
-              id="btn-settings"
-              title="${t("连接设置与 AI 决策配置")}"
-              aria-label="${t("打开设置")}"
-            >
-              ${SF_ICONS.sliderHorizontal}
-            </button>
-            <button
-              class="cc-footer-pill is-danger"
-              id="btn-quit-app"
-              title="${t("完全退出 MenuBarMijia")}"
-            >
-              ${SF_ICONS.power}
-              <span>${t("退出")}</span>
-            </button>
-          </div>
-        </footer>
-
-        ${this.activeSheet === "onboarding" ? this.renderOnboardingModal() : ""}
-        ${this.activeSheet === "settings" ? this.renderSettingsModal() : ""}
-        ${this.cameraLive.activeLiveCameraId !== null ? this.cameraLive.renderCameraLiveModal() : ""}
-        ${this.renderHomeMenu()}
-        ${this.renderContextMenu()}
-        ${this.renderPrompt()}
-    `;
-    const existingPopover = this.root.querySelector<HTMLElement>(":scope > .cc-popover");
-    if (existingPopover) {
-      if (existingPopover.className !== popoverClass) {
-        existingPopover.className = popoverClass;
-      }
-      existingPopover.innerHTML = innerContent;
-    } else {
-      this.root.innerHTML = `<div class="${popoverClass}">${innerContent}</div>`;
-    }
-    this.root.querySelector(":scope > .cc-grok-sidebar")?.remove();
-    this.root.insertAdjacentHTML("beforeend", this.renderGrokBallSidebar());
-
-    this.bindEvents();
+    renderPanel(this);
   }
 
-  private renderEnvironmentStrip(): string {
+  public renderEnvironmentStrip(): string {
     return renderEnvironmentStripView({
       readings: this.computedEnvironmentReadings,
       watts: this.totalPowerWatts,
@@ -2902,7 +2566,7 @@ export class MenuMijiaWindowsApp {
     });
   }
 
-  private renderDeviceGrid(): string {
+  public renderDeviceGrid(): string {
     if (this.settings.connectionMode === "homeAssistant" && this.devices.length === 0) return `<div class="cc-empty-state"><div class="cc-empty-title">Home Assistant</div><div class="cc-empty-subtitle">${this.isSyncingCloud ? "Connecting…" : "No connected devices. Check the saved URL, token and endpoint permission."}</div><button class="cc-btn-secondary" id="btn-empty-settings">Settings</button></div>`;
     if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length === 0) {
       if (this.isSyncingCloud) {
@@ -2990,7 +2654,7 @@ export class MenuMijiaWindowsApp {
     });
   }
 
-  private renderHomeMenu(): string {
+  public renderHomeMenu(): string {
     if (!this.isHomeMenuOpen || this.homes.length < 2) return "";
     const item = (id: string | null, label: string, count?: number) => `
       <button class="cc-menu-item ${this.settings.selectedHomeId === id ? "is-checked" : ""}" data-home="${id ?? ""}">
@@ -3005,7 +2669,7 @@ export class MenuMijiaWindowsApp {
       </div>`;
   }
 
-  private renderContextMenu(): string {
+  public renderContextMenu(): string {
     const m = this.ctxMenu;
     if (!m) return "";
     const pos = `left:${Math.min(m.x, window.innerWidth - 230)}px; top:${Math.min(m.y, window.innerHeight - 260)}px`;
@@ -3049,7 +2713,7 @@ export class MenuMijiaWindowsApp {
       </div>`;
   }
 
-  private renderPrompt(): string {
+  public renderPrompt(): string {
     const p = this.prompt;
     if (!p) return "";
     let title = t("新建分组");
@@ -3079,7 +2743,7 @@ export class MenuMijiaWindowsApp {
       </div>`;
   }
 
-  private renderOnboardingModal(): string {
+  public renderOnboardingModal(): string {
     return `
       <div class="cc-sheet-backdrop">
         <div class="cc-sheet" role="dialog" aria-modal="true" aria-label="${t("首次设置")}">
@@ -3140,7 +2804,7 @@ export class MenuMijiaWindowsApp {
     `;
   }
 
-  private renderSettingsModal(): string {
+  public renderSettingsModal(): string {
     return renderSettingsModal({
       settings: this.settings,
       devices: this.devices,
@@ -3161,7 +2825,7 @@ export class MenuMijiaWindowsApp {
     });
   }
 
-  private bindEvents(): void {
+  public bindEvents(): void {
     bindEventsImpl(this);
   }
 
