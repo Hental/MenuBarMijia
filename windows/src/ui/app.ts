@@ -2255,7 +2255,9 @@ export class MenuMijiaWindowsApp {
     const inverseCommands = this.buildInverseCommand(device, command);
     if (!(await this.applyCommand(command, readBackPower))) return;
     if (sourceRevision !== this.sourceRevision) return;
-    if (readBackPower && !this.readBackMatches(device.id, intent)) {
+    // Momentary buttons (Wake-on-LAN) complete without reporting an on/off state to compare.
+    const isMomentaryButton = command.kind === "setSwitch" && command.entityId.startsWith("button.");
+    if (readBackPower && !isMomentaryButton && !this.readBackMatches(device.id, intent)) {
       this.replyBanner = { text: t("未能读回设备状态"), source: t("控制失败"), isError: true };
       this.render();
       return;

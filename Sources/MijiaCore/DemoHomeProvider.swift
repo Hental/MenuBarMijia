@@ -64,7 +64,10 @@ public actor MockHomeProvider: HomeProvider {
         continuation?.yield(.snapshotUpdated(snapshot))
     }
 
+    public private(set) var readBackCalls = 0
+
     public func readBack(deviceId: String) async -> ControlReadBack {
+        readBackCalls += 1
         continuation?.yield(.snapshotUpdated(snapshot))
         return .published
     }

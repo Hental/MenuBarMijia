@@ -2872,6 +2872,37 @@ describe("Home Assistant source", () => {
     assert.match(tile("study-light"),/78%|78 %/);
   });
 
+  it("treats a momentary button card press as an accepted action", async () => {
+    const executed: Array<Record<string, unknown>> = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        const next = structuredClone(fixture);
+        next.devices.push({ id: "wol-pc", area_id: "study", name: "书房台式机", model: "Wake on LAN", disabled_by: null });
+        next.entities.push({ entity_id: "button.wake_on_lan_pc", device_id: "wol-pc", area_id: "study", disabled_by: null, hidden_by: null, entity_category: null });
+        next.states.push({ entity_id: "button.wake_on_lan_pc", state: "unknown", attributes: { friendly_name: "书房台式机" } });
+        return next;
+      }
+      if (name === "ha_execute") {
+        executed.push(args);
+        return undefined;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "homeAssistant",
+      haBaseURL: "http://localhost:8123",
+      hasCompletedOnboarding: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-toggle-device="wol-pc"]'));
+    await click('[data-toggle-device="wol-pc"]');
+    assert.equal(executed.length, 1);
+    assert.equal((executed[0]?.command as { service?: string })?.service, "press");
+    assert.match(element(".cc-feedback-text").textContent ?? "", /已打开书房台式机/);
+  });
+
   it("preserves restorable light undo when a batch also activates a momentary button.*", async () => {
     const executed: Array<Record<string, unknown>> = [];
     const invoke = async (name: string, args: Record<string, unknown> = {}) => {

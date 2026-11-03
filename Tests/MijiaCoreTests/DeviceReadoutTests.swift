@@ -179,6 +179,31 @@ struct DeviceReadoutTests {
         #expect(store.toastNotice == nil, "The older retry must not report failure after a newer toggle confirmed")
     }
 
+    @Test("A LAN TV toggle is confirmed by the accepted command instead of a cloud read-back")
+    func lanTVToggleSkipsCloudReadBack() async throws {
+        let tv = SmartDevice(
+            id: "tv",
+            name: "客厅电视",
+            roomId: "room",
+            roomName: "客厅",
+            model: "lg.webos",
+            isOnline: true,
+            kind: .tv(TVSpec(mediaEntityId: "lg_webos:media", state: "off", volumePercent: 10))
+        )
+        let mock = MockHomeProvider(snapshot: SynthesizedHome(
+            rooms: [RoomArea(id: "room", name: "客厅", sortOrder: 0)],
+            devices: [tv]
+        ))
+        let store = HomeStore(provider: mock, defaultsSuiteName: "test.readout.lg.\(UUID().uuidString)")
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let toggle = store.togglePrimary(store.devices[0])
+        #expect(await toggle?.value == true)
+        #expect(await mock.readBackCalls == 0)
+        #expect(store.devices[0].isActiveOn == true)
+    }
+
     @Test("An echo retry still applies the device snapshot under an older optimistic lock")
     func echoRetryBypassesOlderOptimisticLock() async throws {
         let lamp = light(on: true)
