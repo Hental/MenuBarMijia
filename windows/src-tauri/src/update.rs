@@ -81,13 +81,13 @@ const STAGED_INSTALLER_PREFIX: &str = "MenuBarMijia-update-";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct InstallerAssetPayload {
-    name: String,
-    download_url: String,
+pub(crate) struct InstallerAssetPayload {
+    pub(crate) name: String,
+    pub(crate) download_url: String,
     #[allow(dead_code)]
     #[serde(default)]
-    size_bytes: u64,
-    manifest_url: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) manifest_url: String,
 }
 
 pub(crate) fn validated_release_asset_url(raw: &str) -> Result<reqwest::Url, String> {

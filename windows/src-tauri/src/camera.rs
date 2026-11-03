@@ -285,35 +285,35 @@ pub(crate) fn base_go2rtc_config(yaml: &str) -> String {
 }
 
 #[derive(Clone)]
-struct Go2RtcSession {
-    api_listen: String,
-    rtsp_listen: String,
-    username: String,
-    password: String,
-    nonce: String,
+pub(crate) struct Go2RtcSession {
+    pub(crate) api_listen: String,
+    pub(crate) rtsp_listen: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) nonce: String,
 }
 
-struct Go2RtcOwnerRecord {
-    pid: u32,
-    session: Go2RtcSession,
+pub(crate) struct Go2RtcOwnerRecord {
+    pub(crate) pid: u32,
+    pub(crate) session: Go2RtcSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Go2RtcAction {
+pub(crate) enum Go2RtcAction {
     ReuseOwned,
     RestartOwned,
     SpawnFresh,
 }
 
 #[derive(Clone, Copy)]
-struct Go2RtcOwnershipProbe {
-    pid_alive: bool,
-    authenticated: bool,
-    nonce_matches: bool,
-    config_changed: bool,
+pub(crate) struct Go2RtcOwnershipProbe {
+    pub(crate) pid_alive: bool,
+    pub(crate) authenticated: bool,
+    pub(crate) nonce_matches: bool,
+    pub(crate) config_changed: bool,
 }
 
-const FORBIDDEN_GO2RTC_PORTS: [u16; 3] = [1984, 8554, 8555];
+pub(crate) const FORBIDDEN_GO2RTC_PORTS: [u16; 3] = [1984, 8554, 8555];
 
 pub(crate) fn decide_go2rtc_action(probe: Go2RtcOwnershipProbe) -> Go2RtcAction {
     let owned = probe.pid_alive && probe.authenticated && probe.nonce_matches;
@@ -370,7 +370,7 @@ const GO2RTC_DOWNLOAD_URL: &str =
 const GO2RTC_DOWNLOAD_SHA256: &str =
     "5b448fc90f15c925406d8da0984301985e385050222c1c2bbdf0a76fe4b1e9cb";
 /// Tauri resource directory subfolder populated by `bundle.resources` (see tauri.conf.json).
-const CAMERA_COMPONENT_DIR: &str = "camera-bin";
+pub(crate) const CAMERA_COMPONENT_DIR: &str = "camera-bin";
 const CAMERA_MANUAL_BIN_HINT: &str =
     "或手动下载 go2rtc_win64.zip，解压后把 go2rtc.exe 放到 %LOCALAPPDATA%\\MenuBarMijia\\bin\\";
 
