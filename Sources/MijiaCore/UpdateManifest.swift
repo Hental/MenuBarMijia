@@ -25,10 +25,13 @@ public enum UpdateManifest {
         case hashMismatch(expected: String, actual: String)
     }
 
+    /// Accepts a manifest only when its signature verifies under one of `trustedPublicKeysBase64`
+    /// and its `key_id` names that same key. More than one key is a rotation overlap window;
+    /// see `docs/security/update-signing-key-rotation.md`.
     public static func accept(
         manifestBytes: Data,
         signatureText: String,
-        publicKeyBase64: String,
+        trustedPublicKeysBase64: [String],
         releaseVersion: String,
         runningVersion: String,
         packageName: String,
@@ -41,17 +44,20 @@ public enum UpdateManifest {
         if manifestBytes.count > 4096 || signature.utf8.count > 256 {
             return .failure(.malformed)
         }
-        guard UpdateSignature.verify(
-            signatureBase64: signature,
-            publicKeyBase64: publicKeyBase64,
-            data: manifestBytes
-        ) else {
+        let verifyingKeys = trustedPublicKeysBase64.filter {
+            UpdateSignature.verify(
+                signatureBase64: signature,
+                publicKeyBase64: $0,
+                data: manifestBytes
+            )
+        }
+        guard !verifyingKeys.isEmpty else {
             return .failure(.signatureInvalid)
         }
         guard let parsed = parse(manifestBytes) else {
             return .failure(.malformed)
         }
-        guard parsed.keyID == publicKeyBase64 else {
+        guard verifyingKeys.contains(parsed.keyID) else {
             return .failure(.keyIDMismatch)
         }
         guard parsed.versionText == releaseVersion else {

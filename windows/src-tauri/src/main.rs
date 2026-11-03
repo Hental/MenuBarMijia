@@ -314,6 +314,22 @@ fn open_release_page(url: String) -> Result<(), String> {
 
 /// Offline Ed25519 public key (32-byte raw, base64) shared with `UpdateChecker.updateSigningPublicKeyBase64` (ADR-0005).
 const UPDATE_SIGNING_PUBLIC_KEY_BASE64: &str = "rLwWXuP0sOZvgd/KusLTTmBXN9DAZ9EzPBNhFSn9yUo=";
+
+/// Optional second key trusted during a rotation; empty when unused.
+/// See `docs/security/update-signing-key-rotation.md`.
+const UPDATE_SIGNING_OVERLAP_PUBLIC_KEY_BASE64: &str = "";
+
+/// Every key a release manifest may be signed with; `key_id` selects one.
+fn update_signing_public_keys() -> Vec<&'static str> {
+    [
+        UPDATE_SIGNING_PUBLIC_KEY_BASE64,
+        UPDATE_SIGNING_OVERLAP_PUBLIC_KEY_BASE64,
+    ]
+    .into_iter()
+    .filter(|key| !key.is_empty())
+    .collect()
+}
+
 const STAGED_INSTALLER_PREFIX: &str = "MenuBarMijia-update-";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -622,10 +638,11 @@ async fn install_update(app: AppHandle, asset: InstallerAssetPayload) -> Result<
         .await
         .map_err(|err| format!("读取更新安装包数据失败：{err}"))?;
 
+    let trusted_public_keys = update_signing_public_keys();
     update_manifest::accept_update_manifest(
         &manifest_bytes,
         &sig_text,
-        UPDATE_SIGNING_PUBLIC_KEY_BASE64,
+        &trusted_public_keys,
         &pair.version,
         &running_version,
         &asset.name,
@@ -2784,6 +2801,11 @@ mod tests {
             decode_base64_strict(UPDATE_SIGNING_PUBLIC_KEY_BASE64).map(|b| b.len()),
             Some(32)
         );
+        assert_eq!(
+            update_signing_public_keys().first().copied(),
+            Some(UPDATE_SIGNING_PUBLIC_KEY_BASE64)
+        );
+        assert!(update_signing_public_keys().iter().all(|key| !key.is_empty()));
         // Cross-platform CryptoKit Ed25519 signature over `b"verified-windows-installer"`.
         let test_pub_b64 = "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=";
         let test_sig_b64 =

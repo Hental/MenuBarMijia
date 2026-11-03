@@ -10,7 +10,7 @@ struct UpdateManifestTests {
         let result = UpdateManifest.accept(
             manifestBytes: signed.bytes,
             signatureText: signed.signatureText,
-            publicKeyBase64: signed.publicKey,
+            trustedPublicKeysBase64: [signed.publicKey],
             releaseVersion: "1.1.8",
             runningVersion: "1.1.5",
             packageName: "MenuBarMijia-1.1.6.dmg",
@@ -35,7 +35,7 @@ struct UpdateManifestTests {
         let result = UpdateManifest.accept(
             manifestBytes: Data(text.utf8),
             signatureText: signed.signatureText,
-            publicKeyBase64: signed.publicKey,
+            trustedPublicKeysBase64: [signed.publicKey],
             releaseVersion: "9.9.9",
             runningVersion: "1.0.0",
             packageName: "MenuBarMijia-1.1.6.dmg",
@@ -64,6 +64,60 @@ struct UpdateManifestTests {
         #expect(result == .failure(.keyIDMismatch))
     }
 
+    @Test("A manifest signed by the overlap key is accepted during a rotation window")
+    func acceptsAOverlapKeyDuringRotation() throws {
+        let overlapKey = Curve25519.Signing.PrivateKey()
+        let signed = try signedUpdateManifest(version: "1.1.6", signingKey: overlapKey)
+        let primaryKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let result = UpdateManifest.accept(
+            manifestBytes: signed.bytes,
+            signatureText: signed.signatureText,
+            trustedPublicKeysBase64: [primaryKey, signed.publicKey],
+            releaseVersion: "1.1.6",
+            runningVersion: "1.1.5",
+            packageName: signed.packageName,
+            packageBytes: signed.package
+        )
+        guard case .success(let verified) = result else {
+            Issue.record("expected the overlap key to verify, got \(result)")
+            return
+        }
+        #expect(verified.versionText == "1.1.6")
+    }
+
+    @Test("A trusted key_id does not excuse a signature made by another trusted key")
+    func rejectsSignatureByAnotherTrustedKey() throws {
+        let signingKey = Curve25519.Signing.PrivateKey()
+        let primaryKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let signed = try signedUpdateManifest(version: "1.1.6", keyID: primaryKey, signingKey: signingKey)
+        let result = UpdateManifest.accept(
+            manifestBytes: signed.bytes,
+            signatureText: signed.signatureText,
+            trustedPublicKeysBase64: [primaryKey, signed.publicKey],
+            releaseVersion: "1.1.6",
+            runningVersion: "1.1.5",
+            packageName: signed.packageName,
+            packageBytes: signed.package
+        )
+        #expect(result == .failure(.keyIDMismatch))
+    }
+
+    @Test("A signature from a key outside the trusted set is invalid")
+    func rejectsSignatureFromUntrustedKey() throws {
+        let signed = try signedUpdateManifest(version: "1.1.6")
+        let untrusted = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let result = UpdateManifest.accept(
+            manifestBytes: signed.bytes,
+            signatureText: signed.signatureText,
+            trustedPublicKeysBase64: [untrusted],
+            releaseVersion: "1.1.6",
+            runningVersion: "1.1.5",
+            packageName: signed.packageName,
+            packageBytes: signed.package
+        )
+        #expect(result == .failure(.signatureInvalid))
+    }
+
     @Test("A running version below min_from is below the minimum")
     func rejectsRunningVersionBelowMinimum() throws {
         let signed = try signedUpdateManifest(version: "1.1.6", minFrom: "1.1.0")
@@ -77,7 +131,7 @@ struct UpdateManifestTests {
         let result = UpdateManifest.accept(
             manifestBytes: signed.bytes,
             signatureText: "",
-            publicKeyBase64: signed.publicKey,
+            trustedPublicKeysBase64: [signed.publicKey],
             releaseVersion: "1.1.6",
             runningVersion: "1.1.5",
             packageName: signed.packageName,
@@ -163,7 +217,7 @@ private func accept(
     UpdateManifest.accept(
         manifestBytes: signed.bytes,
         signatureText: signed.signatureText,
-        publicKeyBase64: signed.publicKey,
+        trustedPublicKeysBase64: [signed.publicKey],
         releaseVersion: releaseVersion,
         runningVersion: runningVersion,
         packageName: signed.packageName,
