@@ -37,13 +37,22 @@ public struct MiRoom: Equatable, Sendable {
     public var dids: [String]
     public var homeId: String
     public var homeName: String
+    public var isSharedHome: Bool
 
-    public init(id: String, name: String, dids: [String], homeId: String = "", homeName: String = "") {
+    public init(
+        id: String,
+        name: String,
+        dids: [String],
+        homeId: String = "",
+        homeName: String = "",
+        isSharedHome: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.dids = dids
         self.homeId = homeId
         self.homeName = homeName
+        self.isSharedHome = isSharedHome
     }
 }
 
@@ -398,27 +407,37 @@ public actor MiCloudClient: MiCloudAPI {
     static func parseRooms(_ result: JSONValue) -> [MiRoom] {
         var rooms: [MiRoom] = []
         var seenHomes: Set<String> = []
-        let homes = (result["homelist"]?.arrayValue ?? []) + (result["share_home_list"]?.arrayValue ?? [])
-        for home in homes {
-            let homeId = home["id"]?.idString ?? ""
-            if !homeId.isEmpty, !seenHomes.insert(homeId).inserted { continue }
-            let homeName = home["name"]?.stringValue ?? ""
-            for room in home["roomlist"]?.arrayValue ?? [] {
-                guard let id = room["id"]?.idString else { continue }
-                rooms.append(MiRoom(
-                    id: id,
-                    name: room["name"]?.stringValue ?? "",
-                    dids: (room["dids"]?.arrayValue ?? []).compactMap(\.idString),
-                    homeId: homeId,
-                    homeName: homeName
-                ))
-            }
-            // Devices assigned to the home but no room; the empty name lands them in 全屋.
-            let homeDids = (home["dids"]?.arrayValue ?? []).compactMap(\.idString)
-            if !homeDids.isEmpty {
-                rooms.append(MiRoom(id: "home_\(homeId)", name: "", dids: homeDids, homeId: homeId, homeName: homeName))
+        func appendHomes(_ homes: [JSONValue], shared: Bool) {
+            for home in homes {
+                let homeId = home["id"]?.idString ?? ""
+                if !homeId.isEmpty, !seenHomes.insert(homeId).inserted { continue }
+                let homeName = home["name"]?.stringValue ?? ""
+                for room in home["roomlist"]?.arrayValue ?? [] {
+                    guard let id = room["id"]?.idString else { continue }
+                    rooms.append(MiRoom(
+                        id: id,
+                        name: room["name"]?.stringValue ?? "",
+                        dids: (room["dids"]?.arrayValue ?? []).compactMap(\.idString),
+                        homeId: homeId,
+                        homeName: homeName,
+                        isSharedHome: shared
+                    ))
+                }
+                let homeDids = (home["dids"]?.arrayValue ?? []).compactMap(\.idString)
+                if !homeDids.isEmpty {
+                    rooms.append(MiRoom(
+                        id: "home_\(homeId)",
+                        name: "",
+                        dids: homeDids,
+                        homeId: homeId,
+                        homeName: homeName,
+                        isSharedHome: shared
+                    ))
+                }
             }
         }
+        appendHomes(result["homelist"]?.arrayValue ?? [], shared: false)
+        appendHomes(result["share_home_list"]?.arrayValue ?? [], shared: true)
         return rooms
     }
 

@@ -171,7 +171,7 @@ struct Go2RTCConfigTests {
     func baseConfigIgnoresAppendedStreams() {
         let written = """
         api:
-          listen: 127.0.0.1:1984
+          listen: 127.0.0.1:43123
         ffmpeg:
           bin: /opt/homebrew/bin/ffmpeg
         """
@@ -182,7 +182,7 @@ struct Go2RTCConfigTests {
             - xiaomi://127.0.0.1:5000?x=1
         """
         #expect(XiaomiCameraBridge.baseConfig(rewrittenByGo2RTC) == XiaomiCameraBridge.baseConfig(written))
-        #expect(XiaomiCameraBridge.baseConfig(written.replacingOccurrences(of: "1984", with: "1985"))
+        #expect(XiaomiCameraBridge.baseConfig(written.replacingOccurrences(of: "43123", with: "43124"))
             != XiaomiCameraBridge.baseConfig(written))
     }
 }

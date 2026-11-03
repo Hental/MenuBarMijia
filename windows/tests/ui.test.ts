@@ -7,7 +7,7 @@ import { setImmediate } from "node:timers/promises";
 import { Window } from "happy-dom";
 
 import { installWindow } from "./dom.js";
-import { MenuMijiaWindowsApp } from "../src/ui/app.js";
+import { MenuMijiaWindowsApp, waitForCameraFrameGap } from "../src/ui/app.js";
 import { SKINS } from "../src/ui/panelPrefs.js";
 import { cloudFixture } from "./cloudFixture.js";
 import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
@@ -1505,7 +1505,7 @@ describe("Smart camera support and live view (#97)", () => {
     assert.match(tile("camera.living_cam"), /侦测开/);
   });
 
-  it("persists custom camera stream URLs across restarts, rewrites local go2rtc m3u8 to mjpeg, and wakes sleeping cameras straight into the stream", async () => {
+  it("persists a custom camera URL and keeps its scheme when the host is localhost", async () => {
     localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
       connectionMode: "demo",
       hasCompletedOnboarding: true,
@@ -1514,36 +1514,49 @@ describe("Smart camera support and live view (#97)", () => {
     await click('[data-body-device="camera.living_cam"]');
     await click("#btn-toggle-camera-url");
     const input = element("#camera-stream-url-input") as HTMLInputElement;
-    input.value = "http://127.0.0.1:1984/api/stream.m3u8?src=living_custom";
+    input.value = "https://localhost:8443/live.m3u8";
     await click("#btn-save-camera-url");
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
 
-    // Re-instantiate the app to verify the saved stream URL survived in localStorage.
     document.body.innerHTML = '<div id="app"></div>';
     new MenuMijiaWindowsApp(element("#app"));
     await click('[data-body-device="camera.living_cam"]');
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
 
-    // Put the camera to sleep, then wake it from inside the modal and verify the stream resumes immediately.
     await click('.cc-camera-live-sheet .cc-segmented-pills [data-toggle-device="camera.living_cam"]');
     assert.match(document.body.textContent ?? "", /摄像机处于物理休眠状态/);
     await click('.cc-camera-stage.is-sleeping [data-toggle-device="camera.living_cam"]');
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
   });
 
-  it("bridges Home Assistant camera_proxy_stream URLs through the loopback go2rtc endpoint allowed by CSP", async () => {
+  it("bridges Home Assistant camera_proxy_stream URLs through native JPEG frames, not a browser fetch", async () => {
     const bridgedCalls: Array<{ did: string; hlsUrl: string }> = [];
+    const frameCalls: string[] = [];
+    const browserFetches: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      browserFetches.push(url);
+      return new Response(null, { status: 401 });
+    }) as typeof fetch;
     const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
       if (name === "secure_store_get") return args.name === "ha_token" ? "ha-token" : null;
+      if (name === "go2rtc_endpoint") {
+        return { origin: "http://127.0.0.1:43123", authorization: "Basic bXVzZXI6bXBhc3M=" };
+      }
+      if (name === "go2rtc_jpeg_frame") {
+        frameCalls.push(String(args.src));
+        return "aGVsbG8";
+      }
       if (name === "ha_snapshot") {
         return {
           areas: [{ area_id: "living", name: "客厅" }],
@@ -1568,6 +1581,7 @@ describe("Smart camera support and live view (#97)", () => {
       return undefined;
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    try {
     localStorage.setItem(
       "menumijia.windows.settings.v2",
       JSON.stringify({
@@ -1584,10 +1598,131 @@ describe("Smart camera support and live view (#97)", () => {
       did: "dev_cam",
       hlsUrl: "http://192.168.1.50:8123/api/camera_proxy_stream/camera.front?token=short-lived",
     });
+    await waitFor(() => frameCalls.length === 1);
+    assert.deepEqual(frameCalls, ["cam_mjpeg_dev_cam"]);
     assert.equal(
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=cam_mjpeg_dev_cam",
+      "data:image/jpeg;base64,aGVsbG8",
     );
+    assert.equal(browserFetches.some((url) => url.includes("127.0.0.1")), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("bridges a loopback HLS server that is not the owned go2rtc origin", async () => {
+    const bridgedCalls: string[] = [];
+    const frameCalls: string[] = [];
+    let bridgedOwnedGo2rtc = false;
+    const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
+      if (name === "go2rtc_endpoint") return { origin: "http://127.0.0.1:43123", authorization: "Basic aa" };
+      if (name === "bridge_hls_camera_stream") {
+        const hlsUrl = String(args.hlsUrl);
+        if (hlsUrl.includes("43123")) bridgedOwnedGo2rtc = true;
+        bridgedCalls.push(hlsUrl);
+        return "cam_mjpeg_living";
+      }
+      if (name === "go2rtc_jpeg_frame") {
+        frameCalls.push(String(args.src));
+        return "aGVsbG8";
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-body-device="camera.living_cam"]');
+    await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:8080/live.m3u8";
+    await click("#btn-save-camera-url");
+    await waitFor(() => bridgedCalls.length === 1);
+    assert.deepEqual(bridgedCalls, ["http://127.0.0.1:8080/live.m3u8"]);
+
+    bridgedCalls.length = 0;
+    await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "https://localhost:8443/live.m3u8";
+    await click("#btn-save-camera-url");
+    await waitFor(() => bridgedCalls.length === 1);
+    assert.deepEqual(bridgedCalls, ["https://127.0.0.1:8443/live.m3u8"]);
+
+    bridgedCalls.length = 0;
+    await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:43123/api/stream.m3u8?src=cam";
+    await click("#btn-save-camera-url");
+    await waitFor(() => frameCalls.includes("cam"));
+    assert.deepEqual(bridgedCalls, []);
+    assert.equal(
+      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
+      "data:image/jpeg;base64,aGVsbG8",
+    );
+
+    const framesBeforeReopen = frameCalls.length;
+    document.body.innerHTML = '<div id="app"></div>';
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-body-device="camera.living_cam"]');
+    await waitFor(() => frameCalls.length > framesBeforeReopen && document.querySelector("#cc-camera-live-img") !== null);
+    assert.equal(frameCalls.at(-1), "cam");
+    assert.equal(
+      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
+      "data:image/jpeg;base64,aGVsbG8",
+    );
+    assert.equal(bridgedOwnedGo2rtc, false);
+  });
+
+  it("drops the frame-gap abort listener when the timer fires", async () => {
+    const controller = new AbortController();
+    let listeners = 0;
+    const add = controller.signal.addEventListener.bind(controller.signal);
+    const remove = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+      if (type === "abort") listeners += 1;
+      return add(type, listener, options);
+    }) as typeof controller.signal.addEventListener;
+    controller.signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+      if (type === "abort") listeners -= 1;
+      return remove(type, listener, options);
+    }) as typeof controller.signal.removeEventListener;
+    await waitForCameraFrameGap(controller.signal, 15);
+    await waitForCameraFrameGap(controller.signal, 15);
+    assert.equal(listeners, 0);
+    controller.abort();
+    assert.equal(listeners, 0);
+  });
+
+  it("does not start a bridge after the camera closes during the endpoint refresh", async () => {
+    let releaseEndpoint: (value: { origin: string; authorization: string }) => void = () => {};
+    const endpointGate = new Promise<{ origin: string; authorization: string }>((resolve) => {
+      releaseEndpoint = resolve;
+    });
+    const bridgedCalls: string[] = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
+      if (name === "go2rtc_endpoint") return endpointGate;
+      if (name === "bridge_hls_camera_stream") {
+        bridgedCalls.push(String(args.hlsUrl));
+        return "cam_mjpeg_living";
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+    }));
+    const app = new MenuMijiaWindowsApp(element("#app"));
+    app.cameraKeepAliveMs = 20;
+    await click('[data-body-device="camera.living_cam"]');
+    await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:8080/live.m3u8";
+    await click("#btn-save-camera-url");
+    await click("#btn-close-camera-live");
+    await waitFor(() => document.querySelector(".cc-camera-live-sheet") === null);
+    releaseEndpoint({ origin: "http://127.0.0.1:43123", authorization: "Basic aa" });
+    await setImmediate();
+    assert.deepEqual(bridgedCalls, []);
+    assert.equal(document.querySelector(".cc-camera-live-sheet"), null);
   });
 
   it("releases an active P2P session when negotiation fails while the camera modal remains open", async () => {

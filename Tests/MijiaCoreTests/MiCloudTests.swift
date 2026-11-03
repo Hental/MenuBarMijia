@@ -918,8 +918,8 @@ actor StubXiaomiCameraBridge: XiaomiCameraBridging {
     var startDelay: Duration?
     var onStartEntered: (@Sendable () -> Void)?
     var stubEndpoints = XiaomiCameraStreamEndpoints(
-        mp4: URL(string: "http://127.0.0.1:1984/api/stream.mp4?src=cam_raw_1105610385&mp4")!,
-        mjpeg: URL(string: "http://127.0.0.1:1984/api/stream.mjpeg?src=cam_mjpeg_1105610385")!
+        mp4: URL(string: "http://127.0.0.1:43123/api/stream.mp4?src=cam_raw_1105610385&mp4")!,
+        mjpeg: URL(string: "http://127.0.0.1:43123/api/stream.mjpeg?src=cam_mjpeg_1105610385")!
     )
 
     func configureStartHook(delay: Duration, onEntered: @escaping @Sendable () -> Void) {
@@ -1235,8 +1235,8 @@ struct MiCloudProviderTests {
         let cameraDevice = try #require(await log.snapshots.first?.devices.first)
         let resolved = try await provider.resolveCameraStream(for: cameraDevice)
         #expect(resolved == .liveMP4(
-            URL(string: "http://127.0.0.1:1984/api/stream.mp4?src=cam_raw_1105610385&mp4")!,
-            mjpegFallback: URL(string: "http://127.0.0.1:1984/api/stream.mjpeg?src=cam_mjpeg_1105610385")!
+            URL(string: "http://127.0.0.1:43123/api/stream.mp4?src=cam_raw_1105610385&mp4")!,
+            mjpegFallback: URL(string: "http://127.0.0.1:43123/api/stream.mjpeg?src=cam_mjpeg_1105610385")!
         ))
 
         let actions = await api.callActionCalls
@@ -1368,6 +1368,19 @@ struct MiCloudClientTests {
         let json = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"homelist":[{"id":"h1","name":"我的家","roomlist":[{"id":"r1","name":"客厅","dids":["1"]}]}],"share_home_list":[{"id":"h2","name":"爸妈家","roomlist":[{"id":"r2","name":"卧室","dids":["7"]}]},{"id":"h1","name":"我的家","roomlist":[]}]}"#.utf8))
         let rooms = MiCloudClient.parseRooms(json)
         #expect(rooms.map(\.id) == ["r1", "r2"])
+        #expect(rooms.first { $0.id == "r1" }?.isSharedHome == false)
+        #expect(rooms.first { $0.id == "r2" }?.isSharedHome == true)
+        let home = MiotSynthesizer.synthesize(
+            devices: [
+                MiDeviceRecord(did: "1", name: "客厅灯", model: "yeelink.light.ceiling22", isOnline: true),
+                MiDeviceRecord(did: "7", name: "卧室灯", model: "yeelink.light.ceiling22", isOnline: true),
+            ],
+            rooms: rooms,
+            specs: MiotFixtures.specs,
+            values: [:]
+        )
+        #expect(home.devices.first { $0.id == "1" }?.isSharedHome == false)
+        #expect(home.devices.first { $0.id == "7" }?.isSharedHome == true)
         #expect(MiCloudProvider.homeOptions(from: rooms) == [
             HomeOption(id: "h1", name: "我的家", deviceCount: 1),
             HomeOption(id: "h2", name: "爸妈家", deviceCount: 1),
@@ -1424,11 +1437,77 @@ struct MiCloudClientTests {
         #expect(smartPlug.sfSymbolName == "powerplug.fill")
     }
 
-    @Test("XiaomiCameraBridge desiredGo2RTCConfig omits wildcard CORS origin")
-    func go2rtcConfigOmitsWildcardOrigin() {
-        let config = XiaomiCameraBridge.desiredGo2RTCConfig(ffmpegBin: "/usr/local/bin/ffmpeg")
+    @Test("XiaomiCameraBridge desiredGo2RTCConfig requires local auth and omits wildcard CORS")
+    func go2rtcConfigRequiresLocalAuth() {
+        let session = Go2RTCSession(
+            apiListen: "127.0.0.1:43123",
+            rtspListen: "127.0.0.1:43124",
+            username: "muser0001",
+            password: "mpass0001",
+            nonce: "mnonce0001"
+        )
+        let ffmpeg = "/usr/local/bin/ffmpeg"
+        let config = XiaomiCameraBridge.desiredGo2RTCConfig(ffmpegBin: ffmpeg, session: session)
         #expect(!config.contains("origin:"))
         #expect(!config.contains("*"))
-        #expect(config.contains("127.0.0.1:1984"))
+        #expect(!config.contains("1984"))
+        #expect(!config.contains("8554"))
+        #expect(config.contains("listen: 127.0.0.1:43123"))
+        #expect(config.contains("listen: 127.0.0.1:43124"))
+        #expect(config.contains("local_auth: true"))
+        #expect(config.contains("username: \"muser0001\""))
+        #expect(config.contains("password: \"mpass0001\""))
+        #expect(config.contains("nonce: \"mnonce0001\""))
+        #expect(config.contains("allow_paths:"))
+        #expect(config.contains(XiaomiCameraBridge.yamlDoubleQuoted(ffmpeg)))
+        #expect(config.contains("webrtc:\n  listen: \"\""))
+    }
+
+    @Test("go2rtc reuse accepts only a live process that answers with our nonce")
+    func go2rtcReuseRequiresOwnership() {
+        let owned = Go2RTCOwnershipProbe(pidAlive: true, authenticated: true, nonceMatches: true, configChanged: false)
+        #expect(XiaomiCameraBridge.decideGo2RTCAction(owned) == .reuseOwned)
+        #expect(XiaomiCameraBridge.decideGo2RTCAction(Go2RTCOwnershipProbe(
+            pidAlive: true, authenticated: true, nonceMatches: true, configChanged: true
+        )) == .restartOwned)
+        #expect(XiaomiCameraBridge.decideGo2RTCAction(Go2RTCOwnershipProbe(
+            pidAlive: true, authenticated: false, nonceMatches: false, configChanged: true
+        )) == .spawnFresh)
+        #expect(XiaomiCameraBridge.decideGo2RTCAction(Go2RTCOwnershipProbe(
+            pidAlive: true, authenticated: true, nonceMatches: false, configChanged: false
+        )) == .spawnFresh)
+        #expect(XiaomiCameraBridge.decideGo2RTCAction(Go2RTCOwnershipProbe(
+            pidAlive: false, authenticated: true, nonceMatches: true, configChanged: false
+        )) == .spawnFresh)
+    }
+
+    @Test("Ephemeral go2rtc sessions avoid the well-known ports and authenticate stream URLs")
+    func ephemeralGo2RTCSessionAvoidsWellKnownPorts() throws {
+        let session = try XiaomiCameraBridge.makeEphemeralGo2RTCSession()
+        #expect(XiaomiCameraBridge.isAcceptableGo2RTCListen(session.apiListen))
+        #expect(XiaomiCameraBridge.isAcceptableGo2RTCListen(session.rtspListen))
+        #expect(session.apiListen != session.rtspListen)
+        #expect(XiaomiCameraBridge.isCredentialToken(session.username))
+        #expect(XiaomiCameraBridge.isCredentialToken(session.password))
+        #expect(XiaomiCameraBridge.isCredentialToken(session.nonce))
+        let config = XiaomiCameraBridge.desiredGo2RTCConfig(ffmpegBin: "/usr/bin/ffmpeg", session: session)
+        #expect(config.contains("local_auth: true"))
+        #expect(config.contains("listen: \(session.apiListen)"))
+        #expect(config.contains("listen: \(session.rtspListen)"))
+        #expect(Go2RTCOwnerRecord.parse("pid=1\napi_listen=127.0.0.1:1984\nrtsp_listen=127.0.0.1:43124\nusername=muser0001\npassword=mpass0001\nnonce=mnonce0001\n") == nil)
+
+        let url = try #require(XiaomiCameraBridge.streamURL(session: session, path: "/api/config", query: nil))
+        let request = XiaomiCameraBridge.authorizedURLRequest(for: url)
+        #expect(request.url?.user == nil)
+        #expect(request.url?.port != 1984)
+        #expect(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Basic ") == true)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secret = dir.appendingPathComponent("go2rtc.yaml")
+        try XiaomiCameraBridge.writeSecretFile(config, to: secret)
+        let mode = (try FileManager.default.attributesOfItem(atPath: secret.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(mode & 0o777 == 0o600)
     }
 }
