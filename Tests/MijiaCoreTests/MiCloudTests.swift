@@ -995,7 +995,7 @@ actor EventLog {
     }
 }
 
-private func consume(_ provider: some HomeProvider) -> (EventLog, Task<Void, Never>) {
+func consume(_ provider: some HomeProvider) -> (EventLog, Task<Void, Never>) {
     let log = EventLog()
     let stream = provider.events()
     let task = Task { for await e in stream { await log.append(e) } }

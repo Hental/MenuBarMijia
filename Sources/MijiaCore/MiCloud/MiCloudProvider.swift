@@ -7,6 +7,8 @@ public actor MiCloudProvider: HomeProvider {
     public typealias APIFactory = @Sendable (MiSession) -> any MiCloudAPI
 
     private let logger = Logger(subsystem: "com.jryang1997.MenuBarMijia", category: "MiCloudProvider")
+    /// The one account this provider polls; nil keeps the legacy single-session behaviour.
+    private let account: MiAccount?
     private let sessionLoader: @Sendable () -> MiSession?
     private let apiFactory: APIFactory
     private let specSource: any MiotSpecSource
@@ -43,6 +45,7 @@ public actor MiCloudProvider: HomeProvider {
     private var pollRequested = false
 
     public init(
+        account: MiAccount? = nil,
         sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.loadAccounts().first?.session },
         apiFactory: @escaping APIFactory = { MiCloudClient(session: $0) },
         specSource: any MiotSpecSource = MiotSpecStore(),
@@ -54,6 +57,7 @@ public actor MiCloudProvider: HomeProvider {
         cameraSessionReleaseDelay: Duration = .milliseconds(2500),
         selectedHomeLoader: @escaping @Sendable () -> String? = { UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey) }
     ) {
+        self.account = account
         self.sessionLoader = sessionLoader
         self.apiFactory = apiFactory
         self.specSource = specSource
@@ -109,7 +113,7 @@ public actor MiCloudProvider: HomeProvider {
     }
 
     private func runLoop() async {
-        guard let session = sessionLoader() else {
+        guard let session = account?.session ?? sessionLoader() else {
             api = nil
             continuation?.yield(.statusChanged(.disconnected(MiCloudError.notLoggedIn.localizedDescription)))
             return
@@ -142,6 +146,13 @@ public actor MiCloudProvider: HomeProvider {
                 return
             } catch MiCloudError.sessionExpired {
                 self.api = nil
+                if account != nil {
+                    // An expired account must not keep showing stale devices in the merged panel.
+                    devices = []
+                    rooms = []
+                    values = [:]
+                    emitSnapshot()
+                }
                 report(MiCloudError.sessionExpired)
                 return
             } catch {
@@ -407,7 +418,30 @@ public actor MiCloudProvider: HomeProvider {
             spec.availableEffects = []
             home.devices[i].kind = .light(spec)
         }
-        continuation?.yield(.snapshotUpdated(home))
+        continuation?.yield(.snapshotUpdated(stamp(home)))
+    }
+
+    /// Namespaces room/home ids and tags devices with the account, so several accounts can be merged
+    /// into one panel without id collisions. Device ids stay raw: MIoT calls address the did.
+    private func stamp(_ home: SynthesizedHome) -> SynthesizedHome {
+        guard let account else { return home }
+        let prefix = "\(account.id)/"
+        var stamped = home
+        for i in stamped.rooms.indices {
+            let room = stamped.rooms[i]
+            stamped.rooms[i] = RoomArea(id: prefix + room.id, name: room.name, sortOrder: room.sortOrder)
+        }
+        for i in stamped.devices.indices {
+            stamped.devices[i].roomId = prefix + stamped.devices[i].roomId
+            stamped.devices[i].accountId = account.id
+            stamped.devices[i].accountLabel = account.maskedUserId
+        }
+        for i in stamped.homes.indices {
+            stamped.homes[i].id = prefix + stamped.homes[i].id
+            stamped.homes[i].accountId = account.id
+            stamped.homes[i].accountLabel = account.maskedUserId
+        }
+        return stamped
     }
 
     static func homeOptions(from rooms: [MiRoom]) -> [HomeOption] {

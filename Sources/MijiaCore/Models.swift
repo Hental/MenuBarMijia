@@ -562,6 +562,10 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     public var isOnline: Bool
     public var kind: DeviceKind
     public var isSharedHome: Bool
+    /// Set when the device comes from one of several signed-in Mi accounts.
+    public var accountId: String?
+    /// `12****89` style owner label, so the panel can tell same-named devices apart.
+    public var accountLabel: String?
 
     public init(
         id: String,
@@ -571,7 +575,9 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         model: String,
         isOnline: Bool,
         kind: DeviceKind,
-        isSharedHome: Bool = false
+        isSharedHome: Bool = false,
+        accountId: String? = nil,
+        accountLabel: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -581,6 +587,8 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         self.isOnline = isOnline
         self.kind = kind
         self.isSharedHome = isSharedHome
+        self.accountId = accountId
+        self.accountLabel = accountLabel
     }
 
     /// Whether this device can be toggled on/off with a single primary click
