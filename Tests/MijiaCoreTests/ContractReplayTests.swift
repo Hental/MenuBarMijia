@@ -111,6 +111,16 @@ struct ContractReplayTests {
         ])
     }
 
+    @Test("Numeric ids outside Int64 range are skipped instead of trapping")
+    func hostileNumericIDs() {
+        let result: JSONValue = .object(["list": .array([
+            .object(["did": .number(1e308), "model": .string("contract.ghost")]),
+            .object(["did": .number(42), "model": .string("contract.numeric")]),
+            .object(["did": .string("did-light-0001"), "model": .string("contract.light")]),
+        ])])
+        #expect(MiCloudClient.parseDeviceList(result).map(\.did) == ["42", "did-light-0001"])
+    }
+
     // MARK: - MIoT spec
 
     @Test("MIoT instance JSON keeps services, properties, ranges, value lists and action inputs")

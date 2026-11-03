@@ -95,8 +95,10 @@ extension JSONValue {
         switch self {
         case .string(let s): return s
         case .number(let n):
+            if !n.isFinite { return nil }
             if let integral = Int64(exactly: n) { return String(integral) }
-            return String(n)
+            // An integral id wider than Int64 is unusable; keep non-integral ids as before.
+            return n == n.rounded() ? nil : String(n)
         default: return nil
         }
     }
