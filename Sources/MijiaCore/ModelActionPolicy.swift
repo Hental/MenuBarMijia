@@ -19,24 +19,57 @@ public enum ModelActionPolicy {
         return number(answer["confidence"]) ?? 0
     }
 
-    /// Switching on a heater, switching any plug, or starting a vacuum needs a tap even when the model is sure:
-    /// a wrong guess there can be unsafe or costly. Turning a heater off is always allowed.
+    /// A heater change other than off, any plug or camera power change, a vacuum start, or turning a
+    /// 热水器 on or hotter needs a tap even when the model is sure.
     public static func needsConfirmation(_ intent: DeviceIntent, devices: [SmartDevice]) -> Bool {
         guard let device = devices.first(where: { $0.id == intent.targetId }) else { return false }
+        guard let hazard = hazard(for: device) else { return false }
+        return hazard.matches(intent.operation)
+    }
+
+    private enum Hazard {
+        case anyChangeExceptOff
+        case anyPower
+        case powerOn
+        case powerOnOrHotter(setpoint: Double)
+
+        func matches(_ operation: IntentOperation) -> Bool {
+            switch self {
+            case .anyChangeExceptOff:
+                switch operation {
+                case .power(false): return false
+                case .hvacMode(let mode): return mode != "off"
+                default: return true
+                }
+            case .anyPower:
+                if case .power = operation { return true }
+                return false
+            case .powerOn:
+                return operation == .power(true)
+            case .powerOnOrHotter(let setpoint):
+                switch operation {
+                case .power(let isOn): return isOn
+                case .hvacMode(let mode): return mode != "off"
+                case .targetTemperature(let celsius): return celsius > setpoint
+                default: return false
+                }
+            }
+        }
+    }
+
+    private static func hazard(for device: SmartDevice) -> Hazard? {
         switch IntentDeviceCategory(device) {
         case .heater:
-            switch intent.operation {
-            case .power(false): return false
-            case .hvacMode(let mode): return mode != "off"
-            default: return true
-            }
+            return .anyChangeExceptOff
         case .plug, .camera:
-            if case .power = intent.operation { return true }
-            return false
+            return .anyPower
         case .vacuum:
-            return intent.operation == .power(true)
+            return .powerOn
+        case .climate where device.name.contains("热水器"):
+            guard case .climate(let spec) = device.kind else { return nil }
+            return .powerOnOrHotter(setpoint: spec.targetTemperature)
         default:
-            return false
+            return nil
         }
     }
 

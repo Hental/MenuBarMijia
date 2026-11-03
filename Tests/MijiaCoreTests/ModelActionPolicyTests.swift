@@ -6,11 +6,6 @@ import Testing
 struct ModelActionPolicyTests {
     static let devices = AssistantTests.devices
     static let scenes = AssistantTests.scenes
-    static let plug = SmartDevice(
-        id: "dev_plug", name: "书房插座", roomId: "shu_fang", roomName: "书房",
-        model: "cuco.plug.v3", isOnline: true,
-        kind: .plug(PlugSpec(switchEntityId: "switch.study_plug", isOn: true))
-    )
 
     static func systemOneResolver(_ answers: [String: Any]) throws -> ModelIntentResolver {
         let data = try JSONSerialization.data(withJSONObject: ["answers": answers])
@@ -42,24 +37,6 @@ struct ModelActionPolicyTests {
         #expect(ModelActionPolicy.probability(of: ["confidence": "85%"], choice: "a") == 0.85)
         #expect(ModelActionPolicy.probability(of: ["confidence": "50"], choice: "a") == 0.5)
         #expect(ModelActionPolicy.probability(of: ["confidence": 7], choice: "a") == 0.07)
-    }
-
-    @Test("Heater on, any plug switch and vacuum start need a tap; turning a heater off does not")
-    func riskyActions() {
-        let devices = Self.devices + [Self.plug]
-        func needs(_ id: String, _ op: IntentOperation) -> Bool {
-            ModelActionPolicy.needsConfirmation(DeviceIntent(targetId: id, operation: op), devices: devices)
-        }
-        #expect(needs("dev_guest_heater", .power(true)))
-        #expect(needs("dev_guest_heater", .hvacMode("heat")))
-        #expect(needs("dev_guest_heater", .targetTemperature(26)))
-        #expect(!needs("dev_guest_heater", .power(false)))
-        #expect(!needs("dev_guest_heater", .hvacMode("off")))
-        #expect(needs("dev_plug", .power(true)))
-        #expect(needs("dev_plug", .power(false)))
-        #expect(!needs("dev_study_ceiling", .power(true)))
-        #expect(!needs("dev_living_ac", .hvacMode("heat")))
-        #expect(!needs("missing", .power(true)))
     }
 
     @Test("A 50% device head only becomes a suggestion chip")

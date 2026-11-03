@@ -129,7 +129,7 @@ The macOS version is built natively in Swift 6, while the Windows 11 client is a
 | **Mi Air Purifiers, Air Fresheners & Humidifiers** | ✅ Supported | ✅ Supported | Both platforms synthesize `air-purifier`, `air-fresh`, and `humidifier` specs: PM2.5, air quality, temp/humidity, filter life, and a 1–100% fan slider driving the favorite level |
 | **Fridges & Kitchen Appliances** | ✅ Supported | ✅ Supported | Fridges expose per-chamber current/target temperature and modes (Manual, Smart, Holiday, Super Cool, Super Freeze). Kettles, water dispensers, cookers, air fryers, ovens, microwaves, and health pots show working status, temperature, and minutes remaining; models exposing `start-cook` / `pause` actions can be started and stopped |
 | **Dehumidifiers, Blankets, Diffusers & Speakers** | ✅ Supported | ✅ Supported | Dehumidifiers become fan cards driven by their reported mode list plus their own temp/humidity reading, electric blankets become climate cards, aroma diffusers become switchable plugs, and speakers become media cards with volume, mute, play state, sleep mode, and TTS |
-| **Locks & Presence Sensors** | ✅ Read-only cards | ✅ Read-only cards | Door locks report battery, and motion/occupancy, contact, water-leak, illumination, and air-quality monitors synthesize as sensor cards. MIoT exposes no remote unlock, so locks stay status-only. Mi gateways, routers, and repeaters are filtered out as network infrastructure instead of showing up as unknown devices. |
+| **Locks & Presence Sensors** | ✅ Read-only cards | ✅ Read-only cards | Door locks report battery. A readable `door-state` or Home Assistant `lock` entity shows locked, unlocked, ajar, or jammed; otherwise the card says the lock status is unknown instead of “Guarding”. Motion/occupancy, contact, water-leak, illumination, and air-quality monitors synthesize as sensor cards. MIoT exposes no remote unlock, so locks stay status-only. Mi gateways, routers, and repeaters are filtered out as network infrastructure instead of showing up as unknown devices. |
 | **Camera Live View** | ✅ Supported | ✅ Supported | Click a card for a pinned live window: macOS uses HLS / HA snapshots; Windows ships a private P2P bridge (substream MJPEG) |
 | **Layout Editing Resize** | ✅ Supported | ✅ Supported | Edit mode shows an iOS Control Center-style corner arc handle on each card's bottom-right: drag out/in to step half ↔ full ↔ panel, or tap it to cycle sizes |
 | **Visual Look** | ✅ One system look + 4 heights | ✅ Control Center design | macOS keeps system materials only: a device that is on takes the loudest surface its appearance allows — a bright platter in light mode, a lifted well one step above the off glass in dark mode — everything else stays quiet glass. |
@@ -221,6 +221,8 @@ Everyday commands are handled by local rules. You can also connect an AI service
 To help prevent mistakes, low-confidence AI suggestions and actions such as turning on a heater, switching a plug, or starting a vacuum wait for your confirmation. URL controls also ask first by default, with an option to enable direct control.
 
 The macOS app is not yet notarized by Apple, so you may need to allow it in System Settings the first time. Windows may show a SmartScreen prompt. macOS updates are verified with an Ed25519 public key; the signing key stays offline. See [ADR-0007](docs/adr/0007-lan-direct-deferred.md) for more on connection options.
+
+To report a vulnerability in private, follow [Security policy](SECURITY.md).
 
 ---
 

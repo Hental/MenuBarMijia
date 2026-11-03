@@ -74,6 +74,8 @@ describe("text catalog (#52)", () => {
       assert.equal(t("已关闭"), "Off");
       assert.equal(t("打开设置"), "Open settings");
       assert.equal(t("更多设备"), "More devices");
+      assert.equal(t("锁状态未知"), "Lock status unknown");
+      assert.equal(t("已上锁"), "Locked");
       assert.ok(isTranslated("制冷"));
     });
   });

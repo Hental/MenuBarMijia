@@ -23,6 +23,10 @@ extension HomeStore {
             showToast(L10n.tr("\(device.name) 当前离线（可能断电）", "\(device.name) is offline (unplugged)"), isError: true)
             return nil
         }
+        guard device.isPrimaryToggleable else {
+            if device.hasDetailDrawer { toggleExpanded(device.id) }
+            return nil
+        }
         guard let idx = devices.firstIndex(where: { $0.id == device.id }) else { return nil }
         let previous = devices[idx]
         var updated = previous
@@ -573,6 +577,21 @@ extension HomeStore {
         userDefaults.set(map, forKey: Self.cameraStreamURLsKey)
     }
 
+    public func cameraStreamQuality(for deviceId: String) -> XiaomiCameraStreamQuality {
+        guard let map = userDefaults.dictionary(forKey: Self.cameraStreamQualityKey) as? [String: String],
+              let raw = map[deviceId],
+              let quality = XiaomiCameraStreamQuality(rawValue: raw) else {
+            return .storageDefault
+        }
+        return quality
+    }
+
+    public func setCameraStreamQuality(_ quality: XiaomiCameraStreamQuality, for deviceId: String) {
+        var map = (userDefaults.dictionary(forKey: Self.cameraStreamQualityKey) as? [String: String]) ?? [:]
+        map[deviceId] = quality.rawValue
+        userDefaults.set(map, forKey: Self.cameraStreamQualityKey)
+    }
+
     public func resolveCameraStream(for deviceId: String) async throws -> CameraStreamSource {
         guard let device = devices.first(where: { $0.id == deviceId }),
               case .camera = device.kind else {
@@ -594,7 +613,7 @@ extension HomeStore {
             }
             return .hls(url)
         }
-        return try await provider.resolveCameraStream(for: device)
+        return try await provider.resolveCameraStream(for: device, quality: cameraStreamQuality(for: deviceId))
     }
 
     public func stopCameraStream(for deviceId: String) async {

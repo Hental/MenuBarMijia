@@ -106,7 +106,7 @@ public enum MiotSynthesizer {
                 roomName: roomName,
                 model: record.model,
                 isOnline: record.isOnline,
-                kind: kind
+                kind: record.isOnline ? kind : Self.redactOfflineLockClaim(kind)
             )
             smartDevices.append(device)
 
@@ -208,6 +208,9 @@ public enum MiotSynthesizer {
         let ct = r.ref("color-temperature", in: s)
         let mode = r.ref("mode", in: s)
         let isLightGroup = r.did.hasPrefix("group.")
+        let effects = (!isLightGroup && mode?.property.isWritable == true)
+            ? (mode?.property.valueList?.map(\.description) ?? [])
+            : []
         return .light(LightSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: on?.value?.miotBool ?? false,
@@ -216,7 +219,10 @@ public enum MiotSynthesizer {
             minKelvin: ct?.property.rangeMin.map { Int($0) } ?? 2700,
             maxKelvin: ct?.property.rangeMax.map { Int($0) } ?? 6500,
             currentEffect: isLightGroup ? nil : mode?.valueDescription,
-            availableEffects: isLightGroup ? [] : (mode?.property.valueList?.map(\.description) ?? [])
+            availableEffects: effects,
+            powerWritable: on?.property.isWritable == true,
+            brightnessWritable: bri?.property.isWritable ?? true,
+            colorWritable: ct?.property.isWritable ?? true
         ))
     }
 
@@ -228,25 +234,34 @@ public enum MiotSynthesizer {
         let fanLevel = r.first("fan-level", in: r.spec.services(named: "fan-control") + [s])
 
         let isOn = on?.value?.miotBool ?? false
+        let onWritable = on?.property.isWritable == true
+        let modeWritable = mode?.property.isWritable == true
+        let exposeModes = modeWritable || (mode == nil && onWritable)
         var haModes: [String] = []
-        for item in mode?.property.valueList ?? [] {
-            if let m = hvacMode(forDescription: item.description), !haModes.contains(m) { haModes.append(m) }
+        if exposeModes {
+            for item in mode?.property.valueList ?? [] {
+                if let m = hvacMode(forDescription: item.description), !haModes.contains(m) { haModes.append(m) }
+            }
+            if haModes.isEmpty { haModes = [s.shortName == "air-conditioner" ? "cool" : "heat"] }
         }
-        if haModes.isEmpty { haModes = [s.shortName == "air-conditioner" ? "cool" : "heat"] }
-        let activeMode = mode?.valueDescription.flatMap(hvacMode(forDescription:)) ?? haModes[0]
+        let activeMode = mode?.valueDescription.flatMap(hvacMode(forDescription:))
+            ?? haModes.first
+            ?? (s.shortName == "air-conditioner" ? "cool" : "heat")
 
         return .climate(ClimateSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: isOn,
             hvacMode: isOn ? activeMode : "off",
-            availableModes: haModes + ["off"],
+            availableModes: exposeModes ? haModes + ["off"] : [],
             targetTemperature: target?.value?.doubleValue ?? 26,
             currentTemperature: current?.value?.doubleValue,
             minTemp: target?.property.rangeMin ?? 16,
             maxTemp: target?.property.rangeMax ?? 30,
             step: target?.property.rangeStep ?? 1,
             fanMode: fanLevel?.valueDescription,
-            availableFanModes: fanLevel?.property.valueList?.map(\.description) ?? []
+            availableFanModes: fanLevel?.property.isWritable == true ? (fanLevel?.property.valueList?.map(\.description) ?? []) : [],
+            powerWritable: onWritable,
+            temperatureWritable: target?.property.isWritable ?? true
         ))
     }
 
@@ -263,8 +278,11 @@ public enum MiotSynthesizer {
             isOn: on?.value?.miotBool ?? false,
             percentage: percentRef.flatMap { ref in ref.value?.doubleValue.map { percent(fromRaw: $0, property: ref.property) } },
             presetMode: presetRef?.valueDescription,
-            availablePresetModes: presetRef?.property.valueList?.map(\.description) ?? [],
-            isOscillating: swing?.value?.miotBool
+            availablePresetModes: presetRef?.property.isWritable == true ? (presetRef?.property.valueList?.map(\.description) ?? []) : [],
+            isOscillating: swing?.value?.miotBool,
+            powerWritable: on?.property.isWritable == true,
+            speedWritable: percentRef?.property.isWritable ?? true,
+            swingWritable: swing?.property.isWritable ?? true
         ))
     }
 
@@ -303,13 +321,15 @@ public enum MiotSynthesizer {
             isOn: on?.value?.miotBool ?? false,
             percentage: speedRef.flatMap { ref in ref.value?.doubleValue.map { speedPercent(fromRaw: $0, property: ref.property) } },
             presetMode: presetRef?.valueDescription,
-            availablePresetModes: presetRef?.property.valueList?.map(\.description) ?? [],
+            availablePresetModes: presetRef?.property.isWritable == true ? (presetRef?.property.valueList?.map(\.description) ?? []) : [],
             isOscillating: nil,
             pm25Density: pm25?.value?.intValue,
             airQuality: airQuality?.valueDescription,
             temperature: temp?.value?.doubleValue,
             humidity: hum?.value?.doubleValue,
-            filterLifePercent: filterLife?.value?.intValue
+            filterLifePercent: filterLife?.value?.intValue,
+            powerWritable: on?.property.isWritable == true,
+            speedWritable: speedRef?.property.isWritable ?? true
         ))
     }
 
@@ -325,7 +345,8 @@ public enum MiotSynthesizer {
             presetMode: mode?.valueDescription,
             availablePresetModes: mode?.property.isWritable == true ? mode?.property.valueList?.map(\.description) ?? [] : [],
             temperature: temperature?.value?.doubleValue,
-            humidity: humidity?.value?.doubleValue
+            humidity: humidity?.value?.doubleValue,
+            powerWritable: on?.property.isWritable == true
         ))
     }
 
@@ -387,7 +408,8 @@ public enum MiotSynthesizer {
             },
             energyKwh: energyKwh,
             childLockEntityId: lock.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
-            isChildLocked: lock?.value?.miotBool ?? false
+            isChildLocked: lock?.value?.miotBool ?? false,
+            powerWritable: on?.property.isWritable == true
         ))
     }
 
@@ -396,13 +418,18 @@ public enum MiotSynthesizer {
         let mode = r.ref("mode", in: s)
         let battery = r.first("battery-level", in: r.spec.services(named: "battery") + [s])
 
+        let vacuumStartActions = ["start-sweep", "start-clean", "start-sweep-mop", "start-mop"]
+        let actionsWritable = r.spec.services.contains { service in
+            vacuumStartActions.contains { service.action(named: $0) != nil }
+        }
         return .vacuum(VacuumSpec(
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             status: vacuumStatus(forDescription: status?.valueDescription),
             battery: battery?.value?.intValue,
             modeEntityId: mode.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
             currentMode: mode?.valueDescription,
-            availableModes: mode?.property.valueList?.map(\.description) ?? []
+            availableModes: mode?.property.valueList?.map(\.description) ?? [],
+            actionsWritable: actionsWritable
         ))
     }
 
@@ -418,10 +445,11 @@ public enum MiotSynthesizer {
             entityId: MiotAddress.make(did: r.did, siid: s.iid),
             isOn: on?.value?.miotBool ?? false,
             nightShot: nightShot?.valueDescription,
-            availableNightShots: nightShot?.property.valueList?.map(\.description) ?? [],
-            motionDetectionEntityId: motion.map { MiotAddress.make(did: r.did, siid: $0.service.iid) },
+            availableNightShots: nightShot?.property.isWritable == true ? (nightShot?.property.valueList?.map(\.description) ?? []) : [],
+            motionDetectionEntityId: motion?.property.isWritable == true ? motion.map { MiotAddress.make(did: r.did, siid: $0.service.iid) } : nil,
             isMotionDetectionOn: motion?.value?.miotBool,
-            streamEntityId: streamService.map { MiotAddress.make(did: r.did, siid: $0.iid) }
+            streamEntityId: streamService.map { MiotAddress.make(did: r.did, siid: $0.iid) },
+            powerWritable: on?.property.isWritable == true
         ))
     }
 
@@ -505,7 +533,7 @@ public enum MiotSynthesizer {
         if temp == nil && hum == nil {
             switch s.shortName {
             case "lock":
-                statusText = L10n.tr("守护中", "Guarding")
+                statusText = lockStatusText(r, s)
             case "motion-sensor", "occupancy-sensor":
                 let motion = r.ref("motion-state", in: s) ?? r.ref("occupancy-status", in: s)
                 let lux = r.first("illumination", in: [s] + r.spec.services(named: "illumination-sensor"))
@@ -551,6 +579,81 @@ public enum MiotSynthesizer {
             battery: battery?.value?.intValue,
             statusText: statusText
         ))
+    }
+
+    /// Readable `door-state` properties the poll must refresh. A missing one is a failed read.
+    static func doorStateKeys(for device: MiDeviceRecord, spec: MiotDeviceSpec) -> [MiotPropKey] {
+        let scoped = specForRecord(device, spec: spec)
+        var keys: [MiotPropKey] = []
+        for service in scoped.services where service.shortName == "lock" || service.shortName == "door" {
+            for property in service.properties where property.shortName == "door-state" && property.isReadable {
+                let key = MiotPropKey(did: device.miotDid, siid: service.iid, piid: property.iid)
+                if !keys.contains(key) { keys.append(key) }
+            }
+        }
+        return keys
+    }
+
+    /// `door-state` is the only property treated as the current lock condition.
+    /// Event fields (`lock-action`, `abnormal-condition`) and toggles (`child-lock`, `anti-lock`)
+    /// are not a fresh locked/unlocked reading. An unreadable or unmapped value stays unknown
+    /// instead of claiming the door is guarding (#149).
+    static func lockStatusText(_ r: MiotReader, _ s: MiotService) -> String {
+        let doors = [s] + r.spec.services(named: "door")
+        if let door = r.first("door-state", in: doors),
+           let description = door.valueDescription,
+           let text = interpretedLockStatus(description) {
+            return text
+        }
+        return L10n.tr("锁状态未知", "Lock status unknown")
+    }
+
+    static func interpretedLockStatus(_ description: String) -> String? {
+        let lower = description.lowercased()
+        if lower.contains("child") || lower.contains("童锁") || lower.contains("反锁")
+            || lower.contains("anti-lock") || lower.contains("antilock") {
+            return nil
+        }
+        if lower.contains("unlock") || lower.contains("已开锁") || lower.contains("未上锁")
+            || lower.contains("not locked") || lower.contains("未锁") {
+            return L10n.tr("已开锁", "Unlocked")
+        }
+        if (lower.contains("ajar") || lower.contains("虚掩")),
+           !lower.contains("解除"), !lower.contains("clear"), !lower.contains("release") {
+            return L10n.tr("门虚掩", "Ajar")
+        }
+        if lower.contains("not closed") || lower.contains("not close") || lower.contains("未关") || lower.contains("没关") {
+            return L10n.tr("门未关", "Not Closed")
+        }
+        if lower.contains("jam") || lower.contains("卡住") {
+            return L10n.tr("门锁卡住", "Jammed")
+        }
+        if lower.contains("locked") || lower.contains("已上锁") || lower.contains("已锁") {
+            return L10n.tr("已上锁", "Locked")
+        }
+        return nil
+    }
+
+    /// A cached door reading must not keep claiming a security state after the device goes offline.
+    static func redactOfflineLockClaim(_ kind: DeviceKind) -> DeviceKind {
+        guard case .sensor(var sensor) = kind,
+              let text = sensor.statusText,
+              affirmativeLockStatuses.contains(text) else { return kind }
+        sensor.statusText = L10n.tr("锁状态未知", "Lock status unknown")
+        return .sensor(sensor)
+    }
+
+    private static var affirmativeLockStatuses: Set<String> {
+        [
+            L10n.tr("已上锁", "Locked"),
+            L10n.tr("已开锁", "Unlocked"),
+            L10n.tr("门虚掩", "Ajar"),
+            L10n.tr("门未关", "Not Closed"),
+            L10n.tr("门锁卡住", "Jammed"),
+            L10n.tr("正在上锁", "Locking"),
+            L10n.tr("正在开锁", "Unlocking"),
+            L10n.tr("守护中", "Guarding"),
+        ]
     }
 
     // MARK: Value Translation

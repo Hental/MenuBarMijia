@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod home_assistant;
+mod update_manifest;
 use home_assistant::{ha_execute, ha_snapshot};
 
 #[cfg(test)]
@@ -323,13 +324,10 @@ struct InstallerAssetPayload {
     #[allow(dead_code)]
     #[serde(default)]
     size_bytes: u64,
-    sha256: Option<String>,
-    checksum_url: Option<String>,
-    signature_url: String,
+    manifest_url: String,
 }
 
-/// Validates a GitHub release download URL for MenuBarMijia installer, `.sha256`, or `.ed25519.sig` sidecar assets.
-fn validated_release_asset_url(raw: &str) -> Result<reqwest::Url, String> {
+pub(crate) fn validated_release_asset_url(raw: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(raw.trim()).map_err(|_| "更新包下载地址无效".to_string())?;
     if url.scheme() != "https"
         || url.port_or_known_default() != Some(443)
@@ -399,7 +397,7 @@ fn sanitize_installer_filename(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn compute_sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn compute_sha256_hex(bytes: &[u8]) -> String {
     let sum = digest(&SHA256, bytes);
     let mut out = String::with_capacity(64);
     for byte in sum.as_ref() {
@@ -462,7 +460,7 @@ fn decode_base64_strict(raw: &str) -> Option<Vec<u8>> {
 }
 
 /// Verifies a detached Ed25519 signature over `data` against `public_key_base64` (ADR-0005).
-fn verify_ed25519_signature(
+pub(crate) fn verify_ed25519_signature(
     signature_base64: &str,
     public_key_base64: &str,
     data: &[u8],
@@ -557,16 +555,8 @@ fn launch_installer(installer_path: &std::path::Path) -> Result<(), String> {
 
 #[tauri::command]
 async fn install_update(app: AppHandle, asset: InstallerAssetPayload) -> Result<(), String> {
-    let asset_url = validated_release_asset_url(&asset.download_url)?;
-    let lower_path = asset_url.path().to_ascii_lowercase();
-    if !lower_path.ends_with(".exe") && !lower_path.ends_with(".msi") {
-        return Err("更新包地址必须指向 .exe 或 .msi 安装程序".to_string());
-    }
-    let safe_name = sanitize_installer_filename(&asset.name)?;
-    let sig_url = validated_release_asset_url(&asset.signature_url)?;
-    if !sig_url.path().to_ascii_lowercase().ends_with(".ed25519.sig") {
-        return Err("更新签名文件地址必须以 .ed25519.sig 结尾".to_string());
-    }
+    let pair = update_manifest::release_pair(&asset.name, &asset.download_url, &asset.manifest_url)?;
+    let running_version = app.package_info().version.to_string();
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -584,45 +574,29 @@ async fn install_update(app: AppHandle, asset: InstallerAssetPayload) -> Result<
         .build()
         .map_err(|err| format!("无法初始化下载客户端：{err}"))?;
 
-    let expected_hex = if let Some(inline) = asset
-        .sha256
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-    {
-        parse_sha256_hex(inline).ok_or_else(|| "更新包 SHA-256 摘要格式无效".to_string())?
-    } else if let Some(sidecar_raw) = asset
-        .checksum_url
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-    {
-        let sidecar_url = validated_release_asset_url(sidecar_raw)?;
-        if !sidecar_url.path().to_ascii_lowercase().ends_with(".sha256") {
-            return Err("校验文件地址必须以 .sha256 结尾".to_string());
-        }
-        let resp = client
-            .get(sidecar_url)
-            .send()
-            .await
-            .map_err(|err| format!("下载 SHA-256 校验文件失败：{err}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("下载 SHA-256 校验文件失败（HTTP {}）", resp.status().as_u16()));
-        }
-        let text = resp
-            .text()
-            .await
-            .map_err(|err| format!("读取 SHA-256 校验文件失败：{err}"))?;
-        parse_sha256_hex(&text).ok_or_else(|| "无法解析 SHA-256 校验文件".to_string())?
-    } else {
-        return Err("缺少更新包 SHA-256 校验信息，已中止安装".to_string());
-    };
+    let manifest_resp = client
+        .get(pair.manifest_url.clone())
+        .send()
+        .await
+        .map_err(|err| format!("下载更新清单失败：{err}"))?;
+    if !manifest_resp.status().is_success() {
+        return Err(format!(
+            "下载更新清单失败（HTTP {}）",
+            manifest_resp.status().as_u16()
+        ));
+    }
+    let manifest_bytes = manifest_resp
+        .bytes()
+        .await
+        .map_err(|err| format!("读取更新清单失败：{err}"))?;
 
     let sig_resp = client
-        .get(sig_url)
+        .get(pair.signature_url.clone())
         .send()
         .await
         .map_err(|err| format!("下载 Ed25519 更新签名失败：{err}"))?;
     if sig_resp.status().as_u16() == 404 {
-        return Err("更新包缺少 Ed25519 数字签名（.ed25519.sig），已中止安装".to_string());
+        return Err("更新包缺少 Ed25519 数字签名（.update.json.ed25519.sig），已中止安装".to_string());
     }
     if !sig_resp.status().is_success() {
         return Err(format!(
@@ -636,7 +610,7 @@ async fn install_update(app: AppHandle, asset: InstallerAssetPayload) -> Result<
         .map_err(|err| format!("读取 Ed25519 更新签名失败：{err}"))?;
 
     let response = client
-        .get(asset_url)
+        .get(pair.installer_url.clone())
         .send()
         .await
         .map_err(|err| format!("下载更新安装包失败：{err}"))?;
@@ -648,21 +622,22 @@ async fn install_update(app: AppHandle, asset: InstallerAssetPayload) -> Result<
         .await
         .map_err(|err| format!("读取更新安装包数据失败：{err}"))?;
 
-    let actual_hex = compute_sha256_hex(&bytes);
-    if actual_hex != expected_hex {
-        return Err(format!(
-            "安装包 SHA-256 校验失败（期望 {}…，实际 {}…），已中止安装",
-            &expected_hex[..12],
-            &actual_hex[..12]
-        ));
-    }
-
-    verify_ed25519_signature(&sig_text, UPDATE_SIGNING_PUBLIC_KEY_BASE64, &bytes)?;
+    update_manifest::accept_update_manifest(
+        &manifest_bytes,
+        &sig_text,
+        UPDATE_SIGNING_PUBLIC_KEY_BASE64,
+        &pair.version,
+        &running_version,
+        &asset.name,
+        &bytes,
+    )
+    .map_err(update_manifest::accept_failure_message)?;
 
     sweep_stale_update_installers();
     let installer_path = std::env::temp_dir().join(format!(
-        "{STAGED_INSTALLER_PREFIX}{}-{safe_name}",
-        std::process::id()
+        "{STAGED_INSTALLER_PREFIX}{}-{}",
+        std::process::id(),
+        asset.name
     ));
     std::fs::write(&installer_path, &bytes)
         .map_err(|err| format!("写入临时安装程序失败：{err}"))?;
@@ -2551,12 +2526,9 @@ mod tests {
             "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe"
         );
         assert_eq!(payload.size_bytes, 3_145_728);
-        let expected_sha = "b".repeat(64);
-        assert_eq!(payload.sha256.as_deref(), Some(expected_sha.as_str()));
-        assert_eq!(payload.checksum_url, None);
         assert_eq!(
-            payload.signature_url,
-            "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe.ed25519.sig"
+            payload.manifest_url,
+            "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9.update.json"
         );
     }
 

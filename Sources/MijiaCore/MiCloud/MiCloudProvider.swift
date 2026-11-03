@@ -307,7 +307,10 @@ public actor MiCloudProvider: HomeProvider {
         let keys = propKeys(of: scopedDevicesAndRooms().devices, dids: dids)
         if !keys.isEmpty {
             let fresh = try await api.getProps(keys)
-            values.merge(fresh) { _, new in new }
+            // getProps omits items with a non-zero code. A missing door-state must not keep the
+            // previous locked/unlocked claim while the device list still says online (#149).
+            let requestedLocks = doorStateKeys(requested: keys)
+            Self.applyPropRead(&values, fresh: fresh, requestedLockKeys: requestedLocks)
         }
         if dids == nil {
             lastFullPollAt = .now
@@ -315,6 +318,31 @@ public actor MiCloudProvider: HomeProvider {
             pollsSinceContextChange += 1
         }
         emitSnapshot()
+    }
+
+    /// Successful reads replace cached values. A requested `door-state` that this round did not
+    /// return is removed, so a per-item failure cannot keep rendering the previous security claim.
+    static func applyPropRead(
+        _ values: inout [MiotPropKey: JSONValue],
+        fresh: [MiotPropKey: JSONValue],
+        requestedLockKeys: [MiotPropKey]
+    ) {
+        values.merge(fresh) { _, new in new }
+        for key in requestedLockKeys where fresh[key] == nil {
+            values.removeValue(forKey: key)
+        }
+    }
+
+    private func doorStateKeys(requested: [MiotPropKey]) -> [MiotPropKey] {
+        let requestedSet = Set(requested)
+        var keys: [MiotPropKey] = []
+        for device in devices {
+            guard let spec = specsByModel[device.model] else { continue }
+            for key in MiotSynthesizer.doorStateKeys(for: device, spec: spec) where requestedSet.contains(key) {
+                keys.append(key)
+            }
+        }
+        return keys
     }
 
     private func propKeys(of scoped: [MiDeviceRecord], dids: Set<String>?) -> [MiotPropKey] {
@@ -449,6 +477,10 @@ public actor MiCloudProvider: HomeProvider {
     // MARK: Camera Live Stream Resolution
 
     public func resolveCameraStream(for device: SmartDevice) async throws -> CameraStreamSource {
+        try await resolveCameraStream(for: device, quality: .hd)
+    }
+
+    public func resolveCameraStream(for device: SmartDevice, quality: XiaomiCameraStreamQuality) async throws -> CameraStreamSource {
         guard case .camera(let cameraSpec) = device.kind else {
             throw MiotCommandError.unsupported("camera")
         }
@@ -541,7 +573,8 @@ public actor MiCloudProvider: HomeProvider {
                             devicePublic: vendor.devicePublicKey,
                             sign: vendor.sign,
                             vendor: vendor.vendorName,
-                            uid: vendor.p2pId
+                            uid: vendor.p2pId,
+                            quality: quality
                         )
                     } catch {
                         if Task.isCancelled || error is CancellationError {

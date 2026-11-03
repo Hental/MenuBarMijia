@@ -3,12 +3,6 @@ import Foundation
 
 // MARK: - Update Signature
 
-/// Detached Ed25519 signatures for update packages (issue #17).
-///
-/// The release workflow signs the finished DMG with an offline private key and uploads
-/// `<asset>.ed25519.sig`. The matching public key is compiled into the app, so a compromised
-/// GitHub account cannot publish an installable update: replacing the DMG requires the private
-/// key, while only the public key travels with the binary.
 public enum UpdateSignature {
     /// Verifies a base64 detached Ed25519 signature over `data`.
     ///

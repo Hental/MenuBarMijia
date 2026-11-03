@@ -42,8 +42,7 @@ struct DemoNetworkPolicyTests {
             packageAsset: .init(
                 name: "MenuBarMijia-2.0.0.dmg",
                 downloadURL: try #require(URL(string: "https://example.invalid/app.dmg")),
-                sizeBytes: 1, kind: .dmg,
-                integrity: .checksumAssetURL(try #require(URL(string: "https://example.invalid/app.dmg.sha256")))
+                sizeBytes: 1, kind: .dmg
             )
         )
         store.updateState = .available(release)

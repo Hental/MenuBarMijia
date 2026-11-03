@@ -2,15 +2,6 @@
 import CryptoKit
 import Foundation
 
-// 更新包离线签名工具（issue #17）。
-//
-// 用法：
-//   MENUBARMIJIA_UPDATE_SIGNING_KEY="<私钥>" swift scripts/sign_update.swift <DMG 路径>
-//
-// 输出：
-//   <DMG 路径>.ed25519.sig（base64 单行）。发布时把它和 DMG 一起作为 release 附件上传；
-//   应用会在 SHA-256 校验之后、解包之前验证该签名，公钥编在 Sources/MijiaCore/UpdateChecker.swift。
-//
 // 私钥格式（MENUBARMIJIA_UPDATE_SIGNING_KEY，二选一）：
 //   1. 32 字节 raw seed 的 base64（推荐；44 字符）
 //   2. PKCS#8 PEM（OpenSSL 导出的私钥；从 DER 尾部取 32 字节）
@@ -36,7 +27,7 @@ enum SigningError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return "用法：MENUBARMIJIA_UPDATE_SIGNING_KEY=<私钥> swift scripts/sign_update.swift <安装包路径>..."
+            return "用法：MENUBARMIJIA_UPDATE_SIGNING_KEY=<私钥> swift scripts/sign_update.swift --min-from <x.y.z> <DMG> <EXE> <MSI>"
         case .missingKey:
             return "缺少环境变量 MENUBARMIJIA_UPDATE_SIGNING_KEY（32 字节 seed 的 base64 或 PKCS#8 PEM）"
         case .invalidKey(let detail):
@@ -44,7 +35,7 @@ enum SigningError: Error, CustomStringConvertible {
         case .keyMismatch(let detail):
             return "私钥与 App 内置公钥不匹配：\(detail)"
         case .invalidPackage(let detail):
-            return "读取安装包失败：\(detail)"
+            return "安装包无效：\(detail)"
         case .writeFailed(let detail):
             return "写入签名文件失败：\(detail)"
         }
@@ -97,9 +88,38 @@ func readKeyFromKeychain() -> String? {
     }
 }
 
+func isReleaseVersion(_ text: String) -> Bool {
+    let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 3 else { return false }
+    return parts.allSatisfy { part in
+        !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) }
+    }
+}
+
+func versionFromDMG(_ url: URL) throws -> String {
+    let name = url.lastPathComponent
+    let prefix = "MenuBarMijia-"
+    let suffix = ".dmg"
+    guard name.hasPrefix(prefix), name.hasSuffix(suffix) else {
+        throw SigningError.invalidPackage("DMG 文件名必须是 MenuBarMijia-<version>.dmg")
+    }
+    let version = String(name.dropFirst(prefix.count).dropLast(suffix.count))
+    guard isReleaseVersion(version) else {
+        throw SigningError.invalidPackage("DMG 版本不是 x.y.z：\(version)")
+    }
+    return version
+}
+
 func main() throws {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard !arguments.isEmpty else { throw SigningError.usage }
+    guard arguments.count == 5, arguments[0] == "--min-from" else { throw SigningError.usage }
+    let minFrom = arguments[1]
+    guard isReleaseVersion(minFrom) else {
+        throw SigningError.invalidPackage("--min-from 必须是 x.y.z")
+    }
+    let dmgURL = URL(fileURLWithPath: arguments[2])
+    let exeURL = URL(fileURLWithPath: arguments[3])
+    let msiURL = URL(fileURLWithPath: arguments[4])
     guard let rawKey = ProcessInfo.processInfo.environment["MENUBARMIJIA_UPDATE_SIGNING_KEY"] ?? readKeyFromKeychain() else {
         throw SigningError.missingKey
     }
@@ -110,28 +130,66 @@ func main() throws {
     guard publicKey == expectedPublicKeyBase64 else {
         throw SigningError.keyMismatch("私钥对应的公钥 \(publicKey) 与 App 内置公钥不一致，客户端会拒绝该更新")
     }
-    for arg in arguments {
-        let packageURL = URL(fileURLWithPath: arg)
-        guard FileManager.default.fileExists(atPath: packageURL.path) else {
-            throw SigningError.invalidPackage("找不到 \(packageURL.path)")
-        }
 
-        let packageData: Data
-        do {
-            packageData = try Data(contentsOf: packageURL, options: .mappedIfSafe)
-        } catch {
-            throw SigningError.invalidPackage(error.localizedDescription)
-        }
-        let signature = try key.signature(for: packageData)
-        let signatureURL = packageURL.appendingPathExtension("ed25519.sig")
-        do {
-            try (signature.base64EncodedString() + "\n").write(to: signatureURL, atomically: true, encoding: .utf8)
-        } catch {
-            throw SigningError.writeFailed(error.localizedDescription)
-        }
-
-        print("✅ 已生成 \(signatureURL.path)")
+    let version = try versionFromDMG(dmgURL)
+    let exeName = "MenuBarMijia-\(version)-windows-x64-setup.exe"
+    let msiName = "MenuBarMijia-\(version)-windows-x64.msi"
+    guard exeURL.lastPathComponent == exeName, msiURL.lastPathComponent == msiName else {
+        throw SigningError.invalidPackage("EXE 与 MSI 必须带上与 DMG 相同的版本")
     }
+    for package in [dmgURL, exeURL, msiURL] {
+        let leftover = package.appendingPathExtension("ed25519.sig")
+        if FileManager.default.fileExists(atPath: leftover.path) {
+            throw SigningError.invalidPackage("目录里还有旧的安装包签名 \(leftover.lastPathComponent)，请先删除")
+        }
+    }
+
+    let encoder = Process()
+    encoder.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    let manifestTool = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("update_manifest.py")
+    encoder.arguments = [
+        "python3", manifestTool.path, "encode",
+        "--min-from", minFrom,
+        "--dmg", dmgURL.path,
+        "--exe", exeURL.path,
+        "--msi", msiURL.path,
+    ]
+    var environment: [String: String] = [:]
+    if let path = ProcessInfo.processInfo.environment["PATH"] {
+        environment["PATH"] = path
+    }
+    encoder.environment = environment
+    let encoderError = Pipe()
+    encoder.standardError = encoderError
+    encoder.standardOutput = FileHandle.nullDevice
+    try encoder.run()
+    encoder.waitUntilExit()
+    if encoder.terminationStatus != 0 {
+        let detail = String(data: encoderError.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        throw SigningError.invalidPackage(detail.isEmpty ? "update_manifest.py encode 失败" : detail)
+    }
+
+    let manifestURL = dmgURL.deletingLastPathComponent()
+        .appendingPathComponent("MenuBarMijia-\(version).update.json")
+    let manifestBytes: Data
+    do {
+        manifestBytes = try Data(contentsOf: manifestURL)
+    } catch {
+        throw SigningError.invalidPackage(error.localizedDescription)
+    }
+    let signature = try key.signature(for: manifestBytes)
+    let signatureURL = dmgURL.deletingLastPathComponent()
+        .appendingPathComponent("MenuBarMijia-\(version).update.json.ed25519.sig")
+    do {
+        try (signature.base64EncodedString() + "\n").write(to: signatureURL, atomically: true, encoding: .utf8)
+    } catch {
+        throw SigningError.writeFailed(error.localizedDescription)
+    }
+    print("✅ 已生成 \(manifestURL.path)")
+    print("✅ 已生成 \(signatureURL.path)")
     print("   公钥（与 App 内置值一致）：\(publicKey)")
 }
 
