@@ -557,7 +557,6 @@ public enum MiotSynthesizer {
                 let contact = r.ref("contact-state", in: s)
                 if let closed = contact?.value?.miotBool {
                     statusText = closed ? L10n.tr("已闭合", "Closed") : L10n.tr("已打开", "Open")
-                    // MIoT contact-state true means the magnet is closed.
                     observations.append(SensorObservation(
                         sourceId: "\(r.did)#miot:\(s.iid)",
                         kind: .contact,
