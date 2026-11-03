@@ -892,14 +892,16 @@ struct CameraLivePanelView: View {
                 Text(L10n.tr("摄像机处于物理休眠状态", "Camera is in sleep mode"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
-                Button {
-                    if let dev = device {
-                        _ = store.togglePrimary(dev)
+                if spec.powerWritable {
+                    Button {
+                        if let dev = device {
+                            _ = store.togglePrimary(dev)
+                        }
+                    } label: {
+                        Label(L10n.tr("唤醒镜头并观看实时画面", "Wake Camera & Watch Live"), systemImage: "video.fill")
                     }
-                } label: {
-                    Label(L10n.tr("唤醒镜头并观看实时画面", "Wake Camera & Watch Live"), systemImage: "video.fill")
+                    .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .cyan))
                 }
-                .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .cyan))
             }
             .padding(20)
         } else if controller.isLoadingStream {
@@ -1079,17 +1081,19 @@ struct CameraLivePanelView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             AdaptiveGlassContainer(spacing: 6) {
                 HStack(spacing: 6) {
-                    Button {
-                        if let dev = device {
-                            _ = store.togglePrimary(dev)
+                    if spec.powerWritable {
+                        Button {
+                            if let dev = device {
+                                _ = store.togglePrimary(dev)
+                            }
+                        } label: {
+                            Label(
+                                spec.isOn ? L10n.tr("休眠镜头", "Sleep") : L10n.tr("唤醒镜头", "Wake"),
+                                systemImage: spec.isOn ? "moon.zzz.fill" : "power"
+                            )
                         }
-                    } label: {
-                        Label(
-                            spec.isOn ? L10n.tr("休眠镜头", "Sleep") : L10n.tr("唤醒镜头", "Wake"),
-                            systemImage: spec.isOn ? "moon.zzz.fill" : "power"
-                        )
+                        .buttonStyle(PillActionButtonStyle(isSelected: !spec.isOn, tintColor: .cyan))
                     }
-                    .buttonStyle(PillActionButtonStyle(isSelected: !spec.isOn, tintColor: .cyan))
 
                     if store.homeBackend == .xiaomiCloud,
                        (store.cameraCustomStreamURL(for: device?.id ?? "") ?? "").isEmpty,

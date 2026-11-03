@@ -703,6 +703,7 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
 
     /// Devices whose `.power` op is a real toggle the assistant can apply (#113).
     static func isPowerToggleable(_ device: SmartDevice) -> Bool {
+        guard device.kind.canTogglePower else { return false }
         switch device.kind {
         case .light, .climate, .fan, .plug, .camera, .tv: return true
         case .vacuum, .speaker, .fridge, .sensor: return false
@@ -825,37 +826,43 @@ public struct UserHabitMemory: Codable, Equatable, Sendable {
         if case .activateScene = intent.operation {
             return scenes.contains { $0.id == intent.targetId }
         }
-        guard let dev = devices.first(where: { $0.id == intent.targetId && $0.isOnline }) else {
+        guard let dev = devices.first(where: { $0.id == intent.targetId && $0.isOnline }),
+              dev.kind.acceptsControlWrites else {
             return false
         }
         switch intent.operation {
         case .power(let on):
+            guard dev.kind.canTogglePower else { return false }
             return dev.isActiveOn != on
         case .lightEffect(let effect):
-            guard case .light(let spec) = dev.kind else { return false }
+            guard case .light(let spec) = dev.kind, !spec.availableEffects.isEmpty else { return false }
             return !spec.isOn || spec.currentEffect?.caseInsensitiveCompare(effect) != .orderedSame
         case .brightness(let pct):
-            guard case .light(let spec) = dev.kind else { return false }
+            guard case .light(let spec) = dev.kind, spec.brightnessWritable else { return false }
             return !spec.isOn || abs((spec.brightnessPercent ?? 0) - pct) >= 10
         case .colorTemperature(let kelvin):
-            guard case .light(let spec) = dev.kind else { return false }
+            guard case .light(let spec) = dev.kind, spec.colorWritable else { return false }
             return spec.colorTempKelvin != kelvin
         case .hvacMode(let mode):
-            guard case .climate(let spec) = dev.kind else { return false }
+            guard case .climate(let spec) = dev.kind, !spec.availableModes.isEmpty else { return false }
             return !spec.isOn || spec.hvacMode != mode
         case .targetTemperature(let temp):
-            guard case .climate(let spec) = dev.kind else { return false }
+            guard case .climate(let spec) = dev.kind, spec.temperatureWritable else { return false }
             return !spec.isOn || abs(spec.targetTemperature - temp) >= 0.5
         case .activateScene:
             return true
         case .fanSpeed(let v):
             switch dev.kind {
-            case .fan(let spec): return !spec.isOn || spec.presetMode != v
-            case .climate(let spec): return spec.fanMode != v
+            case .fan(let spec):
+                guard !spec.availablePresetModes.isEmpty else { return false }
+                return !spec.isOn || spec.presetMode != v
+            case .climate(let spec):
+                guard !spec.availableFanModes.isEmpty else { return false }
+                return spec.fanMode != v
             default: return false
             }
         case .oscillation(let on):
-            guard case .fan(let spec) = dev.kind else { return false }
+            guard case .fan(let spec) = dev.kind, spec.swingWritable, spec.isOscillating != nil else { return false }
             return !spec.isOn || spec.isOscillating != on
         case .brightnessStep, .temperatureStep:
             return false

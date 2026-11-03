@@ -54,6 +54,9 @@ struct GoldenCorpusTests {
             let maxKelvin: Int
             let currentEffect: String?
             let availableEffects: [String]
+            let powerWritable: Bool?
+            let brightnessWritable: Bool?
+            let colorWritable: Bool?
         }
 
         struct ClimatePayload: Decodable {
@@ -70,6 +73,8 @@ struct GoldenCorpusTests {
             let availableFanModes: [String]
             let swingMode: String?
             let availableSwingModes: [String]?
+            let powerWritable: Bool?
+            let temperatureWritable: Bool?
         }
 
         struct FanPayload: Decodable {
@@ -84,6 +89,9 @@ struct GoldenCorpusTests {
             let temperature: Double?
             let humidity: Double?
             let filterLifePercent: Int?
+            let powerWritable: Bool?
+            let speedWritable: Bool?
+            let swingWritable: Bool?
         }
 
         struct PlugPayload: Decodable {
@@ -93,6 +101,7 @@ struct GoldenCorpusTests {
             let energyKwh: Double?
             let childLockEntityId: String?
             let isChildLocked: Bool
+            let powerWritable: Bool?
         }
 
         struct FridgePayload: Decodable {
@@ -114,6 +123,7 @@ struct GoldenCorpusTests {
             let modeEntityId: String?
             let currentMode: String?
             let availableModes: [String]
+            let actionsWritable: Bool?
         }
 
         struct CameraPayload: Decodable {
@@ -125,6 +135,7 @@ struct GoldenCorpusTests {
             let isMotionDetectionOn: Bool?
             let streamEntityId: String?
             let snapshotPath: String?
+            let powerWritable: Bool?
         }
 
         struct SensorPayload: Decodable {
@@ -175,7 +186,10 @@ struct GoldenCorpusTests {
                         minKelvin: p.minKelvin,
                         maxKelvin: p.maxKelvin,
                         currentEffect: p.currentEffect,
-                        availableEffects: p.availableEffects
+                        availableEffects: p.availableEffects,
+                        powerWritable: p.powerWritable ?? true,
+                        brightnessWritable: p.brightnessWritable ?? true,
+                        colorWritable: p.colorWritable ?? true
                     )
                 )
             case .climate(let p):
@@ -193,7 +207,9 @@ struct GoldenCorpusTests {
                         fanMode: p.fanMode,
                         availableFanModes: p.availableFanModes,
                         swingMode: p.swingMode,
-                        availableSwingModes: p.availableSwingModes ?? []
+                        availableSwingModes: p.availableSwingModes ?? [],
+                        powerWritable: p.powerWritable ?? true,
+                        temperatureWritable: p.temperatureWritable ?? true
                     )
                 )
             case .fan(let p):
@@ -209,7 +225,10 @@ struct GoldenCorpusTests {
                         airQuality: p.airQuality,
                         temperature: p.temperature,
                         humidity: p.humidity,
-                        filterLifePercent: p.filterLifePercent
+                        filterLifePercent: p.filterLifePercent,
+                        powerWritable: p.powerWritable ?? true,
+                        speedWritable: p.speedWritable ?? true,
+                        swingWritable: p.swingWritable ?? true
                     )
                 )
             case .plug(let p):
@@ -220,7 +239,8 @@ struct GoldenCorpusTests {
                         powerWatts: p.powerWatts,
                         energyKwh: p.energyKwh,
                         childLockEntityId: p.childLockEntityId,
-                        isChildLocked: p.isChildLocked
+                        isChildLocked: p.isChildLocked,
+                        powerWritable: p.powerWritable ?? true
                     )
                 )
             case .fridge(let p):
@@ -245,7 +265,8 @@ struct GoldenCorpusTests {
                         battery: p.battery,
                         modeEntityId: p.modeEntityId,
                         currentMode: p.currentMode,
-                        availableModes: p.availableModes
+                        availableModes: p.availableModes,
+                        actionsWritable: p.actionsWritable ?? true
                     )
                 )
             case .camera(let p):
@@ -258,7 +279,8 @@ struct GoldenCorpusTests {
                         motionDetectionEntityId: p.motionDetectionEntityId,
                         isMotionDetectionOn: p.isMotionDetectionOn,
                         streamEntityId: p.streamEntityId,
-                        snapshotPath: p.snapshotPath
+                        snapshotPath: p.snapshotPath,
+                        powerWritable: p.powerWritable ?? true
                     )
                 )
             case .sensor(let p):
@@ -379,6 +401,7 @@ struct GoldenCorpusTests {
         let spec: MiotDeviceSpec
         let values: [MiotFallbackValueEntry]
         let expectedKind: CorpusKind
+        let rejectedCommands: [MiotCommandPayload]?
     }
 
     /// Fallback values are scoped to their entry's `did`, so unlike `MiotValueEntry`
@@ -478,6 +501,8 @@ struct GoldenCorpusTests {
                 return .setFanOscillating(entityId: entityId, oscillating: oscillating ?? false)
             case "setSwitch":
                 return .setSwitch(entityId: entityId, isOn: isOn ?? false)
+            case "setClimatePower":
+                return .setClimatePower(entityId: entityId, isOn: isOn ?? false, fallbackMode: hvacMode ?? "cool")
             case "setSelectOption":
                 return .setSelectOption(entityId: entityId, option: option ?? "")
             case "setNumberValue":
@@ -705,6 +730,12 @@ struct GoldenCorpusTests {
             )
             let dev = try #require(entryHome.devices.first(where: { $0.id == entry.did }), "Missing fallback device \(entry.model)")
             #expect(dev.kind == entry.expectedKind.toDeviceKind(), "Fallback kind mismatch on \(entry.model)")
+            #expect(dev.kind.acceptsControlWrites == false, "Fallback \(entry.model) must not expose writes")
+            for command in entry.rejectedCommands ?? [] {
+                #expect(throws: MiotCommandError.self) {
+                    try MiotCommandMapper.map(try command.toDeviceCommand(), spec: entry.spec)
+                }
+            }
         }
 
         for record in records {

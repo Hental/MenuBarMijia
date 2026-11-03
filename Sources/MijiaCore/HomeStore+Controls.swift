@@ -23,6 +23,10 @@ extension HomeStore {
             showToast(L10n.tr("\(device.name) 当前离线（可能断电）", "\(device.name) is offline (unplugged)"), isError: true)
             return nil
         }
+        guard device.isPrimaryToggleable else {
+            if device.hasDetailDrawer { toggleExpanded(device.id) }
+            return nil
+        }
         guard let idx = devices.firstIndex(where: { $0.id == device.id }) else { return nil }
         let previous = devices[idx]
         var updated = previous

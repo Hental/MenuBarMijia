@@ -9,7 +9,7 @@ import type {
   IntentPlan,
   SmartDevice,
 } from "./models.js";
-import { isDeviceActiveOn } from "./models.js";
+import { deviceAcceptsControlWrites, deviceCanTogglePower, isDeviceActiveOn } from "./models.js";
 
 // MARK: - Spoken Delay & Undo Phrases
 
@@ -113,33 +113,29 @@ export const IntentValidator = {
     switch (op.kind) {
       case "power": {
         if (k.kind === "plug") {
+          if (k.powerWritable === false) return null;
           if (k.switchEntityId.startsWith("button.") && !op.isOn) {
             return null;
           }
           return op;
         }
-        if (
-          k.kind === "light" ||
-          k.kind === "climate" ||
-          k.kind === "fan" ||
-          k.kind === "vacuum" ||
-          k.kind === "camera"
-        ) {
-          return op;
+        if (k.kind === "light" || k.kind === "climate" || k.kind === "fan" || k.kind === "camera") {
+          return k.powerWritable === false ? null : op;
         }
+        if (k.kind === "vacuum") return k.actionsWritable === false ? null : op;
         return null;
       }
       case "brightness": {
-        if (k.kind !== "light") return null;
+        if (k.kind !== "light" || k.brightnessWritable === false) return null;
         return { kind: "brightness", percent: Math.max(1, Math.min(100, Math.round(op.percent))) };
       }
       case "brightnessStep": {
-        if (k.kind !== "light") return null;
+        if (k.kind !== "light" || k.brightnessWritable === false) return null;
         const base = k.isOn ? (k.brightnessPercent ?? 50) : 0;
         return { kind: "brightness", percent: Math.max(1, Math.min(100, Math.round(base + op.delta))) };
       }
       case "colorTemperature": {
-        if (k.kind !== "light") return null;
+        if (k.kind !== "light" || k.colorWritable === false) return null;
         return {
           kind: "colorTemperature",
           kelvin: Math.max(k.minKelvin, Math.min(k.maxKelvin, Math.round(op.kelvin))),
@@ -152,6 +148,7 @@ export const IntentValidator = {
       }
       case "hvacMode": {
         if (k.kind === "climate") {
+          if (k.availableModes.length === 0) return null;
           const matched = k.availableModes.find((m) => m.toLowerCase() === op.mode.toLowerCase());
           return matched ? { kind: "hvacMode", mode: matched } : null;
         }
@@ -163,12 +160,12 @@ export const IntentValidator = {
         return null;
       }
       case "targetTemperature": {
-        if (k.kind !== "climate") return null;
+        if (k.kind !== "climate" || k.temperatureWritable === false) return null;
         const clamped = Math.max(k.minTemp, Math.min(k.maxTemp, op.celsius));
         return { kind: "targetTemperature", celsius: clamped };
       }
       case "temperatureStep": {
-        if (k.kind !== "climate") return null;
+        if (k.kind !== "climate" || k.temperatureWritable === false) return null;
         const next = Math.max(k.minTemp, Math.min(k.maxTemp, k.targetTemperature + op.delta));
         return { kind: "targetTemperature", celsius: next };
       }
@@ -212,7 +209,7 @@ export const IntentValidator = {
         return null;
       }
       case "oscillation": {
-        if (k.kind !== "fan") return null;
+        if (k.kind !== "fan" || k.swingWritable === false || k.isOscillating === null) return null;
         return op;
       }
       case "activateScene":
@@ -252,39 +249,57 @@ export const IntentValidator = {
     const op = intent.operation;
     switch (op.kind) {
       case "power": {
-        if (k.kind === "light") return [{ kind: "setLightPower", entityId: k.entityId, isOn: op.isOn }];
+        if (k.kind === "light")
+          return k.powerWritable === false ? [] : [{ kind: "setLightPower", entityId: k.entityId, isOn: op.isOn }];
         if (k.kind === "climate")
-          return [{ kind: "setClimatePower", entityId: k.entityId, isOn: op.isOn, resumeMode: "cool" }];
-        if (k.kind === "fan") return [{ kind: "setFanPower", entityId: k.entityId, isOn: op.isOn }];
+          return k.powerWritable === false
+            ? []
+            : [{ kind: "setClimatePower", entityId: k.entityId, isOn: op.isOn, resumeMode: "cool" }];
+        if (k.kind === "fan")
+          return k.powerWritable === false ? [] : [{ kind: "setFanPower", entityId: k.entityId, isOn: op.isOn }];
         if (k.kind === "plug") {
+          if (k.powerWritable === false) return [];
           if (k.switchEntityId.startsWith("button.")) {
             return op.isOn ? [{ kind: "setSwitch", entityId: k.switchEntityId, isOn: true }] : [];
           }
           return [{ kind: "setSwitch", entityId: k.switchEntityId, isOn: op.isOn }];
         }
-        if (k.kind === "camera") return [{ kind: "setSwitch", entityId: k.entityId, isOn: op.isOn }];
+        if (k.kind === "camera")
+          return k.powerWritable === false ? [] : [{ kind: "setSwitch", entityId: k.entityId, isOn: op.isOn }];
         if (k.kind === "vacuum")
-          return [{ kind: "vacuumAction", entityId: k.entityId, action: op.isOn ? "start" : "returnToBase" }];
+          return k.actionsWritable === false
+            ? []
+            : [{ kind: "vacuumAction", entityId: k.entityId, action: op.isOn ? "start" : "returnToBase" }];
         return [];
       }
       case "brightness":
-        return k.kind === "light" ? [{ kind: "setLightBrightness", entityId: k.entityId, percent: op.percent }] : [];
+        return k.kind === "light" && k.brightnessWritable !== false
+          ? [{ kind: "setLightBrightness", entityId: k.entityId, percent: op.percent }]
+          : [];
       case "colorTemperature":
-        return k.kind === "light" ? [{ kind: "setLightColorTemp", entityId: k.entityId, kelvin: op.kelvin }] : [];
+        return k.kind === "light" && k.colorWritable !== false
+          ? [{ kind: "setLightColorTemp", entityId: k.entityId, kelvin: op.kelvin }]
+          : [];
       case "lightEffect":
         return k.kind === "light" ? [{ kind: "setLightEffect", entityId: k.entityId, effect: op.effect }] : [];
       case "hvacMode":
-        return k.kind === "climate" ? [{ kind: "setClimateMode", entityId: k.entityId, hvacMode: op.mode }] : [];
+        return k.kind === "climate" && k.availableModes.length > 0
+          ? [{ kind: "setClimateMode", entityId: k.entityId, hvacMode: op.mode }]
+          : [];
       case "targetTemperature":
-        return k.kind === "climate"
+        return k.kind === "climate" && k.temperatureWritable !== false
           ? [{ kind: "setClimateTemperature", entityId: k.entityId, temperature: op.celsius }]
           : [];
       case "fanSpeed":
-        if (k.kind === "fan") return [{ kind: "setFanPresetMode", entityId: k.entityId, presetMode: op.speed }];
-        if (k.kind === "climate") return [{ kind: "setClimateFanMode", entityId: k.entityId, fanMode: op.speed }];
+        if (k.kind === "fan" && k.availablePresetModes.length > 0)
+          return [{ kind: "setFanPresetMode", entityId: k.entityId, presetMode: op.speed }];
+        if (k.kind === "climate" && k.availableFanModes.length > 0)
+          return [{ kind: "setClimateFanMode", entityId: k.entityId, fanMode: op.speed }];
         return [];
       case "oscillation":
-        return k.kind === "fan" ? [{ kind: "setFanOscillating", entityId: k.entityId, oscillating: op.enabled }] : [];
+        return k.kind === "fan" && k.swingWritable !== false
+          ? [{ kind: "setFanOscillating", entityId: k.entityId, oscillating: op.enabled }]
+          : [];
       case "brightnessStep":
       case "temperatureStep":
       case "activateScene":
@@ -772,7 +787,7 @@ export const LocalIntentParser = {
 
       candidates = devices.filter((d) => {
         const cat = deviceCategory(d);
-        if (!d.isOnline || !isAssistantControllable(cat)) return false;
+        if (!d.isOnline || !isAssistantControllable(cat) || !deviceAcceptsControlWrites(d)) return false;
         if (onlyActive && !isDeviceActiveOn(d)) return false;
         if (matchedRooms.length > 0 && !matchedRooms.includes(d.roomName)) return false;
         if (effectiveWanted && !effectiveWanted.has(cat)) return false;
@@ -989,7 +1004,7 @@ export const LocalIntentParser = {
       const onlyActive = ops.every(isRelativeOp);
       candidates = devices.filter((dev) => {
         const cat = deviceCategory(dev);
-        if (!dev.isOnline || !isAssistantControllable(cat)) return false;
+        if (!dev.isOnline || !isAssistantControllable(cat) || !deviceAcceptsControlWrites(dev)) return false;
         if (onlyActive && !isDeviceActiveOn(dev)) return false;
         if (matchedRoomKeys.length > 0 && !roomDeviceIds.has(dev.id)) return false;
         if (wanted && !wanted.has(cat)) return false;
@@ -1658,27 +1673,27 @@ export function habitActionable(
   const op = intent.operation;
   if (op.kind === "activateScene") return scenes.some((s) => s.id === intent.targetId);
   const dev = devices.find((d) => d.id === intent.targetId && d.isOnline);
-  if (!dev) return false;
+  if (!dev || !deviceAcceptsControlWrites(dev)) return false;
   const k = dev.kind;
   switch (op.kind) {
     case "power":
-      return isDeviceActiveOn(dev) !== op.isOn;
+      return deviceCanTogglePower(dev) && isDeviceActiveOn(dev) !== op.isOn;
     case "lightEffect":
       return k.kind === "light" && (!k.isOn || (k.currentEffect ?? "").toLowerCase() !== op.effect.toLowerCase());
     case "brightness":
-      return k.kind === "light" && (!k.isOn || Math.abs((k.brightnessPercent ?? 0) - op.percent) >= 10);
+      return k.kind === "light" && k.brightnessWritable !== false && (!k.isOn || Math.abs((k.brightnessPercent ?? 0) - op.percent) >= 10);
     case "colorTemperature":
-      return k.kind === "light" && k.colorTempKelvin !== op.kelvin;
+      return k.kind === "light" && k.colorWritable !== false && k.colorTempKelvin !== op.kelvin;
     case "hvacMode":
-      return k.kind === "climate" && (!k.isOn || k.hvacMode !== op.mode);
+      return k.kind === "climate" && k.availableModes.length > 0 && (!k.isOn || k.hvacMode !== op.mode);
     case "targetTemperature":
-      return k.kind === "climate" && (!k.isOn || Math.abs(k.targetTemperature - op.celsius) >= 0.5);
+      return k.kind === "climate" && k.temperatureWritable !== false && (!k.isOn || Math.abs(k.targetTemperature - op.celsius) >= 0.5);
     case "fanSpeed":
-      if (k.kind === "fan") return !k.isOn || k.presetMode !== op.speed;
-      if (k.kind === "climate") return k.fanMode !== op.speed;
+      if (k.kind === "fan") return k.availablePresetModes.length > 0 && (!k.isOn || k.presetMode !== op.speed);
+      if (k.kind === "climate") return k.availableFanModes.length > 0 && k.fanMode !== op.speed;
       return false;
     case "oscillation":
-      return k.kind === "fan" && (!k.isOn || k.isOscillating !== op.enabled);
+      return k.kind === "fan" && k.swingWritable !== false && k.isOscillating !== null && (!k.isOn || k.isOscillating !== op.enabled);
     default:
       return false;
   }
@@ -1687,7 +1702,10 @@ export function habitActionable(
 /** Devices whose `power` op is a real toggle the assistant can apply (#113). */
 function isPowerToggleable(device: SmartDevice): boolean {
   const k = device.kind.kind;
-  return k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera";
+  return (
+    deviceCanTogglePower(device) &&
+    (k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera")
+  );
 }
 
 function habitSuggestionTitle(

@@ -813,7 +813,7 @@ public struct ModelIntentResolver: Sendable {
         var idx = 0
         for device in devices {
             let category = IntentDeviceCategory(device)
-            guard category.isAssistantControllable else { continue }
+            guard category.isAssistantControllable, device.kind.acceptsControlWrites else { continue }
             idx += 1
             result.append(("d\(idx)", device))
         }
