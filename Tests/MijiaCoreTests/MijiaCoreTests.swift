@@ -108,7 +108,6 @@ struct MijiaCoreTests {
         #expect(store.devices.count == 1)
         #expect(store.activeDeviceCount == 0)
 
-        // 1. Toggle ON waits for the provider snapshot instead of flipping first.
         let current = try #require(store.devices.first)
         let toggle = store.togglePrimary(current)
         #expect(store.waitingDeviceIds.contains("dev_1"))
@@ -278,7 +277,6 @@ struct MijiaCoreTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        // 1. Quick index 1 toggles 1st device (dev_1) off once the read-back lands.
         store.selectQuickIndex(1)
         for _ in 0..<50 where store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn != false {
             try await Task.sleep(for: .milliseconds(10))

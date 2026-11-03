@@ -816,7 +816,6 @@ export class MenuMijiaWindowsApp {
   private onboardingStep = 0;
   private replyBanner: ReplyBannerState | null = null;
   private haConnectionError: string | null = null;
-  /** Primary toggles waiting for the device's own property read. */
   private waitingDeviceIds = new Set<string>();
   /** A Xiaomi refresh failed after devices were already on screen. */
   private cloudValuesStale = false;

@@ -80,7 +80,6 @@ extension HomeProvider {
     /// Push-based providers (Home Assistant) have nothing to slow down.
     public func setPollingContext(_ context: PollingContext) async {}
 
-    /// After a power write, publish the device's own properties. The default has no read.
     public func readBack(deviceId: String) async -> ControlReadBack { .unavailable }
     public func fetchSensorHistory(deviceId: String, window: SensorHistoryWindow, now: Date) async -> [SensorHistorySample] { [] }
     public func resolveCameraStream(for device: SmartDevice) async throws -> CameraStreamSource {

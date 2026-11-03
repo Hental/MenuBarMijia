@@ -56,7 +56,6 @@ public final class HomeStore {
     public internal(set) var environmentReadings: [EnvironmentReading] = []
     public internal(set) var scenes: [HomeScene] = []
     public internal(set) var hasReceivedInitialSnapshot = false
-    /// Devices whose primary toggle is waiting for a property read-back.
     public internal(set) var waitingDeviceIds: Set<String> = []
     /// True after the cloud drops once a snapshot has been shown. Cleared only by a later connect.
     /// A retry that is still `.connecting` leaves this set, so the last reading stays unmarked as current.
@@ -431,8 +430,6 @@ public final class HomeStore {
 
     // MARK: - Command Execution & Optimistic Locks
 
-    /// A disconnected cloud after real data is stale. Connecting does not clear it.
-    /// Connected does. Demo mode never marks the virtual home stale.
     func updateValueFreshness() {
         switch connectionStatus {
         case .disconnected where hasReceivedInitialSnapshot && homeBackend != .demo:

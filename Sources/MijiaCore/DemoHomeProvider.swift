@@ -9,7 +9,6 @@ public actor MockHomeProvider: HomeProvider {
     /// Every polling context the store sent, in order (#26).
     public private(set) var pollingContexts: [PollingContext] = []
     public var shouldFailCommands: Bool = false
-    /// Set before `execute` to pause inside the call so a test can observe the waiting card.
     private var holdNext = false
     private var executeWaiter: CheckedContinuation<Void, Never>?
     public private(set) var executeStarted = 0

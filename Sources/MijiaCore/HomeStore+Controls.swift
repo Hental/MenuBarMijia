@@ -105,7 +105,6 @@ extension HomeStore {
             }
         }
 
-        // A second tap while the first read-back is outstanding must not send another command.
         guard !waitingDeviceIds.contains(device.id) else { return nil }
         waitingDeviceIds.insert(device.id)
 
