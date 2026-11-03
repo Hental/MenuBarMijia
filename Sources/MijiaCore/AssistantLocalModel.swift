@@ -62,14 +62,22 @@ public enum AssistantModelSelection {
 
 // MARK: - Local Prompt
 
-/// Compact instructions for Apple's on-device model. The catalog keeps aliases and the ambient
-/// summaries are capped because the local context window is much smaller than a cloud model's.
+/// Compact instructions for Apple's on-device model. The catalog is selected under a token budget
+/// and ambient summaries are capped because the local window is much smaller than a cloud model's.
 public enum AssistantLocalPrompt {
-    static let contextFieldLimit = 300
+    /// The on-device window is 4,096 tokens. The guided-generation schema measures ~883 tokens
+    /// on the system model, the reply is capped at 600 (`maximumResponseTokens`), and ~400 tokens
+    /// stay as margin, leaving this conservative bound for instructions + catalog + context.
+    /// `PromptText.estimatedTokens` is deliberately pessimistic: CJK counts as one token per
+    /// character even though the real tokenizer measures about 0.6.
+    static let maximumPromptTokens = 2_200
+    static let contextFieldLimit = 200
 
     public static func instructions(
         catalog: IntentCatalog,
-        context: AssistantContext = AssistantContext()
+        context: AssistantContext = AssistantContext(),
+        mention: String = "",
+        preferredDeviceIds: Set<String> = []
     ) -> String {
         let contextParts: [(String, String)] = [
             (L10n.tr("时间", "Time"), context.timeSummary),
@@ -87,9 +95,10 @@ public enum AssistantLocalPrompt {
             ? ""
             : "\n当前环境与习惯：\n" + contextLines.joined(separator: "\n") + "\n"
 
-        return """
+        let preamble = """
         你是智能家居指令解析器，运行在这台 Mac 上。把用户的中文或英文指令转换为设备动作。\(contextBlock)
-        \(catalog.text)
+        """
+        let rules = """
 
         规则：
         - target 必须是上面目录里的 id：dN 是单台设备，room_lights:N 是房间灯组，all_lights / all_devices 是全屋，sN 是场景。
@@ -104,6 +113,15 @@ public enum AssistantLocalPrompt {
         - 只能使用目录里的 id。无法执行时 actions 为空，并在 reply 里用一句话说明原因。
         - reply 用用户指令的语言，一句话。
         """
+
+        let fixedTokens = PromptText.estimatedTokens(preamble + rules)
+        let catalogBudget = max(200, maximumPromptTokens - fixedTokens)
+        let catalogText = catalog.text(
+            fitting: catalogBudget,
+            mention: mention,
+            preferredDeviceIds: preferredDeviceIds
+        )
+        return preamble + catalogText + rules
     }
 }
 

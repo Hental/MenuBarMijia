@@ -123,7 +123,14 @@ public struct FoundationModelIntentResolver: AssistantCommandResolving {
         }
 
         let catalog = IntentCatalog(devices: devices, scenes: scenes)
-        let instructions = AssistantLocalPrompt.instructions(catalog: catalog, context: context)
+        var preferredDeviceIds = Set(context.favoriteDeviceIds)
+        preferredDeviceIds.formUnion(devices.filter { $0.isOnline && $0.isActiveOn }.map(\.id))
+        let instructions = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: context,
+            mention: utterance,
+            preferredDeviceIds: preferredDeviceIds
+        )
         // A fresh session per command keeps the small on-device context from filling up with
         // unrelated earlier commands; the store already serializes user-facing assistant work.
         let session = LanguageModelSession(model: .default, instructions: instructions)
@@ -131,7 +138,7 @@ public struct FoundationModelIntentResolver: AssistantCommandResolving {
             let response = try await session.respond(
                 to: utterance,
                 generating: FoundationAssistantPlan.self,
-                options: GenerationOptions(temperature: 0)
+                options: GenerationOptions(temperature: 0, maximumResponseTokens: 600)
             )
             return AssistantLocalPlanMapper.plan(
                 actions: response.content.actions.map(\.localAction),

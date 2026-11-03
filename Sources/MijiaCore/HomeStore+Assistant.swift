@@ -169,7 +169,8 @@ extension HomeStore {
             timeSummary: PromptText.sanitize(timeSummary, limit: PromptText.contextLimit),
             environmentSummary: PromptText.sanitize(environmentSummary, limit: PromptText.contextLimit),
             activeDevicesSummary: PromptText.sanitize(activeSummary, limit: PromptText.contextLimit),
-            habitSummary: PromptText.sanitize(habitSummary, limit: PromptText.contextLimit)
+            habitSummary: PromptText.sanitize(habitSummary, limit: PromptText.contextLimit),
+            favoriteDeviceIds: favoriteOrder
         )
     }
 

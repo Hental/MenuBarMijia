@@ -7,17 +7,21 @@ public struct AssistantContext: Equatable, Sendable {
     public var environmentSummary: String
     public var activeDevicesSummary: String
     public var habitSummary: String
+    /// Favorite device ids, used only by the on-device prompt to keep preferred entries visible.
+    public var favoriteDeviceIds: [String]
 
     public init(
         timeSummary: String = "",
         environmentSummary: String = "",
         activeDevicesSummary: String = "",
-        habitSummary: String = ""
+        habitSummary: String = "",
+        favoriteDeviceIds: [String] = []
     ) {
         self.timeSummary = timeSummary
         self.environmentSummary = environmentSummary
         self.activeDevicesSummary = activeDevicesSummary
         self.habitSummary = habitSummary
+        self.favoriteDeviceIds = favoriteDeviceIds
     }
 }
 

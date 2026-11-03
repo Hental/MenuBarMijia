@@ -68,6 +68,7 @@ struct AssistantLocalModelTests {
         #expect(prompt.contains("书房 24.0°C 55%"))
         #expect(prompt.contains("晚上常关主卧床头灯"))
         #expect(prompt.contains("reply"))
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
     }
 
     @Test("Ambient context is capped so a long history cannot crowd the small on-device window")
@@ -80,6 +81,88 @@ struct AssistantLocalModelTests {
 
         #expect(!prompt.contains(tail))
         #expect(prompt.contains(String(repeating: "a", count: AssistantLocalPrompt.contextFieldLimit)))
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
+    }
+
+    @Test("A large catalog is bounded and keeps the utterance target's aliases")
+    func promptBoundsLargeCatalog() throws {
+        let catalog = Self.largeCatalog()
+        let prompt = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: AssistantContext(
+                timeSummary: "夜晚 22:00",
+                habitSummary: String(repeating: "习惯", count: 300)
+            ),
+            mention: "打开房间7的设备127"
+        )
+
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
+        #expect(prompt.contains("设备127"))
+
+        let targetAlias = try #require(
+            catalog.aliasDevices.first { $0.device.id == "dev_127" }?.alias
+        )
+        #expect(prompt.contains("\"id\":\"\(targetAlias)\""))
+        #expect(catalog.realId(forAlias: targetAlias) == "dev_127")
+
+        // A room group stays addressable even when its individual rows are truncated.
+        let groupAlias = try #require(catalog.criteriaByAlias.keys.first { key in
+            key.hasPrefix("room_lights:")
+                && catalog.realIds(forTargetChoice: key).contains("dev_127")
+        })
+        #expect(prompt.contains("\"id\":\"\(groupAlias)\""))
+        #expect(catalog.realIds(forTargetChoice: groupAlias).contains("dev_127"))
+
+        // Not every entry fits in the local prompt.
+        #expect(!prompt.contains("设备299"))
+    }
+
+    @Test("Favorites and active devices win the remaining budget")
+    func promptPrefersFavorites() {
+        let catalog = Self.largeCatalog()
+        let prompt = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: AssistantContext(),
+            preferredDeviceIds: ["dev_250", "dev_251"]
+        )
+
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
+        #expect(prompt.contains("设备250"))
+        #expect(prompt.contains("设备251"))
+        #expect(!prompt.contains("设备299"))
+    }
+
+    @Test("An empty utterance truncates deterministically from the first catalog entries")
+    func promptFallsBackDeterministically() {
+        let catalog = Self.largeCatalog()
+        let first = AssistantLocalPrompt.instructions(catalog: catalog, context: AssistantContext())
+        let second = AssistantLocalPrompt.instructions(catalog: catalog, context: AssistantContext())
+
+        #expect(first == second)
+        #expect(PromptText.estimatedTokens(first) <= AssistantLocalPrompt.maximumPromptTokens)
+        #expect(first.contains("\"id\":\"d1\""))
+        #expect(!first.contains("设备299"))
+    }
+
+    private static func largeCatalog() -> IntentCatalog {
+        let devices = (1...300).map { index in
+            SmartDevice(
+                id: "dev_\(index)",
+                name: "设备\(index)",
+                roomId: "room_\(index % 60)",
+                roomName: "房间\(index % 60)",
+                model: "yeelink.light.ceiling20",
+                isOnline: true,
+                kind: .light(LightSpec(
+                    entityId: "light.dev_\(index)",
+                    isOn: index % 2 == 0
+                ))
+            )
+        }
+        let scenes = (1...20).map {
+            HomeScene(id: "scene_\($0)", name: "场景\($0)", entityId: "scene.\($0)")
+        }
+        return IntentCatalog(devices: devices, scenes: scenes)
     }
 
     // MARK: - Plan Mapping
