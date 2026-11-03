@@ -42,13 +42,11 @@ extension HomeStore {
     }
 
     public func isSensorAlertEnabled(_ kind: SensorAlertKind) -> Bool {
-        if kind.enabledByDefault {
-            return userDefaults.object(forKey: kind.defaultsKey) == nil ? true : userDefaults.bool(forKey: kind.defaultsKey)
-        }
-        return userDefaults.bool(forKey: kind.defaultsKey)
+        sensorAlertPreferences[kind] ?? kind.enabledByDefault
     }
 
     public func setSensorAlertEnabled(_ kind: SensorAlertKind, _ enabled: Bool) {
+        sensorAlertPreferences[kind] = enabled
         userDefaults.set(enabled, forKey: kind.defaultsKey)
     }
 
