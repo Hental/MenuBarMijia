@@ -792,7 +792,7 @@ public struct ModelIntentResolver: Sendable {
     }
 
     private static func promptField(_ raw: String) -> String? {
-        let cleaned = PromptText.sanitize(raw, limit: PromptText.stateLimit)
+        let cleaned = PromptText.sanitize(raw, limit: PromptText.contextLimit)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? nil : cleaned
     }
