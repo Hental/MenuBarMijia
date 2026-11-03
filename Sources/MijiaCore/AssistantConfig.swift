@@ -259,6 +259,20 @@ public struct AssistantConfig: Equatable, Sendable {
         AssistantEndpoint(baseURL)?.allowsSendingSecrets ?? false
     }
 
+    /// Whether the user chose an AI endpoint. `load` reports the shipped OpenRouter default even when
+    /// nothing was saved, so presence alone cannot tell "configured" apart; compare with the defaults.
+    /// A non-default model, a saved key, or a local endpoint (Ollama/custom) all count as a choice.
+    public var hasConfiguredProvider: Bool {
+        if hasAPIKey || isLoopbackEndpoint { return true }
+        let base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let defaultBase = AssistantConfig.defaultBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return base.caseInsensitiveCompare(defaultBase) != .orderedSame
+            || model.caseInsensitiveCompare(AssistantConfig.defaultModel) != .orderedSame
+    }
+
     /// Ambient keys (CodexBar / environment variables) are never used implicitly; the user imports them explicitly (#20).
     public static func load(from defaults: UserDefaults, includeAmbientKey: Bool = false) -> AssistantConfig {
         let nonEmpty = { (key: String) -> String? in

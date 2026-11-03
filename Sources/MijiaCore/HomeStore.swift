@@ -737,6 +737,10 @@ public final class HomeStore {
     var assistantResolverOverride: ModelIntentResolver?
     /// Test seam replacing only the HTTP transport while still resolving `assistantConfig` from `userDefaults`.
     var assistantTransportOverride: ModelIntentResolver.Transport?
+    /// Test seam replacing the on-device resolver built by `localCommandResolver(for:)`.
+    var localAssistantResolverOverride: (any AssistantCommandResolving)?
+    /// Test seam overriding whether Apple's on-device model is usable on this machine.
+    var localAssistantAvailabilityOverride: AssistantLocalModelAvailability?
     /// Commands waiting on a spoken delay ("10 分钟后关灯"), soonest first. Persisted across launches.
     public internal(set) var scheduledCommands: [ScheduledCommand] = []
     /// Timers that came due while the app was closed or the Mac slept. Never auto-executed without user confirmation.

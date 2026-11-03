@@ -302,6 +302,23 @@ extension HomeStore {
         assistantResolverOverride ?? ModelIntentResolver(config: config, transport: assistantTransportOverride)
     }
 
+    /// The on-device resolver when the user has not chosen a provider and Apple's model is usable.
+    /// `assistantResolverOverride` keeps its old meaning: a forced cloud resolver in tests.
+    func localCommandResolver(for config: AssistantConfig) -> (any AssistantCommandResolving)? {
+        guard assistantResolverOverride == nil else { return nil }
+        let availability = localAssistantAvailabilityOverride ?? .current
+        guard AssistantModelSelection.route(for: config, localAvailability: availability) == .localFoundation else {
+            return nil
+        }
+        if let override = localAssistantResolverOverride { return override }
+        if #available(macOS 26.0, *) {
+            #if canImport(FoundationModels)
+            return FoundationModelIntentResolver()
+            #endif
+        }
+        return nil
+    }
+
     /// Runs a tapped suggestion. `offersUndoBanner` shows the 撤销 banner even for one device (GrokBall pills, #114).
     public func applyAssistantSuggestion(_ suggestion: AssistantSuggestion, offersUndoBanner: Bool = false) async {
         assistantSuggestions.removeAll { $0.id == suggestion.id }
@@ -347,16 +364,19 @@ extension HomeStore {
             return nil
         } else {
             let config = assistantConfig
-            if shouldRejectMissingAPIKey(for: config) {
-                setAssistantState(.failed(AssistantError.userMessage(for: AssistantError.missingAPIKey)))
-                return nil
+            let localResolver = localCommandResolver(for: config)
+            if localResolver == nil {
+                if shouldRejectMissingAPIKey(for: config) {
+                    setAssistantState(.failed(AssistantError.userMessage(for: AssistantError.missingAPIKey)))
+                    return nil
+                }
+                if let consent = cloudConsentNeeded(for: config, utterance: spoken) {
+                    pendingCloudConsent = consent
+                    setAssistantState(.idle)
+                    return nil
+                }
             }
-            if let consent = cloudConsentNeeded(for: config, utterance: spoken) {
-                pendingCloudConsent = consent
-                setAssistantState(.idle)
-                return nil
-            }
-            let resolver = makeAssistantResolver(config: config)
+            let resolver: any AssistantCommandResolving = localResolver ?? makeAssistantResolver(config: config)
             let context = buildAssistantContext(mention: .utterance(utterance))
             if !context.habitSummary.isEmpty {
                 habitSummary = context.habitSummary
