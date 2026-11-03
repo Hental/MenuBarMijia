@@ -233,7 +233,7 @@ struct AssistantTests {
     func modelResolverSystemOneJev() async throws {
         let systemOnePayload: [String: Any] = [
             "answers": [
-                "target": ["choice": "room_lights:书房", "confidence": 0.99],
+                "target": ["choice": "room_lights:1", "confidence": 0.99],
                 "op": ["choice": "effect_night", "confidence": 0.97],
                 "temp": ["choice": "none", "confidence": 0.99]
             ]
@@ -332,7 +332,7 @@ struct AssistantTests {
         ])
         #expect(parallelPlan.suggestions == [
             AssistantSuggestion(
-                id: "jev:dev_study_ceiling:effect_day",
+                id: "confirm:dev_study_ceiling",
                 title: "书房吸顶灯·日光模式",
                 confidencePercent: 62,
                 intents: [DeviceIntent(targetId: "dev_study_ceiling", operation: .lightEffect("Day"))]
@@ -584,8 +584,8 @@ struct AssistantTests {
         ```json
         {
           "actions": [
-            {"device": "room_lights:书房", "op": "power", "value": true},
-            {"device": "客厅空调", "op": "hvac_mode", "value": "cool"},
+            {"device": "room_lights:1", "op": "power", "value": true},
+            {"device": "d3", "op": "hvac_mode", "value": "cool"},
             {"device": "d3", "op": "temperature", "value": "25°C"}
           ],
           "suggestions": [

@@ -1368,6 +1368,19 @@ struct MiCloudClientTests {
         let json = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"homelist":[{"id":"h1","name":"我的家","roomlist":[{"id":"r1","name":"客厅","dids":["1"]}]}],"share_home_list":[{"id":"h2","name":"爸妈家","roomlist":[{"id":"r2","name":"卧室","dids":["7"]}]},{"id":"h1","name":"我的家","roomlist":[]}]}"#.utf8))
         let rooms = MiCloudClient.parseRooms(json)
         #expect(rooms.map(\.id) == ["r1", "r2"])
+        #expect(rooms.first { $0.id == "r1" }?.isSharedHome == false)
+        #expect(rooms.first { $0.id == "r2" }?.isSharedHome == true)
+        let home = MiotSynthesizer.synthesize(
+            devices: [
+                MiDeviceRecord(did: "1", name: "客厅灯", model: "yeelink.light.ceiling22", isOnline: true),
+                MiDeviceRecord(did: "7", name: "卧室灯", model: "yeelink.light.ceiling22", isOnline: true),
+            ],
+            rooms: rooms,
+            specs: MiotFixtures.specs,
+            values: [:]
+        )
+        #expect(home.devices.first { $0.id == "1" }?.isSharedHome == false)
+        #expect(home.devices.first { $0.id == "7" }?.isSharedHome == true)
         #expect(MiCloudProvider.homeOptions(from: rooms) == [
             HomeOption(id: "h1", name: "我的家", deviceCount: 1),
             HomeOption(id: "h2", name: "爸妈家", deviceCount: 1),

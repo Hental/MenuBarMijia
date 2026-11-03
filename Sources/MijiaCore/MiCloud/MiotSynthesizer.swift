@@ -106,7 +106,8 @@ public enum MiotSynthesizer {
                 roomName: roomName,
                 model: record.model,
                 isOnline: record.isOnline,
-                kind: record.isOnline ? kind : Self.redactOfflineLockClaim(kind)
+                kind: record.isOnline ? kind : Self.redactOfflineLockClaim(kind),
+                isSharedHome: room?.isSharedHome ?? false
             )
             smartDevices.append(device)
 
