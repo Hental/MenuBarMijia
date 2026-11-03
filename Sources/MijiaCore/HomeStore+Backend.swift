@@ -115,7 +115,18 @@ extension HomeStore {
 
     /// False while the Mac or display sleeps, the screen is locked, or another user is active.
     public func setSystemActive(_ active: Bool) {
+        if !active {
+            awayGap.includesAway = true
+            userDefaults.set(true, forKey: MacAwayGap.storageKey)
+        }
         updatePollingContext { $0.systemActive = active }
+    }
+
+    func finishPresenceSnapshot() {
+        // The 60s safety timer also calls evaluateSafetyAlerts, so it must not close this gap on a stale device list.
+        guard pollingContext.systemActive, awayGap.includesAway else { return }
+        awayGap.includesAway = false
+        userDefaults.set(false, forKey: MacAwayGap.storageKey)
     }
 
     public func setLowPowerMode(_ enabled: Bool) {
@@ -202,6 +213,7 @@ extension HomeStore {
                     handler(alert)
                 }
             }
+            finishPresenceSnapshot()
             notifyMissedScheduledCommandsIfNeeded()
         }
     }
