@@ -1,0 +1,130 @@
+{
+  "_fixture": {
+    "endpoint": "WS /api/websocket",
+    "captured": "2026-11-03",
+    "sanitised": "entity ids, device ids, area ids and names replaced; message envelope shapes preserved",
+    "shape": "ordered server messages; feed each object to HAHomeSnapshot.receive"
+  },
+  "messages": [
+    {"type": "auth_required", "ha_version": "2026.10.0"},
+    {"type": "auth_ok", "ha_version": "2026.10.0"},
+    {
+      "id": 1,
+      "type": "result",
+      "success": true,
+      "result": [
+        {"area_id": "living_room", "name": "Living Room", "picture": null, "aliases": [], "icon": null},
+        {"area_id": "study", "name": "Study", "picture": null, "aliases": [], "icon": null}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "result",
+      "success": true,
+      "result": [
+        {
+          "id": "dev-light-01",
+          "area_id": "living_room",
+          "name": "Contract Ceiling Light",
+          "name_by_user": null,
+          "manufacturer": "Contract",
+          "model": "contract.light",
+          "disabled_by": null,
+          "identifiers": [["miio", "did-light-0001"]],
+          "connections": [["mac", "02:00:00:00:00:01"]]
+        },
+        {
+          "id": "dev-thermo-02",
+          "area_id": "study",
+          "name": "Contract Thermometer",
+          "model": "contract.thermometer",
+          "disabled_by": null,
+          "identifiers": []
+        },
+        {
+          "id": "dev-hidden-03",
+          "area_id": "study",
+          "name": "Contract Hidden Device",
+          "disabled_by": null
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "result",
+      "success": true,
+      "result": [
+        {"entity_id": "light.ceiling", "device_id": "dev-light-01", "platform": "contract", "unique_id": "contract-light-01"},
+        {"entity_id": "sensor.temperature", "device_id": "dev-thermo-02", "platform": "contract"},
+        {"entity_id": "sensor.humidity", "device_id": "dev-thermo-02", "platform": "contract"},
+        {"entity_id": "sensor.battery_level", "device_id": "dev-thermo-02", "platform": "contract"},
+        {"entity_id": "light.hidden", "device_id": "dev-hidden-03", "hidden_by": "user"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "result",
+      "success": true,
+      "result": [
+        {
+          "entity_id": "light.ceiling",
+          "state": "on",
+          "attributes": {"brightness": 128, "friendly_name": "Contract Ceiling Light", "effect_list": ["Reading"]},
+          "last_changed": "2026-11-03T01:02:03.456+00:00",
+          "last_updated": "2026-11-03T01:02:03.456+00:00",
+          "context": {"id": "01JCONTRACT", "parent_id": null, "user_id": null}
+        },
+        {
+          "entity_id": "sensor.temperature",
+          "state": "23.5",
+          "attributes": {"device_class": "temperature", "unit_of_measurement": "°C", "friendly_name": "Temperature"},
+          "last_changed": "2026-11-03T01:02:03+00:00"
+        },
+        {
+          "entity_id": "sensor.humidity",
+          "state": "45",
+          "attributes": {"device_class": "humidity", "unit_of_measurement": "%"}
+        },
+        {
+          "entity_id": "sensor.battery_level",
+          "state": "87",
+          "attributes": {"device_class": "battery", "unit_of_measurement": "%"}
+        },
+        {
+          "entity_id": "light.hidden",
+          "state": "on",
+          "attributes": {}
+        }
+      ]
+    },
+    {"id": 5, "type": "result", "success": true, "result": null},
+    {
+      "id": 5,
+      "type": "event",
+      "event": {
+        "event_type": "state_changed",
+        "data": {
+          "entity_id": "light.ceiling",
+          "old_state": {"entity_id": "light.ceiling", "state": "on", "attributes": {"brightness": 128}},
+          "new_state": {
+            "entity_id": "light.ceiling",
+            "state": "off",
+            "attributes": {"brightness": 0, "friendly_name": "Contract Ceiling Light"},
+            "last_changed": "2026-11-03T01:03:00.000+00:00"
+          },
+          "origin": "LOCAL",
+          "time_fired": "2026-11-03T01:03:00.000+00:00"
+        }
+      }
+    },
+    {"id": 7, "type": "result", "success": true, "result": {"url": "/api/hls/contract/master.m3u8"}},
+    {
+      "id": 1001,
+      "type": "result",
+      "success": true,
+      "result": [
+        {"entity_id": "light.ceiling", "state": "on", "attributes": {"brightness": 255}}
+      ]
+    }
+  ]
+}

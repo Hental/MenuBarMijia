@@ -74,3 +74,14 @@ Placement math that reserves space and the view that draws inside it must read t
 - A view never hardcodes a size the placement reserves. When the two drift apart the content clips silently: #123's English empty state needed 65 pt inside a 44 pt row.
 - Empty and fallback states fill the reserved width (`.frame(maxWidth: .infinity)`) so they reflow instead of assuming a fixed column.
 
+## 11. External Payload Replay & Deterministic Fuzzing
+
+External payloads (Mi cloud responses, MIoT instance JSON, Home Assistant WebSocket frames, go2rtc MP4 bytes) are untrusted and change without notice:
+
+- Sanitised recordings live in `Tests/Fixtures/contracts/`. Each fixture carries a `_fixture` object with its endpoint, capture date and sanitisation note; identifiers, names, MAC addresses and IP addresses are synthetic. Addresses use TEST-NET ranges (`192.0.2.0/24`), never a real LAN.
+- `ContractReplayTests` decodes each fixture and asserts the exact stable fields the app consumes. When the upstream shape changes, update the fixture and the assertions together; never weaken an assertion to make a changed payload pass.
+- Fuzz tests use `SeededFuzzGenerator` with a fixed base seed and bounded iterations, and print `seed=<n> iteration=<n> input=<hex>` in every failure message. They must finish in milliseconds so the normal `swift test` suite keeps them.
+- A fuzzer that finds a trap ships with the fix and a minimal regression case (see the `tfhd` / `trun` short-payload and huge-number cases). Production code must not convert external numbers with trapping initialisers: use `Int(exactly:)` / `DeviceSynthesizer.roundedInt` and degrade to "no reading" when out of range.
+- A separate libFuzzer target is intentionally not wired into SwiftPM. The parsers are pure functions with deterministic seeds already reproducible on macOS and Linux; libFuzzer would add an LLVM-only build path without covering more code. Revisit only if a parser starts consuming non-deterministic process state.
+
+

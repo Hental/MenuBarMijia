@@ -1,0 +1,75 @@
+{
+  "_fixture": {
+    "endpoint": "GET https://miot-spec.org/miot-spec-v2/instance?type=...",
+    "captured": "2026-11-03",
+    "sanitised": "vendor segment replaced with `contract-light`; property, action and value-list shapes preserved",
+    "shape": "MIoT instance JSON decoded by MiotDeviceSpec"
+  },
+  "type": "urn:miot-spec-v2:device:light:0000A001:contract-light:2",
+  "description": "Light",
+  "services": [
+    {
+      "iid": 2,
+      "type": "urn:miot-spec-v2:service:light:00007802:contract-light:1",
+      "description": "Light",
+      "properties": [
+        {
+          "iid": 1,
+          "type": "urn:miot-spec-v2:property:on:00000006:contract-light:1",
+          "description": "Switch Status",
+          "format": "bool",
+          "access": ["read", "write", "notify"]
+        },
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:property:brightness:0000000D:contract-light:1",
+          "description": "Brightness",
+          "format": "uint8",
+          "access": ["read", "write", "notify"],
+          "value-range": [1, 100, 1],
+          "unit": "percentage"
+        },
+        {
+          "iid": 3,
+          "type": "urn:miot-spec-v2:property:color-temperature:0000000F:contract-light:1",
+          "description": "Color Temperature",
+          "format": "uint32",
+          "access": ["read", "write", "notify"],
+          "value-range": [2700, 6500, 1],
+          "unit": "kelvin"
+        },
+        {
+          "iid": 4,
+          "type": "urn:miot-spec-v2:property:mode:00000008:contract-light:1",
+          "description": "Mode",
+          "format": "uint8",
+          "access": ["read", "write", "notify"],
+          "value-list": [
+            {"value": 0, "description": "Auto"},
+            {"value": 1, "description": "Sleep"}
+          ]
+        },
+        {
+          "iid": 5,
+          "type": "urn:miot-spec-v2:property:manufacturer:00000001:contract-light:1",
+          "description": "Device Manufacturer",
+          "format": "string",
+          "access": ["read"]
+        }
+      ],
+      "actions": [
+        {
+          "iid": 1,
+          "type": "urn:miot-spec-v2:action:toggle:00002811:contract-light:1",
+          "description": "Toggle"
+        },
+        {
+          "iid": 2,
+          "type": "urn:miot-spec-v2:action:set-brightness:00002812:contract-light:1",
+          "description": "Set Brightness",
+          "in": [2]
+        }
+      ]
+    }
+  ]
+}

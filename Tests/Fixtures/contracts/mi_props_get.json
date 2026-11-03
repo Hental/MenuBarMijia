@@ -1,0 +1,17 @@
+{
+  "_fixture": {
+    "endpoint": "POST /app/miotspec/prop/get",
+    "captured": "2026-11-03",
+    "sanitised": "dids replaced with synthetic values; property values kept representative",
+    "shape": "decrypted response envelope {code, message, result}; result is an array of per-property results"
+  },
+  "code": 0,
+  "message": "ok",
+  "result": [
+    {"did": "did-light-0001", "siid": 2, "piid": 1, "value": true, "code": 0, "updateTime": 1790000000},
+    {"did": "did-light-0001", "siid": 2, "piid": 2, "value": 80, "code": 0, "updateTime": 1790000001},
+    {"did": "did-light-0001", "siid": 2, "piid": 3, "value": 4000, "code": 0, "updateTime": 1790000002},
+    {"did": "did-camera-0003", "siid": 2, "piid": 1, "value": "off", "code": 0, "updateTime": 1790000003},
+    {"did": "did-camera-0003", "siid": 2, "piid": 99, "value": null, "code": -704042001}
+  ]
+}

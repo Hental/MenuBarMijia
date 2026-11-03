@@ -23,7 +23,15 @@ public struct MiotValueListItem: Codable, Equatable, Sendable {
         if let i = try? c.decode(Int.self, forKey: .value) {
             value = i
         } else {
-            value = Int(try c.decode(Double.self, forKey: .value))
+            let number = try c.decode(Double.self, forKey: .value)
+            guard let i = Int(exactly: number.rounded(.towardZero)) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value,
+                    in: c,
+                    debugDescription: "value-list value is outside the supported integer range"
+                )
+            }
+            value = i
         }
         description = (try? c.decode(String.self, forKey: .description)) ?? ""
     }

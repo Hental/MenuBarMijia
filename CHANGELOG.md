@@ -5,6 +5,9 @@
 ### 安全
 - **更新签名密钥支持过渡公钥与轮换 / 吊销预案（[#164](https://github.com/jryang1997/MenuBarMijia/issues/164)）**：双端信任集扩展为“当前签名公钥 + 可选过渡公钥”，清单 `key_id` 必须指向实际验签的密钥；新增[轮换与吊销操作手册](docs/security/update-signing-key-rotation.md)，覆盖正常轮换的 provisioning / 切主 / 退役、回滚窗口、密钥泄露与丢失、用户手动补救与审计命令。`scripts/check.sh` 现在同时校验两端过渡公钥的一致性。
 
+### 测试
+- **外部接口契约回放与确定性模糊测试（[#186](https://github.com/jryang1997/MenuBarMijia/issues/186)）**：`Tests/Fixtures/contracts/` 新增脱敏录制（米家设备列表页、共享家庭房间、属性批量读取、MIoT 实例与实例索引、HA WebSocket 消息序列），由 `ContractReplayTests` 逐字段断言应用依赖的稳定字段；`FragmentedMP4Demuxer`、MIoT 规格解析与 HA 消息解析新增固定种子、限定迭代次数的模糊测试。模糊测试同时修复了大数 / 非有限值在 `JSONValue.intValue`、`idString`、MIoT `value-list` 与 HA 传感器合成中的整数转换崩溃，以及 fragmented MP4 `tfhd` / `trun` 可选字段越界读取崩溃，均附回归用例。真实 libFuzzer 目标未接入：这些解析器是可直接调用的纯函数，带种子的进程内 fuzz 已能在普通 `swift test` 中跨平台复现崩溃，无需额外 LLVM 工具链。
+
 ## 1.1.6
 
 ### 安全与凭据（[#143](https://github.com/jryang1997/MenuBarMijia/issues/143)）

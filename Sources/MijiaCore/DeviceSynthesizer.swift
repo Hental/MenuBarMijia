@@ -165,8 +165,9 @@ public enum JSONValue: Codable, Equatable, Sendable {
     }
 
     public var intValue: Int? {
-        if let d = doubleValue { return Int(d.rounded()) }
-        return nil
+        guard let d = doubleValue else { return nil }
+        // JSON numbers and numeric strings can exceed Int; `Int(_:)` traps on overflow.
+        return Int(exactly: d.rounded())
     }
 
     public var boolValue: Bool? {
@@ -640,7 +641,7 @@ public enum DeviceSynthesizer {
            let st = states[lightEnt.entity_id] {
             let isOn = (st.state == "on")
             let rawBri = st.attributes["brightness"]?.doubleValue
-            let briPct = rawBri.map { max(1, min(100, Int(($0 / 255.0 * 100.0).rounded()))) }
+            let briPct = rawBri.flatMap { Self.roundedInt($0 / 255.0 * 100.0).map { max(1, min(100, $0)) } }
             let kelvin = st.attributes["color_temp_kelvin"]?.intValue
             let minK = st.attributes["min_color_temp_kelvin"]?.intValue ?? 2700
             let maxK = st.attributes["max_color_temp_kelvin"]?.intValue ?? 6500
@@ -700,7 +701,7 @@ public enum DeviceSynthesizer {
             }
             let filterId = eids.first { $0.hasPrefix("sensor.") && $0.contains("filter_life") }
 
-            let pm25 = pm25Id.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }.map { Int($0.rounded()) }
+            let pm25 = pm25Id.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state).flatMap(Self.roundedInt) : nil }
                 ?? st.attributes["pm25"]?.intValue
             let aq = aqId.flatMap { states[$0] }.flatMap { $0.isAvailable ? $0.state : nil }
                 ?? st.attributes["air_quality"]?.stringValue
@@ -708,7 +709,7 @@ public enum DeviceSynthesizer {
                 ?? st.attributes["temperature"]?.doubleValue
             let hum = fanHumId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }
                 ?? st.attributes["humidity"]?.doubleValue
-            let filterLife = filterId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state) : nil }.map { Int($0.rounded()) }
+            let filterLife = filterId.flatMap { states[$0] }.flatMap { $0.isAvailable ? Double($0.state).flatMap(Self.roundedInt) : nil }
                 ?? st.attributes["filter_life_remaining"]?.intValue
 
             return SmartDevice(
@@ -740,7 +741,7 @@ public enum DeviceSynthesizer {
         if let vacId = eids.first(where: { $0.hasPrefix("vacuum.") }),
            let st = states[vacId] {
             let batId = eids.first(where: { $0.hasPrefix("sensor.") && $0.contains("battery_level") })
-            let bat = batId.flatMap { states[$0]?.state }.flatMap { Int(Double($0) ?? -1) }
+            let bat = batId.flatMap { states[$0]?.state }.flatMap { Self.roundedInt(Double($0) ?? -1) ?? -1 }
             let modeId = eids.first(where: { $0.hasPrefix("select.") && $0.contains("mode") })
             let modeState = modeId.flatMap { states[$0] }
             let currentMode = (modeState?.isAvailable == true) ? modeState?.state : nil
@@ -908,7 +909,7 @@ public enum DeviceSynthesizer {
             let lockId = eids.first(where: { $0.hasPrefix("lock.") })
             let lockSt = lockId.flatMap { states[$0] }
             let batSt = batId.flatMap { states[$0] }
-            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
+            let bVal = batSt.flatMap { Double($0.state).flatMap(Self.roundedInt) }
             let online = (lockSt?.isAvailable == true) || (batSt?.isAvailable == true)
             return SmartDevice(
                 id: deviceId,
@@ -965,7 +966,7 @@ public enum DeviceSynthesizer {
         if let mediaId = eids.first(where: { $0.hasPrefix("media_player.") }),
            let st = states[mediaId] {
             let volDouble = st.attributes["volume_level"]?.doubleValue ?? 0.2
-            let volPct = Int((volDouble * 100.0).rounded())
+            let volPct = Self.roundedInt(volDouble * 100.0) ?? 20
             let devClass = st.attributes["device_class"]?.stringValue ?? ""
 
             if devClass == "tv" || model.contains("tv") {
@@ -1036,7 +1037,7 @@ public enum DeviceSynthesizer {
 
             let tVal = tempSt.flatMap { Double($0.state) }
             let hVal = humSt.flatMap { Double($0.state) }
-            let bVal = batSt.flatMap { Double($0.state) }.map { Int($0.rounded()) }
+            let bVal = batSt.flatMap { Double($0.state).flatMap(Self.roundedInt) }
             let online = (tempSt?.isAvailable == true) || (humSt?.isAvailable == true)
 
             return SmartDevice(
@@ -1153,6 +1154,13 @@ public enum DeviceSynthesizer {
     }
 
     // MARK: - Naming & Normalization Helpers
+
+    /// External numbers (HA attributes, sensor states) can be non-finite or exceed `Int`;
+    /// converting them directly traps, so an unusable number degrades to "no reading".
+    static func roundedInt(_ value: Double) -> Int? {
+        guard value.isFinite else { return nil }
+        return Int(exactly: value.rounded())
+    }
 
     public static func normalizeRoomName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

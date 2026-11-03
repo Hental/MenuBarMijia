@@ -165,6 +165,130 @@ struct FragmentedMP4DemuxerTests {
     }
 }
 
+/// Deterministic fuzz pass over the live-stream demuxer (#186): go2rtc output is untrusted
+/// network input, so every byte sequence must end as an event list or an `FMP4DemuxError`.
+@Suite("Fragmented MP4 demuxer fuzz (#186)")
+struct FragmentedMP4DemuxerFuzzTests {
+    private static let seed: UInt64 = FuzzSupport.baseSeed ^ 0x00D3_3A2F
+
+    private static func validStream() -> Data {
+        let idr = FMP4Fixture.lengthPrefixed([FMP4Fixture.sps, FMP4Fixture.pps, Data([0x65, 0x88, 0x84, 0x00])])
+        let pFrame = FMP4Fixture.lengthPrefixed([Data([0x41, 0x9A, 0x02])])
+        var stream = FMP4Fixture.initSegment()
+        stream.append(FMP4Fixture.fragment(seq: 1, dts: 0, duration: 3600, sample: idr, keyframe: true))
+        stream.append(FMP4Fixture.fragment(seq: 2, dts: 3600, duration: 3600, sample: pFrame, keyframe: false))
+        return stream
+    }
+
+    private static func feed(
+        _ data: Data,
+        chunkLimit: Int,
+        rng: inout SeededFuzzGenerator,
+        into demuxer: inout FragmentedMP4Demuxer
+    ) throws -> [FMP4DemuxEvent] {
+        var events: [FMP4DemuxEvent] = []
+        var offset = 0
+        while offset < data.count {
+            let take = min(rng.int(in: 1...chunkLimit), data.count - offset)
+            events += try demuxer.append(data.subdata(in: offset..<(offset + take)))
+            offset += take
+        }
+        return events
+    }
+
+    @Test("Mutated streams either parse or throw a demux error, never trap")
+    func mutatedStreamsNeverTrap() {
+        let base = Self.validStream()
+        for iteration in 0..<250 {
+            let seed = FuzzSupport.iterationSeed(Self.seed, iteration)
+            var rng = SeededFuzzGenerator(seed: seed)
+            let mutated = FuzzSupport.mutate(base, rng: &rng)
+            var demuxer = FragmentedMP4Demuxer(maxBufferedBytes: 1 << 20)
+            do {
+                _ = try Self.feed(mutated, chunkLimit: 37, rng: &rng, into: &demuxer)
+            } catch let error as FMP4DemuxError {
+                _ = error
+            } catch {
+                Issue.record("seed=\(seed) iteration=\(iteration) input=\(FuzzSupport.hex(mutated)) error=\(error)")
+            }
+        }
+    }
+
+    @Test("Arbitrary bytes cannot escape the demux error type")
+    func arbitraryBytesNeverTrap() {
+        for iteration in 0..<250 {
+            let seed = FuzzSupport.iterationSeed(Self.seed &+ 1, iteration)
+            var rng = SeededFuzzGenerator(seed: seed)
+            let data = rng.bytes(count: rng.int(in: 0...512))
+            var demuxer = FragmentedMP4Demuxer(maxBufferedBytes: 4096)
+            do {
+                _ = try Self.feed(data, chunkLimit: 23, rng: &rng, into: &demuxer)
+            } catch let error as FMP4DemuxError {
+                _ = error
+            } catch {
+                Issue.record("seed=\(seed) iteration=\(iteration) input=\(FuzzSupport.hex(data)) error=\(error)")
+            }
+        }
+    }
+
+    @Test("Random chunk boundaries do not change demuxed events")
+    func chunkBoundariesAreStable() throws {
+        let base = Self.validStream()
+        var baseline = FragmentedMP4Demuxer()
+        let expected = try baseline.append(base)
+        #expect(expected.count == 3)
+        for iteration in 0..<40 {
+            let seed = FuzzSupport.iterationSeed(Self.seed &+ 2, iteration)
+            var rng = SeededFuzzGenerator(seed: seed)
+            var demuxer = FragmentedMP4Demuxer()
+            let events: [FMP4DemuxEvent]
+            do {
+                events = try Self.feed(base, chunkLimit: 97, rng: &rng, into: &demuxer)
+            } catch {
+                Issue.record("seed=\(seed) iteration=\(iteration) valid stream failed to demux: \(error)")
+                continue
+            }
+            #expect(events == expected, "seed=\(seed) iteration=\(iteration)")
+        }
+    }
+
+    @Test("A trun whose optional fields exceed its payload is rejected instead of trapping")
+    func truncatedTrunOptionalFields() {
+        var stream = FMP4Fixture.initSegment()
+        let tfhd = FMP4Fixture.box(
+            "tfhd",
+            FMP4Fixture.u32(0x0002_0038) + FMP4Fixture.u32(1)
+                + FMP4Fixture.u32(0) + FMP4Fixture.u32(0) + FMP4Fixture.u32(0)
+        )
+        // data-offset (0x1) and first-sample-flags (0x4) announced, but the payload is only 8 bytes.
+        let trun = FMP4Fixture.box("trun", FMP4Fixture.u32(0x0000_0005) + FMP4Fixture.u32(0))
+        let moof = FMP4Fixture.box("moof", FMP4Fixture.box("traf", tfhd + trun))
+        stream.append(moof)
+        stream.append(FMP4Fixture.box("mdat", Data()))
+
+        var demuxer = FragmentedMP4Demuxer()
+        #expect(throws: FMP4DemuxError.malformedBox("trun")) {
+            _ = try demuxer.append(stream)
+        }
+    }
+
+    @Test("A tfhd whose optional fields exceed its payload is rejected instead of trapping")
+    func truncatedTfhdOptionalFields() {
+        var stream = FMP4Fixture.initSegment()
+        // No samples; the tfhd sits last so its default-duration read would pass the moof end.
+        let trun = FMP4Fixture.box("trun", FMP4Fixture.u32(0) + FMP4Fixture.u32(0))
+        let tfhd = FMP4Fixture.box("tfhd", FMP4Fixture.u32(0x0000_0008) + FMP4Fixture.u32(1))
+        let moof = FMP4Fixture.box("moof", FMP4Fixture.box("traf", trun + tfhd))
+        stream.append(moof)
+        stream.append(FMP4Fixture.box("mdat", Data()))
+
+        var demuxer = FragmentedMP4Demuxer()
+        #expect(throws: FMP4DemuxError.malformedBox("tfhd")) {
+            _ = try demuxer.append(stream)
+        }
+    }
+}
+
 @Suite("go2rtc config comparison (#97)")
 struct Go2RTCConfigTests {
     @Test("Streams go2rtc appends to its config do not count as an app config change")

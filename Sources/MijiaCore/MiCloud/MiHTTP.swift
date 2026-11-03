@@ -94,7 +94,9 @@ extension JSONValue {
     var idString: String? {
         switch self {
         case .string(let s): return s
-        case .number(let n): return n == n.rounded() ? String(Int64(n)) : String(n)
+        case .number(let n):
+            if let integral = Int64(exactly: n) { return String(integral) }
+            return String(n)
         default: return nil
         }
     }
