@@ -5,8 +5,8 @@ mod placement;
 mod update_manifest;
 use home_assistant::{ha_execute, ha_snapshot};
 use placement::{
-    move_is_user_driven, move_suppression_deadline, place, resized_top, taskbar_edge, PanelAnchor,
-    PanelPlacement, PlacementInput, Rect, DRAG_SETTLE_MS,
+    drag_settle_finished, move_is_user_driven, move_suppression_deadline, place, resized_top,
+    taskbar_edge, PanelAnchor, PanelPlacement, PlacementInput, Rect, DRAG_SETTLE_MS,
 };
 
 #[cfg(test)]
@@ -2369,6 +2369,24 @@ fn position_popover(window: &WebviewWindow, anchor: Option<PhysicalPosition<f64>
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
+/// Whether the primary mouse button is still held. A drag that pauses without emitting `Moved` events
+/// is not finished, so the settle watcher must wait for the release (#204 review).
+#[cfg(all(windows, not(test)))]
+fn primary_button_down() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(vkey: i32) -> i16;
+    }
+    const VK_LBUTTON: i32 = 0x01;
+    // The high-order bit reports whether the key is currently down.
+    unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(any(not(windows), test))]
+fn primary_button_down() -> bool {
+    false
+}
+
 /// Ignore `Moved` events caused by our own placement calls; the window covers the IPC round trips.
 /// A running drag keeps the window: arming here would swallow the movement the user is producing.
 fn suppress_move_snaps() {
@@ -2378,15 +2396,27 @@ fn suppress_move_snaps() {
     }
 }
 
-/// Watches one native drag until the window has been still for a moment, then ends the session. Only a
-/// drag that actually moved the window snaps, so a plain header click leaves the panel where it is.
+/// Watches one native drag until the window is still **and** the pointer has been released, then ends
+/// the session. Only a drag that actually moved the window snaps, so a plain header click changes
+/// nothing.
 fn schedule_drag_settle(app: AppHandle) {
     MOVE_SNAP_DEADLINE_MS.store(now_epoch_ms() + DRAG_SETTLE_MS, Ordering::SeqCst);
     if MOVE_SNAP_SCHEDULED.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(move || {
-        while now_epoch_ms() < MOVE_SNAP_DEADLINE_MS.load(Ordering::SeqCst) {
+        loop {
+            let now = now_epoch_ms();
+            let quiet_until = MOVE_SNAP_DEADLINE_MS.load(Ordering::SeqCst);
+            // Only a released pointer finishes the drag; a pause while the button is still down is not
+            // a drop, so keep the quiet window rolling instead of snapping an intermediate corner.
+            let held = USER_DRAG_ACTIVE.load(Ordering::SeqCst) && primary_button_down();
+            if drag_settle_finished(now, quiet_until, held) {
+                break;
+            }
+            if now >= quiet_until {
+                MOVE_SNAP_DEADLINE_MS.store(now + DRAG_SETTLE_MS, Ordering::SeqCst);
+            }
             std::thread::sleep(Duration::from_millis(60));
         }
         let moved = USER_MOVES_SEEN.swap(false, Ordering::SeqCst);
@@ -2401,7 +2431,7 @@ fn schedule_drag_settle(app: AppHandle) {
     });
 }
 
-/// A drag emits `Moved` on every mouse step; keep the session alive until the pointer rests.
+/// A drag emits `Moved` on every mouse step; keep the session alive until the pointer is released.
 fn note_user_move(app: &AppHandle) {
     let drag_active = USER_DRAG_ACTIVE.load(Ordering::SeqCst);
     let suppressed_until = PROGRAMMATIC_MOVE_UNTIL_MS.load(Ordering::SeqCst);

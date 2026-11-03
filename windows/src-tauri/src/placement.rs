@@ -257,6 +257,13 @@ pub fn move_is_user_driven(drag_active: bool, now_ms: u64, suppressed_until_ms: 
     drag_active || now_ms >= suppressed_until_ms
 }
 
+/// Whether a drag-settle watcher may finish: the quiet window has passed and the native drag is no
+/// longer holding the pointer. Movement inactivity alone does not establish that the user dropped the
+/// panel — a paused-but-pressed drag keeps waiting (#204 review).
+pub fn drag_settle_finished(now_ms: u64, quiet_until_ms: u64, drag_held: bool) -> bool {
+    now_ms >= quiet_until_ms && !drag_held
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +423,18 @@ mod tests {
         // Once the window lapses, the next move is user movement again.
         assert!(move_is_user_driven(false, 1_600, 1_600));
         assert!(move_is_user_driven(false, 1_601, 0));
+    }
+
+    #[test]
+    fn a_held_pointer_keeps_the_drag_alive_past_the_quiet_window() {
+        // Quiet but still holding the button: the drag has not ended, so nothing may snap yet.
+        assert!(!drag_settle_finished(1_400, 1_350, true));
+        // Released and quiet: the panel can snap to the corner the drop chose.
+        assert!(drag_settle_finished(1_400, 1_350, false));
+        // Released but still moving: wait for the quiet window to pass.
+        assert!(!drag_settle_finished(1_300, 1_350, false));
+        // Pressed mid-move is never finished either.
+        assert!(!drag_settle_finished(1_300, 1_350, true));
     }
 
     #[test]
