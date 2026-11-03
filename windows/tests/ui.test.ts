@@ -428,6 +428,15 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
   });
 
+  it("marks values stale when the read-back after a write fails", async () => {
+    const { cloud } = await readyCloudApp();
+    cloud.failNextGets();
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => !!document.querySelector('[data-tile-id="fixture-light"]')?.classList.contains("is-stale"));
+    assert.match(textOf(".cc-feedback-text"), /HTTP 500|未能读回设备状态/);
+    assert.match(textOf('[data-tile-id="fixture-light"]'), /可能过期/);
+  });
+
   it("adds and removes kind chips when polling changes device availability", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");
@@ -643,6 +652,7 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     await withTimeout(heldRead.started, "Cloud refresh did not reach the stale response gate");
     await click('[data-toggle-device="fixture-light"]');
     await waitFor(() => cloud.writes.filter((write) => write.piid === 1).length === 1);
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
     assert.match(tile("fixture-light"), /已关闭/);
 
     heldRead.release();
@@ -652,11 +662,77 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
 
     await click('[data-toggle-device="fixture-light"]');
     await waitFor(() => cloud.writes.filter((write) => write.piid === 1).length === 2);
+    await waitFor(() => tile("fixture-light").includes("已开启"));
     assert.match(tile("fixture-light"), /已开启/);
     assert.deepEqual(
       cloud.writes.filter((write) => write.piid === 1).map((write) => write.value),
       [false, true],
     );
+  });
+
+  it("shows waiting until the power write is read back and ignores a second tap", async () => {
+    const { cloud } = await readyCloudApp();
+    const held = cloud.holdNextWrite();
+    void click('[data-toggle-device="fixture-light"]');
+    await withTimeout(held.started, "Power write did not start");
+    assert.match(tile("fixture-light"), /等待中/);
+    assert.doesNotMatch(tile("fixture-light"), /已关闭/);
+    await click('[data-toggle-device="fixture-light"]');
+    assert.equal(cloud.writes.filter((write) => write.piid === 1).length, 0);
+    held.release();
+    await withTimeout(held.finished, "Power write did not finish");
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
+    assert.equal(cloud.writes.filter((write) => write.piid === 1).length, 1);
+    assert.equal(cloud.writes.find((write) => write.piid === 1)?.value, false);
+  });
+
+  it("keeps the last device values and marks them possibly stale when a property read fails", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp();
+    assert.match(tile("fixture-light"), /已开启/);
+    cloud.failNextGets(1);
+    triggerRefresh();
+    await waitFor(() => tile("fixture-light").includes("可能过期"));
+    assert.doesNotMatch(tile("fixture-light"), /已开启/);
+    assert.doesNotMatch(tile("fixture-light"), /50%/);
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      cachedXiaomiDevices?: Array<{ kind: { isOn?: boolean } }>;
+    };
+    assert.equal(saved.cachedXiaomiDevices?.[0]?.kind.isOn, true);
+  });
+
+  it("accepts a numeric 0/1 power read-back", async () => {
+    const { cloud } = await readyCloudApp();
+    cloud.setNumericPowerReads(true);
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => tile("fixture-light").includes("已关闭"));
+    assert.match(tile("fixture-light"), /已关闭/);
+  });
+
+  it("does not celebrate or learn a power tap whose read-back still shows the old value", async () => {
+    const cloud = cloudFixture([]);
+    cloud.enableHabitLearning();
+    cloud.setEchoPowerReads(true);
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => (document.querySelector('[data-body-device="fixture-light"]')?.textContent ?? "").includes("已开启"));
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => (document.body.textContent ?? "").includes("未能读回设备状态"));
+    assert.match(tile("fixture-light"), /已开启/);
+    assert.equal(localStorage.getItem("menumijia.windows.habit.sequences.v1"), null);
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      habitEntries?: unknown[];
+    };
+    assert.equal(saved.habitEntries?.length ?? 0, 0);
+  });
+
+  it("clears a Xiaomi stale mark when the connection mode changes", async () => {
+    const { cloud, triggerRefresh } = await readyCloudApp();
+    cloud.failNextGets(1);
+    triggerRefresh();
+    await waitFor(() => tile("fixture-light").includes("可能过期"));
+    await click("#btn-settings");
+    await click('[data-conn-mode="demo"]');
+    await waitFor(() => !(document.body.textContent ?? "").includes("可能过期"));
+    assert.doesNotMatch(document.body.textContent ?? "", /可能过期/);
   });
 
   it("patches dynamic values without replacing the focused device control", async () => {
@@ -2880,6 +2956,37 @@ describe("Home Assistant source", () => {
     assert.equal(element('[data-body-device="study-light"]'),card);
     assert.equal(document.activeElement,input);
     assert.match(tile("study-light"),/78%|78 %/);
+  });
+
+  it("treats a momentary button card press as an accepted action", async () => {
+    const executed: Array<Record<string, unknown>> = [];
+    const invoke = async (name: string, args: Record<string, unknown> = {}) => {
+      if (name === "secure_store_get") return "controlled-token";
+      if (name === "ha_snapshot") {
+        const next = structuredClone(fixture);
+        next.devices.push({ id: "wol-pc", area_id: "study", name: "书房台式机", model: "Wake on LAN", disabled_by: null });
+        next.entities.push({ entity_id: "button.wake_on_lan_pc", device_id: "wol-pc", area_id: "study", disabled_by: null, hidden_by: null, entity_category: null });
+        next.states.push({ entity_id: "button.wake_on_lan_pc", state: "unknown", attributes: { friendly_name: "书房台式机" } });
+        return next;
+      }
+      if (name === "ha_execute") {
+        executed.push(args);
+        return undefined;
+      }
+      return undefined;
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "homeAssistant",
+      haBaseURL: "http://localhost:8123",
+      hasCompletedOnboarding: true,
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await waitFor(() => !!document.querySelector('[data-toggle-device="wol-pc"]'));
+    await click('[data-toggle-device="wol-pc"]');
+    assert.equal(executed.length, 1);
+    assert.equal((executed[0]?.command as { service?: string })?.service, "press");
+    assert.match(element(".cc-feedback-text").textContent ?? "", /已打开书房台式机/);
   });
 
   it("preserves restorable light undo when a batch also activates a momentary button.*", async () => {

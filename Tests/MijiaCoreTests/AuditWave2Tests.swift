@@ -487,9 +487,9 @@ struct AuditWave2Tests {
         let (store, _) = try await makeStore(devices: [bedroomLight, livingLight], suite: suite)
 
         let living = try #require(store.devices.first(where: { $0.id == "living_light" }))
-        store.togglePrimary(living)                 // on
-        store.togglePrimary(living)                 // off, but remembered
-        try await Task.sleep(for: .milliseconds(30))
+        #expect(await store.togglePrimary(living)?.value == true)
+        let livingOn = try #require(store.devices.first(where: { $0.id == "living_light" }))
+        #expect(await store.togglePrimary(livingOn)?.value == true)
 
         store.executeQuickAction(.softNightLight)
         let bedroomAfter = try #require(store.devices.first(where: { $0.id == "bed_light" }))
@@ -549,9 +549,7 @@ struct AuditWave2Tests {
         #expect(store.environmentReadings.count == 3)
 
         let lamp = try #require(store.devices.first(where: { $0.id == "demo_study_light" }))
-        store.togglePrimary(lamp)
-        await store.provider.refreshNow()
-        try await Task.sleep(for: .milliseconds(30))
+        #expect(await store.togglePrimary(lamp)?.value == true)
         let demoLampOn = store.devices.first(where: { $0.id == "demo_study_light" })?.isActiveOn
         #expect(demoLampOn == true)
     }

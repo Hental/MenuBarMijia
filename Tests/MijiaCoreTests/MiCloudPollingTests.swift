@@ -97,6 +97,70 @@ struct MiCloudPollingTests {
         await provider.shutdown()
     }
 
+    @Test("A split card reads properties from its parent MIoT did")
+    func splitCardReadsParentProperties() async throws {
+        let split = MiDeviceRecord(
+            did: "123.s2",
+            name: "书房开关",
+            model: "yeelink.light.ceiling22",
+            isOnline: true,
+            splitParentDid: "123",
+            splitSiid: 2
+        )
+        let api = StubMiCloudAPI(devices: [split], rooms: [], values: MiotFixtures.lightValues)
+        let provider = MiCloudProvider(
+            sessionLoader: { Self.session },
+            apiFactory: { _ in api },
+            specSource: StubSpecSource(),
+            pollInterval: .seconds(60),
+            selectedHomeLoader: { nil }
+        )
+        let (log, task) = start(provider)
+        defer { task.cancel() }
+        #expect(await log.wait { await !$0.snapshots.isEmpty })
+
+        let read = await provider.readBack(deviceId: "123.s2")
+        if case .published = read {} else {
+            Issue.record("Expected a published read-back")
+        }
+        let keys = await api.getPropsCalls.last ?? []
+        #expect(!keys.isEmpty)
+        #expect(Set(keys.map(\.did)) == ["123"])
+        await provider.shutdown()
+    }
+
+    @Test("A failed read-back disconnect clears after the next successful poll")
+    func readBackFailureRecoversConnection() async throws {
+        let api = StubMiCloudAPI(devices: [MiotFixtures.lightRecord], rooms: [], values: MiotFixtures.lightValues)
+        let provider = MiCloudProvider(
+            sessionLoader: { Self.session },
+            apiFactory: { _ in api },
+            specSource: StubSpecSource(),
+            pollInterval: .seconds(60),
+            closedPollInterval: .seconds(60),
+            selectedHomeLoader: { nil }
+        )
+        let (log, task) = start(provider)
+        defer { task.cancel() }
+        #expect(await log.wait { await $0.statuses.contains(.connected) })
+
+        await api.setGetPropsFailure(.http(500))
+        let read = await provider.readBack(deviceId: "123")
+        if case .failed = read {} else {
+            Issue.record("Expected a failed read-back")
+        }
+        let message = MiCloudError.http(500).errorDescription ?? ""
+        #expect(await log.wait { await $0.statuses.contains(.disconnected(message)) })
+
+        await api.setGetPropsFailure(nil)
+        await provider.refreshNow()
+        #expect(await log.wait { events in
+            let statuses = await events.statuses
+            return statuses.filter { $0 == .connected }.count >= 2
+        })
+        await provider.shutdown()
+    }
+
     @Test("HTTP 429 shows a rate-limit message and waits at least a minute before retrying")
     func rateLimitBacksOff() async throws {
         let api = StubMiCloudAPI(devices: [], rooms: [], values: [:], failure: .http(429))

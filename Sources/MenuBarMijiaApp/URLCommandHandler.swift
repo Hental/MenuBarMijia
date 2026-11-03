@@ -168,17 +168,17 @@ final class URLCommandHandler {
             // than a prediction made before the confirmation sheet appeared.
             let isMomentary = device.isMomentaryButton
             let task = store.togglePrimary(device)
-            let isOnNow = store.devices.first(where: { $0.id == device.id })?.isActiveOn ?? false
             guard await task?.value == true else {
                 finish(
                     isMomentary
                         ? L10n.format("%@ 触发失败", "Failed to trigger %@", device.name)
-                        : L10n.format("%@ 响应失败，已回滚", "%@ failed to respond; rolled back", device.name),
+                        : L10n.format("%@ 响应失败", "%@ failed to respond", device.name),
                     isError: true,
                     store: store
                 )
                 return
             }
+            let isOnNow = store.devices.first(where: { $0.id == device.id })?.isActiveOn ?? false
             if isMomentary {
                 finish(
                     L10n.format("已触发 %@", "Triggered %@", device.name),

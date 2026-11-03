@@ -39,6 +39,7 @@ import {
   type MiDeviceRecord,
   type MiRoom,
   MiotCommandMapper,
+  propKeyString,
   type MiotDeviceSpec,
   type MiotPropKey,
   MiotSpecResolver,
@@ -81,6 +82,8 @@ import {
   cloudRefreshDue,
   deviceCanTogglePower,
   deviceEnvironmentReading,
+  deviceReadout,
+  readMiotPower,
   deviceStatusSummary,
   environmentReadingPriority,
   isDeviceActiveOn,
@@ -801,6 +804,18 @@ export function waitForCameraFrameGap(signal: AbortSignal, ms: number): Promise<
   });
 }
 
+function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
+  switch (command.kind) {
+    case "setLightPower":
+    case "setClimatePower":
+    case "setFanPower":
+    case "setSwitch":
+      return { ...command, isOn };
+    default:
+      return command;
+  }
+}
+
 export class MenuMijiaWindowsApp {
   private readonly loadedSettings: LoadedSettings = loadSettings();
   private settings: PersistedSettings = this.loadedSettings.settings;
@@ -849,6 +864,9 @@ export class MenuMijiaWindowsApp {
   private onboardingStep = 0;
   private replyBanner: ReplyBannerState | null = null;
   private haConnectionError: string | null = null;
+  private waitingDeviceIds = new Set<string>();
+  /** A Xiaomi refresh failed after devices were already on screen. */
+  private cloudValuesStale = false;
   /** A command waiting for the user to allow sending it to a cloud AI service (#20). */
   private pendingCloudConsent: { utterance: string; endpoint: string } | null = null;
   /** AI guesses that wait for a tap instead of running by themselves (#21). */
@@ -1454,6 +1472,7 @@ export class MenuMijiaWindowsApp {
     const session = this.settings.miSession;
     const previousPresentation = this.cloudPresentationFingerprint();
     const previousStructure = this.cloudPanelStructureFingerprint();
+    const staleBefore = this.cloudValuesStale;
     const stateRevisionAtStart = this.localControlRevision;
     const syncGen = ++this.syncGeneration;
     let presentationChanged = false;
@@ -1499,13 +1518,24 @@ export class MenuMijiaWindowsApp {
         }
       }
 
-      const values =
-        propKeys.length > 0
-          ? await client.getProps(propKeys).catch(() => new Map<string, unknown>())
-          : new Map<string, unknown>();
+      let values: Map<string, unknown>;
+      try {
+        values =
+          propKeys.length > 0
+            ? await client.getProps(propKeys)
+            : new Map<string, unknown>();
+      } catch (error) {
+        // A failed property read must not rebuild every device from defaults.
+        if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
+          this.markCloudValuesStale();
+        }
+        throw error;
+      }
 
       const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
+      // An old refresh must not clear or set freshness for the connection that replaced it.
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
+      this.markCloudValuesFresh();
       // Cloud list order is not a layout preference. Keep known devices in their
       // displayed order, use fresh values, drop removed ids and append new ones.
       this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
@@ -1542,6 +1572,9 @@ export class MenuMijiaWindowsApp {
         };
       }
     } catch (err) {
+      if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
+        this.markCloudValuesStale();
+      }
       if (!silent) {
         const msg = err instanceof Error ? err.message : String(err);
         this.replyBanner = {
@@ -1553,7 +1586,8 @@ export class MenuMijiaWindowsApp {
     } finally {
       if (this.syncGeneration === syncGen) {
         this.isSyncingCloud = false;
-        if (!silent) {
+        const staleChanged = staleBefore !== this.cloudValuesStale;
+        if (!silent || staleChanged) {
           this.render();
         } else if (presentationChanged) {
           if (
@@ -2287,11 +2321,19 @@ export class MenuMijiaWindowsApp {
     command: DeviceCommand,
     summary: string,
     intent?: DeviceIntent,
+    readBackPower = false,
   ): Promise<void> {
     const sourceRevision = this.sourceRevision;
     const inverseCommands = this.buildInverseCommand(device, command);
-    if (!(await this.applyCommand(command))) return;
+    if (!(await this.applyCommand(command, readBackPower))) return;
     if (sourceRevision !== this.sourceRevision) return;
+    // Momentary buttons (Wake-on-LAN) complete without reporting an on/off state to compare.
+    const isMomentaryButton = command.kind === "setSwitch" && command.entityId.startsWith("button.");
+    if (readBackPower && !isMomentaryButton && !this.readBackMatches(device.id, intent)) {
+      this.replyBanner = { text: t("未能读回设备状态"), source: t("控制失败"), isError: true };
+      this.render();
+      return;
+    }
     this.grokBallCelebrationUntil = Date.now() + 2400;
     const habitReceipt = intent ? this.recordHabits([intent]) : null;
     this.lastUndoAction = inverseCommands.length > 0 ? {
@@ -2302,6 +2344,12 @@ export class MenuMijiaWindowsApp {
     } : null;
     this.replyBanner = { text: summary, source: t("实时控制") };
     this.render();
+  }
+
+  private readBackMatches(deviceId: string, intent?: DeviceIntent): boolean {
+    if (!intent || intent.operation.kind !== "power") return true;
+    const current = this.devices.find((item) => item.id === deviceId);
+    return current !== undefined && isDeviceActiveOn(current) === intent.operation.isOn;
   }
 
   /** Records manual card actions into the habit memory for the current time bucket (#113). */
@@ -2643,11 +2691,12 @@ export class MenuMijiaWindowsApp {
     this.render();
   }
 
-  private async applyCommand(command: DeviceCommand): Promise<boolean> {
+  private async applyCommand(command: DeviceCommand, readBackPower = false): Promise<boolean> {
     const sourceRevision = this.sourceRevision;
     try {
       if (this.settings.connectionMode === "homeAssistant") command = homeAssistantCommand(command, this.devices);
-      await this.dispatchCloudCommand(command);
+      const readPower = await this.dispatchCloudCommand(command, readBackPower);
+      if (typeof readPower === "boolean") command = withReadPower(command, readPower);
     } catch (error) {
       if (sourceRevision !== this.sourceRevision) return false;
       this.replyBanner = {
@@ -2790,14 +2839,15 @@ export class MenuMijiaWindowsApp {
     return true;
   }
 
-  private async dispatchCloudCommand(command: DeviceCommand): Promise<void> {
+  private async dispatchCloudCommand(command: DeviceCommand, readBackPower = false): Promise<boolean | null> {
     const sourceRevision = this.sourceRevision;
-    if (this.settings.connectionMode === "demo") return;
+    if (this.settings.connectionMode === "demo") return null;
     if (this.settings.connectionMode === "homeAssistant") {
       const client = new HomeAssistantClient(this.settings.haBaseURL, this.settings.haToken);
       await this.endpointSubmission;
       if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
-      return client.execute(command);
+      await client.execute(command);
+      return null;
     }
     if (!this.settings.miSession) throw new Error(t("请先扫码登录米家"));
     const session = this.settings.miSession;
@@ -2829,9 +2879,50 @@ export class MenuMijiaWindowsApp {
     const client = new MiCloudClient(session, this.transport);
     if (mapped.kind === "setProps") {
       await client.setProps(mapped.writes);
+      if (readBackPower) {
+        const power = mapped.writes.find((write) => typeof write.value === "boolean");
+        if (power) {
+          let read: Map<string, unknown>;
+          try {
+            read = await client.getProps([power]);
+          } catch (error) {
+            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
+            throw error;
+          }
+          const value = read.get(propKeyString(power));
+          const isOn = readMiotPower(value);
+          if (isOn === null) {
+            // The write may have landed; the old row is no longer a trusted reading.
+            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
+            throw new Error(t("未能读回设备状态"));
+          }
+          return isOn;
+        }
+      }
     } else {
       await client.action(mapped.call);
     }
+    return null;
+  }
+
+  private markCloudValuesStale(): void {
+    if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
+      this.cloudValuesStale = true;
+    }
+  }
+
+  private markCloudValuesFresh(): void {
+    if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
+  }
+
+  private get valuesAreStale(): boolean {
+    if (this.settings.connectionMode === "xiaomiCloud") {
+      return this.cloudValuesStale && this.devices.length > 0;
+    }
+    if (this.settings.connectionMode === "homeAssistant") {
+      return this.haConnectionError !== null && this.devices.length > 0;
+    }
+    return false;
   }
 
   private toggleVoiceInput(): void {
@@ -2941,6 +3032,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private get statusSummaryText(): string {
+    if (this.valuesAreStale) return t("可能过期");
     if (this.settings.connectionMode === "homeAssistant") return this.isSyncingCloud ? "Home Assistant · Connecting" : `Home Assistant · ${this.onlineDeviceCount} online`;
     if (this.settings.connectionMode === "xiaomiCloud") {
       if (this.isSyncingCloud && this.devices.length === 0) {
@@ -3421,6 +3513,9 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderEnvironmentStrip(): string {
+    if (this.valuesAreStale) {
+      return `<div class="cc-env-strip"><div class="cc-env-chip"><span class="cc-env-label">${t("可能过期")}</span></div></div>`;
+    }
     const envChips = this.computedEnvironmentReadings;
     const watts = this.totalPowerWatts;
     if (envChips.length === 0 && watts < 1) return "";
@@ -3575,7 +3670,8 @@ export class MenuMijiaWindowsApp {
       return this.renderClimateStrip(dev, dev.kind, size === "panel", attrs, motion, badge);
     }
     const isExpanded = this.expandedDeviceId === dev.id || size === "panel";
-    const isOn = isDeviceActiveOn(dev);
+    const readout = deviceReadout(this.waitingDeviceIds.has(dev.id), this.valuesAreStale);
+    const isOn = readout === "possiblyStale" ? false : isDeviceActiveOn(dev);
     const kind = dev.kind.kind;
     const palette = this.devicePaletteClass(dev);
     const svg = this.deviceSvgIcon(dev);
@@ -3610,9 +3706,16 @@ export class MenuMijiaWindowsApp {
     const fill = kind === "light" && this.skin !== "classic" && !isExpanded
       ? dim ?? (isOn && dev.kind.kind === "light" ? dev.kind.brightnessPercent ?? 100 : 0)
       : 0;
-    const shownSubtitle = dim !== null ? t("亮度 {percent}%", { percent: dim }) : subtitle;
+    const shownSubtitle = readout === "waiting"
+      ? t("等待中")
+      : readout === "possiblyStale"
+        ? t("可能过期")
+        : dim !== null
+          ? t("亮度 {percent}%", { percent: dim })
+          : subtitle;
+    const staleClass = readout === "possiblyStale" ? "is-stale" : "";
     return `
-      <div class="cc-tile ${palette} ${isOn ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""} ${dev.isOnline ? "" : "is-offline"} ${kind === "light" ? "is-light" : ""} ${this.skin === "bento" && span < 6 ? "is-bento-tile" : ""} ${motion}" ${attrs}>
+      <div class="cc-tile ${palette} ${isOn ? "is-active" : ""} ${isExpanded ? "is-expanded" : ""} ${dev.isOnline ? "" : "is-offline"} ${staleClass} ${kind === "light" ? "is-light" : ""} ${this.skin === "bento" && span < 6 ? "is-bento-tile" : ""} ${motion}" ${attrs}>
         ${fill > 0 ? `<span class="cc-tile-fill" style="width:${fill}%"></span>` : ""}
         ${badge}
         <div class="cc-tile-header">
@@ -3670,6 +3773,15 @@ export class MenuMijiaWindowsApp {
   ): string {
     const c = comfort(k.temperature, k.humidity);
     const name = dev.name.replace(t("米家智能温湿度计"), t("温湿度计")) || dev.name;
+    if (this.valuesAreStale) {
+      const label = t("可能过期");
+      return `
+        <div class="cc-tile cc-sensor is-stale ${motion}" ${attrs} role="group" aria-label="${this.escapeHtml(`${name}，${label}`)}">
+          ${badge}
+          <div class="cc-sensor-top"><span class="cc-sensor-name">${this.escapeHtml(name)}</span></div>
+          <div class="cc-sensor-main"><span class="cc-sensor-temp">${label}</span></div>
+        </div>`;
+    }
     const temp = k.temperature !== null ? formatTemperatureValue(k.temperature, undefined, 1) : "--";
     const hum = k.humidity !== null ? Math.round(k.humidity) : null;
     const room = this.selectedRoom === "全部" ? `<span class="cc-sensor-room">${this.escapeHtml(dev.roomName)}</span>` : "";
@@ -3720,21 +3832,26 @@ export class MenuMijiaWindowsApp {
     motion: string,
     badge: string,
   ): string {
-    const running = dev.isOnline && k.isOn && k.hvacMode !== "off";
+    const readout = deviceReadout(this.waitingDeviceIds.has(dev.id), this.valuesAreStale);
+    const running = readout !== "possiblyStale" && dev.isOnline && k.isOn && k.hvacMode !== "off";
     const powerWritable = k.powerWritable !== false;
     const temperatureWritable = k.temperatureWritable !== false;
     const canExpand = temperatureWritable || k.availableModes.length > 0 || k.availableFanModes.length > 0;
     const open = canExpand && (forceOpen || this.expandedDeviceId === dev.id);
     const id = this.escapeHtml(dev.id);
     const modeLabel: Record<string, string> = { cool: t("制冷"), heat: t("制热"), dry: t("除湿"), fan_only: t("送风"), auto: t("自动") };
-    const status = running
-      ? [
-          modeLabel[k.hvacMode] ?? k.hvacMode,
-          k.currentTemperature !== null
-            ? t("室温 {temp}", { temp: formatTemperature(k.currentTemperature, undefined, 1) })
-            : "",
-        ].filter(Boolean).join(" · ")
-      : t("已关闭");
+    const status = readout === "waiting"
+      ? t("等待中")
+      : readout === "possiblyStale"
+        ? t("可能过期")
+        : running
+          ? [
+              modeLabel[k.hvacMode] ?? k.hvacMode,
+              k.currentTemperature !== null
+                ? t("室温 {temp}", { temp: formatTemperature(k.currentTemperature, undefined, 1) })
+                : "",
+            ].filter(Boolean).join(" · ")
+          : t("已关闭");
     const subtitle = this.selectedRoom === "全部" ? `${dev.roomName} · ${status}` : status;
     const span = Math.max(k.maxTemp - k.minTemp, 1);
     const progress = Math.min(Math.max((k.targetTemperature - k.minTemp) / span, 0), 1) * 100;
@@ -3754,13 +3871,15 @@ export class MenuMijiaWindowsApp {
       : `<span class="cc-climate-power ${running ? "is-on" : ""}" aria-hidden="true">
             <span ${k.hvacMode === "heat" ? "" : "hidden"}>🔥</span><span ${k.hvacMode === "heat" ? "hidden" : ""}>${SF_ICONS.snowflake}</span>
           </span>`;
-    const steps = temperatureWritable
+    const steps = readout === "possiblyStale"
+      ? ""
+      : temperatureWritable
       ? `<button class="cc-climate-step" data-acstep="${id}:-1" title="${t("降低温度")}" aria-label="${t("降低目标温度")}">−</button>
           <span class="cc-climate-temp" aria-label="${t("目标温度 {temp}", { temp: formatTemperature(k.targetTemperature) })}">${temp}<small>${temperatureSymbol(unit)}</small></span>
           <button class="cc-climate-step" data-acstep="${id}:1" title="${t("升高温度")}" aria-label="${t("升高目标温度")}">＋</button>`
       : `<span class="cc-climate-temp" aria-label="${t("目标温度 {temp}", { temp: formatTemperature(k.targetTemperature) })}">${temp}<small>${temperatureSymbol(unit)}</small></span>`;
     return `
-      <div class="cc-tile cc-climate ${running ? "is-active" : ""} ${dev.isOnline ? "" : "is-offline"} ${motion}" ${attrs}>
+      <div class="cc-tile cc-climate ${running ? "is-active" : ""} ${dev.isOnline ? "" : "is-offline"} ${readout === "possiblyStale" ? "is-stale" : ""} ${motion}" ${attrs}>
         ${badge}
         <div class="cc-climate-strip">
           ${power}
@@ -3770,7 +3889,7 @@ export class MenuMijiaWindowsApp {
           </button>
           ${steps}
         </div>
-        <div class="cc-climate-gauge" role="progressbar" aria-label="${t("目标温度进度")}" aria-valuemin="${k.minTemp}" aria-valuemax="${k.maxTemp}" aria-valuenow="${k.targetTemperature}"><span style="width:${progress}%"></span></div>
+        ${readout === "possiblyStale" ? "" : `<div class="cc-climate-gauge" role="progressbar" aria-label="${t("目标温度进度")}" aria-valuemin="${k.minTemp}" aria-valuemax="${k.maxTemp}" aria-valuenow="${k.targetTemperature}"><span style="width:${progress}%"></span></div>`}
         ${
           open
             ? `<div class="cc-climate-more">
@@ -5619,6 +5738,7 @@ export class MenuMijiaWindowsApp {
         this.render();
         return;
       }
+      if (this.waitingDeviceIds.has(id)) return;
       const nextOn = !isDeviceActiveOn(dev);
       this.poppedDeviceId = dev.id;
       const cmds = IntentValidator.commandsForIntent(
@@ -5626,14 +5746,23 @@ export class MenuMijiaWindowsApp {
         dev,
       );
       const firstCmd = cmds[0];
-      if (firstCmd) {
-        void this.executeSingleCommand(
-          dev,
-          firstCmd,
-          `已${nextOn ? t("打开") : t("关闭")}${dev.name}`,
-          { targetId: dev.id, operation: { kind: "power", isOn: nextOn } },
-        );
+      if (!firstCmd) return;
+      const waitsForCloud = this.settings.connectionMode !== "demo";
+      if (waitsForCloud) {
+        this.waitingDeviceIds.add(id);
+        this.render();
       }
+      void this.executeSingleCommand(
+        dev,
+        firstCmd,
+        `已${nextOn ? t("打开") : t("关闭")}${dev.name}`,
+        { targetId: dev.id, operation: { kind: "power", isOn: nextOn } },
+        waitsForCloud,
+      ).finally(() => {
+        if (!waitsForCloud) return;
+        this.waitingDeviceIds.delete(id);
+        this.render();
+      });
     };
 
     this.root.querySelectorAll<HTMLElement>("[data-toggle-device]").forEach((btn) => {
@@ -6039,6 +6168,7 @@ export class MenuMijiaWindowsApp {
         this.homes = [];
         this.replyBanner = null;
         this.settings.connectionMode = mode;
+        if (mode !== "xiaomiCloud") this.cloudValuesStale = false;
         this.selectedRoom = "全部";
         if (mode === "demo") {
           this.devices = demoDevices();

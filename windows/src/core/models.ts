@@ -530,6 +530,21 @@ export function localizeAirQuality(raw: string | null | undefined, pm25?: number
   return t("严重污染");
 }
 
+export type DeviceReadout = "live" | "waiting" | "possiblyStale";
+
+export function deviceReadout(isWaiting: boolean, valuesAreStale: boolean): DeviceReadout {
+  if (isWaiting) return "waiting";
+  if (valuesAreStale) return "possiblyStale";
+  return "live";
+}
+
+/** MIoT `on` is a bool on some devices and 0/1 on others. Anything else is not a power reading. */
+export function readMiotPower(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+  return null;
+}
+
 export function deviceStatusSummary(device: SmartDevice): string {
   if (!device.isOnline) return t("离线");
   const k = device.kind;
