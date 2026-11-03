@@ -626,6 +626,92 @@ struct MiotSynthesizerTests {
         #expect(offline.statusSubtitle.contains("离线"))
     }
 
+    @Test("A failed door-state read drops the previous Locked claim (#149)")
+    func failedDoorStateReadDropsStaleLock() throws {
+        let door = MiotPropKey(did: "lk", siid: 2, piid: 1)
+        let battery = MiotPropKey(did: "lk", siid: 3, piid: 1)
+        let spec = Self.lockSpecWithBattery()
+        let device = MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: true)
+        let requestedLocks = MiotSynthesizer.doorStateKeys(for: device, spec: spec)
+        #expect(requestedLocks == [door])
+        let doorService = Self.lockSpec(description: "Locked", onDoorService: true)
+        #expect(MiotSynthesizer.doorStateKeys(for: device, spec: doorService) == [MiotPropKey(did: "lk", siid: 4, piid: 1)])
+
+        let firstRead = MiCloudClient.parsePropValues(.array([
+            .object(["did": .string("lk"), "siid": .number(2), "piid": .number(1), "code": .number(0), "value": .number(1)]),
+            .object(["did": .string("lk"), "siid": .number(3), "piid": .number(1), "code": .number(0), "value": .number(80)]),
+        ]))
+        var values: [MiotPropKey: JSONValue] = [MiotPropKey(did: "lamp", siid: 2, piid: 1): .bool(true)]
+        MiCloudProvider.applyPropRead(&values, fresh: firstRead, requestedLockKeys: requestedLocks)
+        let locked = try Self.lockSensor(values: values, spec: spec)
+        #expect(locked.statusText == "已上锁")
+        #expect(locked.battery == 80)
+
+        // Per-item failure: the door-state result carries a non-zero code and is omitted.
+        let secondRead = MiCloudClient.parsePropValues(.array([
+            .object(["did": .string("lk"), "siid": .number(2), "piid": .number(1), "code": .number(-704042011), "value": .number(1)]),
+            .object(["did": .string("lk"), "siid": .number(3), "piid": .number(1), "code": .number(0), "value": .number(80)]),
+        ]))
+        #expect(secondRead[door] == nil)
+        #expect(secondRead[battery] == .number(80))
+        MiCloudProvider.applyPropRead(&values, fresh: secondRead, requestedLockKeys: requestedLocks)
+        let unknown = try Self.lockSensor(values: values, spec: spec)
+        #expect(unknown.statusText == "锁状态未知")
+        #expect(unknown.battery == 80)
+        #expect(values[MiotPropKey(did: "lamp", siid: 2, piid: 1)] == .bool(true))
+    }
+
+    fileprivate static func lockSpecWithBattery() -> MiotDeviceSpec {
+        MiotDeviceSpec(
+            type: "urn:miot-spec-v2:device:lock:0000A038:test:1",
+            services: [
+                MiotService(
+                    iid: 2,
+                    type: "urn:miot-spec-v2:service:lock:00007855:test:1",
+                    properties: [
+                        MiotProperty(
+                            iid: 1,
+                            type: "urn:miot-spec-v2:property:door-state:00000001:test:1",
+                            format: "uint8",
+                            access: ["read", "notify"],
+                            valueList: [
+                                MiotValueListItem(value: 1, description: "Locked"),
+                                MiotValueListItem(value: 2, description: "Unlocked"),
+                            ]
+                        ),
+                    ]
+                ),
+                MiotService(
+                    iid: 3,
+                    type: "urn:miot-spec-v2:service:battery:00007805:test:1",
+                    properties: [
+                        MiotProperty(
+                            iid: 1,
+                            type: "urn:miot-spec-v2:property:battery-level:00000014:test:1",
+                            format: "uint8",
+                            access: ["read"],
+                            valueRange: [0, 100, 1]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private static func lockSensor(values: [MiotPropKey: JSONValue], spec: MiotDeviceSpec) throws -> SensorSpec {
+        let home = MiotSynthesizer.synthesize(
+            devices: [MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: true)],
+            rooms: [],
+            specs: ["xiaomi.lock.s2": spec],
+            values: values
+        )
+        guard case .sensor(let sensor) = try #require(home.devices.first).kind else {
+            Issue.record("expected a lock sensor card")
+            return SensorSpec()
+        }
+        return sensor
+    }
+
     private static func lockSpec(description: String, onDoorService: Bool) -> MiotDeviceSpec {
         let door = MiotProperty(
             iid: 1,
@@ -764,6 +850,8 @@ actor StubMiCloudAPI: MiCloudAPI {
 
     func setValue(_ key: MiotPropKey, _ value: JSONValue) { values[key] = value }
 
+    func removeValue(_ key: MiotPropKey) { values.removeValue(forKey: key) }
+
     private(set) var deviceListCalls = 0
 
     func deviceList() async throws -> [MiDeviceRecord] {
@@ -869,6 +957,16 @@ struct StubSpecSource: MiotSpecSource {
     }
 }
 
+private struct FixedSpecSource: MiotSpecSource {
+    let spec: MiotDeviceSpec
+    func spec(model: String, specType: String?) async throws -> MiotDeviceSpec? { spec }
+}
+
+private func lockStatus(of home: SynthesizedHome?) -> String? {
+    guard case .sensor(let sensor) = home?.devices.first?.kind else { return nil }
+    return sensor.statusText
+}
+
 actor EventLog {
     private(set) var events: [HomeProviderEvent] = []
     func append(_ e: HomeProviderEvent) { events.append(e) }
@@ -931,6 +1029,39 @@ struct MiCloudProviderTests {
         } else {
             Issue.record("expected light after follow-up poll")
         }
+        await provider.shutdown()
+    }
+
+    @Test("The next poll drops a door-state item that failed on its own (#149)")
+    func failedDoorStateItemDoesNotKeepLocked() async throws {
+        let door = MiotPropKey(did: "lk", siid: 2, piid: 1)
+        let battery = MiotPropKey(did: "lk", siid: 3, piid: 1)
+        let api = StubMiCloudAPI(
+            devices: [MiDeviceRecord(did: "lk", name: "门锁", model: "xiaomi.lock.s2", isOnline: true)],
+            rooms: [MiRoom(id: "r1", name: "入户", dids: ["lk"])],
+            values: [door: .number(1), battery: .number(80)]
+        )
+        let provider = MiCloudProvider(
+            sessionLoader: { fakeSession },
+            apiFactory: { _ in api },
+            specSource: FixedSpecSource(spec: MiotSynthesizerTests.lockSpecWithBattery()),
+            pollInterval: .seconds(60),
+            followUpDelay: .milliseconds(10)
+        )
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        #expect(await log.wait { await lockStatus(of: $0.snapshots.last) == "已上锁" })
+        await api.removeValue(door)
+        await provider.refreshNow()
+        #expect(await log.wait { await lockStatus(of: $0.snapshots.last) == "锁状态未知" })
+        let device = try #require(await log.snapshots.last?.devices.first)
+        #expect(device.isOnline)
+        guard case .sensor(let sensor) = device.kind else {
+            Issue.record("expected a lock sensor after the failed read")
+            return
+        }
+        #expect(sensor.battery == 80)
         await provider.shutdown()
     }
 

@@ -553,6 +553,19 @@ public enum MiotSynthesizer {
         ))
     }
 
+    /// Readable `door-state` properties the poll must refresh. A missing one is a failed read.
+    static func doorStateKeys(for device: MiDeviceRecord, spec: MiotDeviceSpec) -> [MiotPropKey] {
+        let scoped = specForRecord(device, spec: spec)
+        var keys: [MiotPropKey] = []
+        for service in scoped.services where service.shortName == "lock" || service.shortName == "door" {
+            for property in service.properties where property.shortName == "door-state" && property.isReadable {
+                let key = MiotPropKey(did: device.miotDid, siid: service.iid, piid: property.iid)
+                if !keys.contains(key) { keys.append(key) }
+            }
+        }
+        return keys
+    }
+
     /// `door-state` is the only property treated as the current lock condition.
     /// Event fields (`lock-action`, `abnormal-condition`) and toggles (`child-lock`, `anti-lock`)
     /// are not a fresh locked/unlocked reading. An unreadable or unmapped value stays unknown
