@@ -9,5 +9,6 @@ the installer:
 Both are gitignored. CI builds them with
 `windows/scripts/prepare-camera-bin.sh`; run the same script locally before
 `npx tauri build` if you want an installer that works without the runtime
-download fallback. This README only keeps the glob non-empty so local builds
-without the helpers still succeed.
+download fallback. The same script stages `GO2RTC-LICENSE.txt` and
+`FFMPEG-LICENSE.txt` so the installer carries the MIT/LGPL notices. This README
+only keeps the glob non-empty so local builds without the helpers still succeed.

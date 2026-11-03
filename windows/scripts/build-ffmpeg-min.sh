@@ -78,6 +78,7 @@ echo "▶ 配置最小 LGPL 构建"
     --enable-small
   echo "▶ 编译 ffmpeg.exe"
   make -j"$(nproc)"
+  cp "${source_dir}/COPYING.LGPLv2.1" "${out_dir}/FFMPEG-LICENSE.txt"
   python "${script_dir}/patch_pe_subsystem.py" ffmpeg.exe "${out_dir}/ffmpeg-silent.exe"
 )
 

@@ -36,6 +36,12 @@ if [[ ! -f "${out_dir}/go2rtc.exe" || "${FORCE:-0}" == "1" ]]; then
   cp "${work_dir}/unpacked/go2rtc.exe" "${out_dir}/go2rtc.exe"
 fi
 
+if [[ ! -f "${out_dir}/GO2RTC-LICENSE.txt" || "${FORCE:-0}" == "1" ]]; then
+  curl -fL --retry 3 --retry-delay 2 --max-time 60 \
+    "https://raw.githubusercontent.com/AlexxIT/go2rtc/v${go2rtc_version}/LICENSE" \
+    -o "${out_dir}/GO2RTC-LICENSE.txt"
+fi
+
 bash "${script_dir}/build-ffmpeg-min.sh" "${out_dir}"
 
 echo "✅ Windows 摄像机组件已就绪："
