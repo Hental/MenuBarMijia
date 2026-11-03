@@ -1,5 +1,10 @@
 # 更新记录
 
+## Unreleased
+
+### 修复与设备支持
+- **Windows 摄像机组件与画质（[#200](https://github.com/jryang1997/MenuBarMijia/issues/200), [#97](https://github.com/jryang1997/MenuBarMijia/issues/97)）**：安装包内置 `go2rtc` 与最小 LGPL FFmpeg，首次打开摄像机不再依赖 GitHub 下载；兜底下载改为 3 次重试、120 秒超时，并在失败时给出手动放置路径。实时小窗新增「自动 / 流畅 / 高清 / 超清」画质选择（默认高清），与 macOS 对齐。
+
 ## 1.1.6
 
 ### 修复与设备支持

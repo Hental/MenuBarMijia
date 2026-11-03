@@ -1,4 +1,9 @@
 import { HomeAssistantClient, HomeAssistantSynthesizer, haServiceCall, homeAssistantCommand, homeAssistantIdentity, parseCachedHAHome } from "../src/core/homeAssistant.js";
+import {
+  cameraStreamSubtype,
+  normalizeCameraStreamQuality,
+  normalizeCameraStreamQualityMap,
+} from "../src/core/cameraQuality.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -3667,5 +3672,21 @@ describe("Partial undo sequence context preservation", () => {
     memory.unrecord(secondReceipt);
     assert.equal(memory.lastAction?.targetId, "dev_b");
     assert.equal(memory.lastAction?.operationKey, "power:on");
+  });
+});
+
+describe("Xiaomi camera quality (#97)", () => {
+  it("maps stored qualities to go2rtc subtypes and drops corrupt values", () => {
+    assert.equal(cameraStreamSubtype("auto"), "auto");
+    assert.equal(cameraStreamSubtype("sd"), "sd");
+    assert.equal(cameraStreamSubtype("hd"), "hd");
+    assert.equal(cameraStreamSubtype("max"), "3");
+    assert.equal(normalizeCameraStreamQuality("max"), "max");
+    assert.equal(normalizeCameraStreamQuality("4k"), "hd");
+    assert.equal(normalizeCameraStreamQuality(null), "hd");
+    assert.deepEqual(
+      normalizeCameraStreamQualityMap({ cam1: "max", cam2: "4k", cam3: 3 }),
+      { cam1: "max" },
+    );
   });
 });

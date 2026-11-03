@@ -1537,6 +1537,58 @@ describe("Smart camera support and live view (#97)", () => {
     assert.match(tile("camera.living_cam"), /侦测开/);
   });
 
+  it("persists the Xiaomi stream quality chosen inside the live window", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedDevicesVersion: 1,
+      cachedXiaomiDevices: [
+        {
+          id: "camera.living_cam",
+          name: "客厅摄像机",
+          roomId: "room_living",
+          roomName: "客厅",
+          model: "chuangmi.camera.81ac1",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:camera.living_cam:2",
+            isOn: true,
+            nightShot: "Auto",
+            availableNightShots: ["Off", "On", "Auto"],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: true,
+          },
+        },
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-body-device="camera.living_cam"]');
+
+    const values = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-cameraquality]"),
+      (pill) => pill.dataset.cameraqualityValue,
+    );
+    assert.deepEqual(values, ["auto", "sd", "hd", "max"]);
+    assert.equal(
+      document.querySelector('[data-cameraquality-value="hd"]')?.getAttribute("aria-pressed"),
+      "true",
+      "hd is the default quality",
+    );
+
+    await click('[data-cameraquality-value="max"]');
+    assert.equal(
+      document.querySelector('[data-cameraquality-value="max"]')?.getAttribute("aria-pressed"),
+      "true",
+    );
+    const saved = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as {
+      cameraStreamQualities?: Record<string, string>;
+    };
+    assert.deepEqual(saved.cameraStreamQualities, { "camera.living_cam": "max" });
+  });
+
   it("persists a custom camera URL and keeps its scheme when the host is localhost", async () => {
     localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
       connectionMode: "demo",
