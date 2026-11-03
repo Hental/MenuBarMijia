@@ -956,6 +956,7 @@ export class MenuMijiaWindowsApp {
   };
   /** The live picture arrives as MJPEG frames in a persistent `<img>`, which never restarts on re-render. */
   private liveCameraMode: "mjpeg" | null = null;
+  private liveCameraQualityApplies = true;
   private liveCameraImgEl: HTMLImageElement | null = null;
   private liveCameraAbort: AbortController | null = null;
   private ownedStreamOrigin: string | null = null;
@@ -4282,6 +4283,7 @@ export class MenuMijiaWindowsApp {
       this.closeCameraLiveView();
     }
     this.activeLiveCameraId = dev.id;
+    this.liveCameraQualityApplies = true;
     this.liveCameraHidden = false;
     this.clearCameraKeepAlive();
     this.liveCameraError = null;
@@ -4342,6 +4344,7 @@ export class MenuMijiaWindowsApp {
     this.liveCameraHidden = false;
     this.stopLiveTransport();
     this.activeLiveCameraId = null;
+    this.liveCameraQualityApplies = true;
     this.liveCameraStreamURL = null;
     this.liveCameraLoading = false;
     this.liveCameraError = null;
@@ -4600,6 +4603,7 @@ export class MenuMijiaWindowsApp {
     const dev = this.devices.find((d) => d.id === this.activeLiveCameraId);
     if (!dev || dev.kind.kind !== "camera") return;
     this.stopLiveTransport();
+    this.liveCameraQualityApplies = true;
     this.liveCameraStreamURL = this.cameraStreamURLs[dev.id]
       ? this.normalizeWindowsCameraStreamUrl(this.cameraStreamURLs[dev.id]!)
       : this.resolveHaCameraStreamUrl(dev);
@@ -4676,12 +4680,14 @@ export class MenuMijiaWindowsApp {
               const playable = this.normalizeWindowsCameraStreamUrl(urlMatch[0]);
               if (this.needsHlsTranscodeBridge(playable)) {
                 if (await this.bridgeHlsStreamToMjpeg(dev.id, playable)) {
+                  this.liveCameraQualityApplies = false;
                   return;
                 }
                 // Bridging failed: fall through to P2P below instead of assigning an unplayable .m3u8.
                 break;
               }
               if (!/\.m3u8(\?|$|#)/i.test(playable) || !window.__TAURI_INTERNALS__?.invoke) {
+                this.liveCameraQualityApplies = false;
                 this.liveCameraStreamURL = playable;
                 this.liveCameraError = null;
                 this.liveCameraLoading = false;
@@ -4770,6 +4776,7 @@ export class MenuMijiaWindowsApp {
               if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
               return;
             }
+            this.liveCameraQualityApplies = true;
             const bridge = await window.__TAURI_INTERNALS__.invoke<string>("start_xiaomi_camera_bridge", {
               did: dev.id,
               model: dev.model,
@@ -4804,6 +4811,7 @@ export class MenuMijiaWindowsApp {
               return;
             }
             if (h264Name) {
+              this.liveCameraQualityApplies = false;
               releaseIfStarted();
               this.liveCameraStreamURL = h264Name;
               this.liveCameraError = t("实时画面连接失败，请点右上角重新连接");
@@ -4821,9 +4829,11 @@ export class MenuMijiaWindowsApp {
       }
 
       releaseIfStarted();
+      this.liveCameraQualityApplies = false;
       this.liveCameraError = failureReason ?? t("米家云直连摄像头采用私有 P2P 加密流；可在下方填写本地 go2rtc / HLS 流地址观看实时画面");
     } catch (err) {
       releaseIfStarted();
+      this.liveCameraQualityApplies = false;
       if (!stale()) {
         this.liveCameraError = err instanceof Error ? err.message : String(err);
       }
@@ -4929,7 +4939,7 @@ export class MenuMijiaWindowsApp {
           }
           ${viewportHtml}
           ${
-            this.settings.connectionMode === "xiaomiCloud" && !customURL
+            this.settings.connectionMode === "xiaomiCloud" && !customURL && this.liveCameraQualityApplies && !this.liveCameraLoading
               ? `<div class="cc-segmented-pills" style="margin-top:10px;">
                   <span class="cc-pill-label">${t("画质")}</span>
                   ${CAMERA_STREAM_QUALITIES.map((quality) => {
