@@ -210,6 +210,7 @@ interface PersistedSettings {
   habitEntries: HabitEntry[];
   hasCompletedOnboarding: boolean;
   isCompactGridMode: boolean;
+  hideOfflineDevices: boolean;
   cachedXiaomiDevices: SmartDevice[];
   /** Version of the cached device shape; legacy caches are migrated once on load (#148). */
   cachedDevicesVersion: number;
@@ -286,6 +287,8 @@ const SF_ICONS = {
   boltFill: `<svg viewBox="0 0 20 20" fill="currentColor"><path d="M11.3 1.9L4.6 10.6a.6.6 0 00.48.96H9.5l-.8 6.54a.5.5 0 00.89.36l6.7-8.7a.6.6 0 00-.48-.96H11.4l.79-6.54a.5.5 0 00-.89-.36z"/></svg>`,
   grid2x2: `<svg viewBox="0 0 20 20" fill="currentColor"><rect x="3" y="3" width="6" height="6" rx="1.6"/><rect x="11" y="3" width="6" height="6" rx="1.6"/><rect x="3" y="11" width="6" height="6" rx="1.6"/><rect x="11" y="11" width="6" height="6" rx="1.6"/></svg>`,
   grid1x2: `<svg viewBox="0 0 20 20" fill="currentColor"><rect x="3" y="3.5" width="14" height="5.2" rx="1.6"/><rect x="3" y="11.3" width="14" height="5.2" rx="1.6"/></svg>`,
+  wifi: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4.2 8.7a8.2 8.2 0 0111.6 0"/><path d="M6.6 11.3a4.8 4.8 0 016.8 0"/><circle cx="10" cy="14.6" r="1.15" fill="currentColor" stroke="none"/></svg>`,
+  wifiSlash: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4.2 8.7a8.2 8.2 0 0111.6 0"/><path d="M6.6 11.3a4.8 4.8 0 016.8 0"/><circle cx="10" cy="14.6" r="1.15" fill="currentColor" stroke="none"/><path d="M4.4 4.4l11.2 11.2"/></svg>`,
   qrcode: `<svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 3h6v6H3V3zm1.5 1.5v3h3v-3h-3zM11 3h6v6h-6V3zm1.5 1.5v3h3v-3h-3zM3 11h6v6H3v-6zm1.5 1.5v3h3v-3h-3zM11 11h2.5v2.5H11V11zm3.5 0H17v2.5h-2.5V11zM11 14.5h2.5V17H11v-2.5zm3.5 0H17V17h-2.5v-2.5z"/></svg>`,
   xmark: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>`,
   arrowUpCircle: `<svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.53-11.28a.75.75 0 00-1.06 0L6.72 9.47a.75.75 0 101.06 1.06l1.47-1.47v4.19a.75.75 0 001.5 0V9.06l1.47 1.47a.75.75 0 101.06-1.06l-2.75-2.75z"/></svg>`,
@@ -600,6 +603,7 @@ function loadSettings(): LoadedSettings {
             : [],
           hasCompletedOnboarding: parsed.hasCompletedOnboarding ?? Boolean(miSession),
           isCompactGridMode: parsed.isCompactGridMode ?? true,
+          hideOfflineDevices: typeof parsed.hideOfflineDevices === "boolean" ? parsed.hideOfflineDevices : false,
           cachedXiaomiDevices: Array.isArray(parsed.cachedXiaomiDevices)
             ? upgradeCachedDevices(
                 parsed.cachedXiaomiDevices,
@@ -667,6 +671,7 @@ function loadSettings(): LoadedSettings {
       habitEntries: [],
       hasCompletedOnboarding: false,
       isCompactGridMode: true,
+      hideOfflineDevices: false,
       cachedXiaomiDevices: [],
       cachedDevicesVersion: CACHED_DEVICES_VERSION,
       cachedHAHome: null,
@@ -1304,8 +1309,11 @@ export class MenuMijiaWindowsApp {
   }
 
   private get filteredDevices(): SmartDevice[] {
-    if (this.selectedRoom === "全部") return this.devices;
-    return this.devices.filter((d) => d.roomName === this.selectedRoom);
+    return this.devices.filter((dev) => {
+      if (this.settings.hideOfflineDevices && !dev.isOnline) return false;
+      if (this.selectedRoom === "全部") return true;
+      return dev.roomName === this.selectedRoom;
+    });
   }
 
   private get activeDeviceCount(): number {
@@ -1620,8 +1628,19 @@ export class MenuMijiaWindowsApp {
     const isAll = this.selectedRoom === "全部";
     const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.filteredDevices));
     const sections = pageSections(this.layout, ordered, isAll);
+    const desiredHeaders = sections.filter((section) => section.title !== null);
+    const domHeaders = Array.from(this.root.querySelectorAll<HTMLElement>(".cc-group-header"));
+    if (domHeaders.length !== desiredHeaders.length) return false;
+    for (const section of desiredHeaders) {
+      const header = domHeaders.find((element) => element.dataset.collapse === section.id);
+      const count = header?.querySelector(".cc-group-count")?.textContent ?? "";
+      if (!header || count !== String(section.devices.length)) return false;
+    }
     const bento = this.skin === "bento" && this.settings.isCompactGridMode;
     const tilePatches: Array<{ current: HTMLElement; desired: Element }> = [];
+    const unmatchedTileIds = new Set(
+      Array.from(this.root.querySelectorAll<HTMLElement>("[data-tile-id]"), (element) => element.dataset.tileId ?? ""),
+    );
     let index = 0;
     for (const section of sections) {
       if (this.layout.collapsed.includes(scopedKey(this.pageKey, section.id))) continue;
@@ -1631,6 +1650,7 @@ export class MenuMijiaWindowsApp {
         bento,
       );
       for (const device of section.devices) {
+        unmatchedTileIds.delete(device.id);
         const current = Array.from(
           this.root.querySelectorAll<HTMLElement>("[data-tile-id]"),
         ).find((element) => element.dataset.tileId === device.id);
@@ -1641,6 +1661,7 @@ export class MenuMijiaWindowsApp {
         tilePatches.push({ current, desired });
       }
     }
+    if (unmatchedTileIds.size > 0) return false;
     for (const patch of tilePatches) morphMatchingDom(patch.current, patch.desired);
     if (this.settings.connectionMode === "homeAssistant") {
       const current = this.root.querySelector<HTMLElement>("#btn-all-off");
@@ -3192,6 +3213,7 @@ export class MenuMijiaWindowsApp {
               .join("")}
           </div>
           </div>
+          <div class="cc-room-tools">
           <button
             class="cc-circle-btn is-small"
             id="btn-toggle-grid"
@@ -3201,6 +3223,16 @@ export class MenuMijiaWindowsApp {
           >
             ${this.settings.isCompactGridMode ? SF_ICONS.grid2x2 : SF_ICONS.grid1x2}
           </button>
+          <button
+            class="cc-circle-btn is-small ${this.settings.hideOfflineDevices ? "is-selected" : ""}"
+            id="btn-toggle-hide-offline"
+            title="${this.settings.hideOfflineDevices ? t("当前只显示在线设备（点击显示全部）") : t("点击隐藏未通电/离线设备")}"
+            aria-label="${t("只显示在线设备")}"
+            aria-pressed="${this.settings.hideOfflineDevices}"
+          >
+            ${this.settings.hideOfflineDevices ? SF_ICONS.wifi : SF_ICONS.wifiSlash}
+          </button>
+          </div>
         </div>
 
         <div class="cc-divider"></div>
@@ -3348,6 +3380,17 @@ export class MenuMijiaWindowsApp {
           <div class="cc-empty-actions">
             <button class="cc-btn-primary" id="btn-empty-resync">${t("重新同步设备")}</button>
             <button class="cc-btn-secondary" id="btn-empty-settings">${t("切换账号 / 设置")}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.settings.hideOfflineDevices && this.devices.length > 0 && this.filteredDevices.length === 0) {
+      return `
+        <div class="cc-empty-state">
+          <div class="cc-empty-title">${t("该房间暂无通电在线的设备")}</div>
+          <div class="cc-empty-actions">
+            <button class="cc-btn-secondary" id="btn-show-offline">${t("显示离线设备")}</button>
           </div>
         </div>
       `;
@@ -4596,6 +4639,11 @@ export class MenuMijiaWindowsApp {
           </div>
 
           <div class="cc-field cc-field-row">
+            <label for="settings-hide-offline">${t("隐藏离线/未通电的设备")}</label>
+            <input id="settings-hide-offline" type="checkbox" ${this.settings.hideOfflineDevices ? "checked" : ""} />
+          </div>
+
+          <div class="cc-field cc-field-row">
             <label for="settings-quick-actions">${t("显示顶部快捷场景栏")}</label>
             <input id="settings-quick-actions" type="checkbox" ${this.settings.showQuickActionsBar ? "checked" : ""} />
           </div>
@@ -5105,6 +5153,11 @@ export class MenuMijiaWindowsApp {
       this.saveSettings();
       this.render();
     });
+    this.root.querySelector<HTMLInputElement>("#settings-hide-offline")?.addEventListener("change", (e) => {
+      this.settings.hideOfflineDevices = (e.target as HTMLInputElement).checked;
+      this.saveSettings();
+      this.render();
+    });
     this.root.querySelector<HTMLInputElement>("#settings-quick-actions")?.addEventListener("change", (e) => {
       this.settings.showQuickActionsBar = (e.target as HTMLInputElement).checked;
       this.saveSettings();
@@ -5163,6 +5216,18 @@ export class MenuMijiaWindowsApp {
 
     this.root.querySelector("#btn-toggle-grid")?.addEventListener("click", () => {
       this.settings.isCompactGridMode = !this.settings.isCompactGridMode;
+      this.saveSettings();
+      this.render();
+    });
+
+    this.root.querySelector("#btn-toggle-hide-offline")?.addEventListener("click", () => {
+      this.settings.hideOfflineDevices = !this.settings.hideOfflineDevices;
+      this.saveSettings();
+      this.render();
+    });
+
+    this.root.querySelector("#btn-show-offline")?.addEventListener("click", () => {
+      this.settings.hideOfflineDevices = false;
       this.saveSettings();
       this.render();
     });
