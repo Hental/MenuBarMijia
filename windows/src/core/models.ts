@@ -121,6 +121,7 @@ export interface SmartDevice {
   readonly model: string;
   readonly isOnline: boolean;
   kind: DeviceKind;
+  readonly isSharedHome?: boolean;
 }
 
 export interface RoomCategory {

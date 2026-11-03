@@ -1184,4 +1184,116 @@ struct GoldenCorpusTests {
             #expect(actual == item.expectedEmotionId, "\(item.name)")
         }
     }
+
+    private struct PromptInjectionCorpus: Decodable {
+        let cases: [PromptInjectionCase]
+    }
+
+    private struct PromptInjectionCase: Decodable {
+        let id: String
+        let devices: [PromptInjectionDevice]
+        let scenes: [AIRequestScene]
+        let payload: PromptInjectionPayload
+        let expect: PromptInjectionExpect
+    }
+
+    private struct PromptInjectionDevice: Decodable {
+        let id: String
+        let name: String
+        let roomName: String
+        let model: String
+        let kind: String
+        let isSharedHome: Bool?
+
+        func toSmartDevice() -> SmartDevice {
+            let deviceKind: DeviceKind
+            switch kind {
+            case "heater":
+                deviceKind = .climate(ClimateSpec(
+                    entityId: "climate.\(id)",
+                    isOn: false,
+                    hvacMode: "off",
+                    availableModes: ["off", "heat"],
+                    targetTemperature: 22
+                ))
+            case "plug":
+                deviceKind = .plug(PlugSpec(switchEntityId: "switch.\(id)", isOn: false))
+            case "camera":
+                deviceKind = .camera(CameraSpec(entityId: "camera.\(id)", isOn: false))
+            case "vacuum":
+                deviceKind = .vacuum(VacuumSpec(entityId: "vacuum.\(id)", status: "docked"))
+            default:
+                deviceKind = .light(LightSpec(entityId: "light.\(id)", isOn: false))
+            }
+            return SmartDevice(
+                id: id,
+                name: name,
+                roomId: roomName,
+                roomName: roomName,
+                model: model,
+                isOnline: true,
+                kind: deviceKind,
+                isSharedHome: isSharedHome ?? false
+            )
+        }
+    }
+
+    private struct PromptInjectionPayload: Decodable {
+        let actions: [PromptInjectionAction]
+    }
+
+    private struct PromptInjectionAction: Decodable {
+        let targetId: String
+        let op: String
+        let value: JSONValue?
+        let confidence: Double?
+        let primaryChoice: Bool?
+
+        var bridgedValue: Any? {
+            switch value {
+            case .bool(let flag): return flag
+            case .number(let number): return NSNumber(value: number)
+            case .string(let text): return text
+            default: return nil
+            }
+        }
+    }
+
+    private struct PromptInjectionExpect: Decodable {
+        let runTargetIds: [String]
+        let confirmTargetIds: [String]
+        let suggestionIds: [String]
+    }
+
+    @Test("Shared homes, unclean names, and wide model decisions wait for a tap")
+    func promptInjectionGoldenCorpus() throws {
+        let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/prompt_injection_golden.json")
+        let corpus = try JSONDecoder().decode(PromptInjectionCorpus.self, from: Data(contentsOf: fixtureURL))
+        for row in corpus.cases {
+            let devices = row.devices.map { $0.toSmartDevice() }
+            let scenes = row.scenes.map { $0.toHomeScene() }
+            let actions = try row.payload.actions.map { action -> ChosenAction in
+                let operation = try #require(
+                    ModelIntentResolver.operation(named: action.op, value: action.bridgedValue),
+                    "\(row.id) \(action.op)"
+                )
+                return ChosenAction(
+                    intent: DeviceIntent(targetId: action.targetId, operation: operation),
+                    confidence: action.confidence,
+                    primaryChoice: action.primaryChoice ?? false
+                )
+            }
+            let decision = ModelActionPolicy.decide(
+                devices: devices,
+                scenes: scenes,
+                payload: ModelDecisionPayload(actions: actions)
+            )
+            #expect(decision.intents.map(\.targetId) == row.expect.runTargetIds, "\(row.id) run")
+            #expect(
+                decision.suggestions.flatMap(\.intents).map(\.targetId) == row.expect.confirmTargetIds,
+                "\(row.id) confirm"
+            )
+            #expect(decision.suggestions.map(\.id) == row.expect.suggestionIds, "\(row.id) chips")
+        }
+    }
 }

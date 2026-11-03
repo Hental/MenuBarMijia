@@ -332,7 +332,7 @@ struct AssistantTests {
         ])
         #expect(parallelPlan.suggestions == [
             AssistantSuggestion(
-                id: "jev:dev_study_ceiling:effect_day",
+                id: "confirm:dev_study_ceiling",
                 title: "书房吸顶灯·日光模式",
                 confidencePercent: 62,
                 intents: [DeviceIntent(targetId: "dev_study_ceiling", operation: .lightEffect("Day"))]

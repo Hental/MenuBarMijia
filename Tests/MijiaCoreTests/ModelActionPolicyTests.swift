@@ -47,19 +47,38 @@ struct ModelActionPolicyTests {
     @Test("Heater on, any plug switch and vacuum start need a tap; turning a heater off does not")
     func riskyActions() {
         let devices = Self.devices + [Self.plug]
-        func needs(_ id: String, _ op: IntentOperation) -> Bool {
-            ModelActionPolicy.needsConfirmation(DeviceIntent(targetId: id, operation: op), devices: devices)
+        func confirms(_ id: String, _ op: IntentOperation) -> Bool {
+            let decision = ModelActionPolicy.decide(
+                devices: devices,
+                scenes: [],
+                payload: ModelDecisionPayload(actions: [
+                    ChosenAction(intent: DeviceIntent(targetId: id, operation: op), confidence: 1, primaryChoice: false)
+                ])
+            )
+            return decision.intents.isEmpty && decision.suggestions.flatMap(\.intents).map(\.targetId) == [id]
         }
-        #expect(needs("dev_guest_heater", .power(true)))
-        #expect(needs("dev_guest_heater", .hvacMode("heat")))
-        #expect(needs("dev_guest_heater", .targetTemperature(26)))
-        #expect(!needs("dev_guest_heater", .power(false)))
-        #expect(!needs("dev_guest_heater", .hvacMode("off")))
-        #expect(needs("dev_plug", .power(true)))
-        #expect(needs("dev_plug", .power(false)))
-        #expect(!needs("dev_study_ceiling", .power(true)))
-        #expect(!needs("dev_living_ac", .hvacMode("heat")))
-        #expect(!needs("missing", .power(true)))
+        #expect(confirms("dev_guest_heater", .power(true)))
+        #expect(confirms("dev_guest_heater", .hvacMode("heat")))
+        #expect(confirms("dev_guest_heater", .targetTemperature(26)))
+        #expect(!confirms("dev_guest_heater", .power(false)))
+        #expect(!confirms("dev_guest_heater", .hvacMode("off")))
+        #expect(confirms("dev_plug", .power(true)))
+        #expect(confirms("dev_plug", .power(false)))
+        #expect(!confirms("dev_study_ceiling", .power(true)))
+        #expect(!confirms("dev_living_ac", .hvacMode("heat")))
+        let missing = ModelActionPolicy.decide(
+            devices: devices,
+            scenes: [],
+            payload: ModelDecisionPayload(actions: [
+                ChosenAction(
+                    intent: DeviceIntent(targetId: "missing", operation: .power(true)),
+                    confidence: 1,
+                    primaryChoice: false
+                )
+            ])
+        )
+        #expect(missing.intents.isEmpty)
+        #expect(missing.suggestions.isEmpty)
     }
 
     @Test("A 50% device head only becomes a suggestion chip")
@@ -72,7 +91,7 @@ struct ModelActionPolicyTests {
         ])
         let plan = try await resolver.resolve("有点暗", devices: Self.devices, scenes: Self.scenes)
         #expect(plan.intents.isEmpty)
-        #expect(plan.suggestions.map(\.id) == ["jev:dev_study_desk:power_on"])
+        #expect(plan.suggestions.map(\.id) == ["confirm:dev_study_desk"])
         #expect(plan.suggestions.first?.confidencePercent == 50)
         #expect(plan.reply == "没把握直接执行，点下面的建议再执行")
     }
@@ -86,7 +105,7 @@ struct ModelActionPolicyTests {
         ])
         let plan = try await resolver.resolve("开灯", devices: Self.devices, scenes: Self.scenes)
         #expect(plan.intents.isEmpty)
-        #expect(plan.suggestions.map(\.id) == ["jev:primary:d1:power_on"])
+        #expect(plan.suggestions.map(\.id) == ["confirm:primary"])
         #expect(plan.suggestions.first?.confidencePercent == nil)
         #expect(plan.reply == "没把握直接执行，点下面的建议再执行")
     }
@@ -101,7 +120,7 @@ struct ModelActionPolicyTests {
         ])
         let plan = try await resolver.resolve("开台灯", devices: Self.devices, scenes: Self.scenes)
         #expect(plan.intents.isEmpty)
-        #expect(plan.suggestions.map(\.id) == ["jev:dev_bedside:power_on"])
+        #expect(plan.suggestions.map(\.id) == ["confirm:dev_bedside"])
         #expect(plan.suggestions.first?.confidencePercent == nil)
     }
 

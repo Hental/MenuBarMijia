@@ -1019,10 +1019,130 @@ function readProbability(raw: unknown): number | null {
   return Math.min(Math.max(value, 0), 1);
 }
 
+export interface ChosenAction {
+  readonly intent: DeviceIntent;
+  readonly confidence: number | null;
+  readonly primaryChoice: boolean;
+}
+
+export interface ModelDecisionPayload {
+  readonly actions: readonly ChosenAction[];
+}
+
+export interface ModelDecision {
+  readonly intents: readonly DeviceIntent[];
+  readonly suggestions: readonly AssistantSuggestion[];
+}
+
+const PROMPT_NAME_LIMIT = 64;
+
+function dropsPromptScalar(codePoint: number): boolean {
+  if (codePoint <= 0x1f || codePoint === 0x7f || (codePoint >= 0x80 && codePoint <= 0x9f)) return true;
+  if (codePoint === 0x2028 || codePoint === 0x2029) return true;
+  return /\p{Cf}/u.test(String.fromCodePoint(codePoint));
+}
+
+function sanitizePromptText(raw: string, limit: number): string {
+  let dropped = false;
+  let filtered = "";
+  for (const ch of raw) {
+    const codePoint = ch.codePointAt(0) ?? 0;
+    if (dropsPromptScalar(codePoint)) {
+      dropped = true;
+      continue;
+    }
+    filtered += ch;
+  }
+  const source = dropped ? filtered : raw;
+  const graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source)].map(
+    (part) => part.segment,
+  );
+  if (graphemes.length <= limit) return source;
+  return graphemes.slice(0, limit).join("");
+}
+
+function categoryNeedsConfirmation(intent: DeviceIntent, device: SmartDevice): boolean {
+  const op = intent.operation;
+  switch (deviceCategory(device)) {
+    case "heater":
+      if (op.kind === "power") return op.isOn;
+      if (op.kind === "hvacMode") return op.mode !== "off";
+      return true;
+    case "plug":
+    case "camera":
+      return op.kind === "power";
+    case "vacuum":
+      return op.kind === "power" && op.isOn;
+    default:
+      return false;
+  }
+}
+
+function confidenceBadge(confidences: readonly (number | null)[]): number | null {
+  if (confidences.some((value) => value === null)) return null;
+  const present = confidences.filter((value): value is number => value !== null);
+  if (present.length === 0) return null;
+  return Math.min(...present);
+}
+
+function decisionSuggestions(
+  waiting: readonly ChosenAction[],
+  wide: boolean,
+  devices: readonly SmartDevice[],
+  scenes: readonly HomeScene[],
+): AssistantSuggestion[] {
+  if (waiting.length === 0) return [];
+  if (wide) {
+    return ModelActionPolicy.chips(
+      waiting.map((action) => action.intent),
+      confidenceBadge(waiting.map((action) => action.confidence)),
+      "confirm",
+      devices,
+      scenes,
+      true,
+    );
+  }
+  const suggestions: AssistantSuggestion[] = [];
+  const primary = waiting.filter((action) => action.primaryChoice);
+  if (primary.length > 0) {
+    suggestions.push(
+      ...ModelActionPolicy.chips(
+        primary.map((action) => action.intent),
+        confidenceBadge(primary.map((action) => action.confidence)),
+        "confirm:primary",
+        devices,
+        scenes,
+        true,
+      ),
+    );
+  }
+  const order: string[] = [];
+  const byTarget = new Map<string, ChosenAction[]>();
+  for (const action of waiting) {
+    if (action.primaryChoice) continue;
+    if (!byTarget.has(action.intent.targetId)) order.push(action.intent.targetId);
+    byTarget.set(action.intent.targetId, [...(byTarget.get(action.intent.targetId) ?? []), action]);
+  }
+  for (const targetId of order) {
+    const group = byTarget.get(targetId) ?? [];
+    suggestions.push(
+      ...ModelActionPolicy.chips(
+        group.map((action) => action.intent),
+        confidenceBadge(group.map((action) => action.confidence)),
+        "confirm",
+        devices,
+        scenes,
+      ),
+    );
+  }
+  return suggestions;
+}
+
 /** Mirrors MijiaCore.ModelActionPolicy: guesses below 80% and risky actions wait for a tap. */
 export const ModelActionPolicy = {
   AUTO_RUN_THRESHOLD: 0.8,
   SUGGESTION_FLOOR: 0.2,
+  maxAutoRunDevices: 3,
 
   /** probabilities[choice], else confidence, else 0 — a missing number means "not sure". */
   probabilityOf(answer: Record<string, unknown> | undefined, choice: string): number {
@@ -1035,36 +1155,43 @@ export const ModelActionPolicy = {
     return readProbability(answer["confidence"]) ?? 0;
   },
 
-  /** Heater on, any plug switch, or a vacuum start needs a tap even when the model is sure. */
-  needsConfirmation(intent: DeviceIntent, devices: readonly SmartDevice[]): boolean {
-    const dev = devices.find((d) => d.id === intent.targetId);
-    if (!dev) return false;
-    const op = intent.operation;
-    switch (deviceCategory(dev)) {
-      case "heater":
-        if (op.kind === "power") return op.isOn;
-        if (op.kind === "hvacMode") return op.mode !== "off";
-        return true;
-      case "plug":
-      case "camera":
-        return op.kind === "power";
-      case "vacuum":
-        return op.kind === "power" && op.isOn;
-      default:
-        return false;
+  decide(devices: readonly SmartDevice[], scenes: readonly HomeScene[], payload: ModelDecisionPayload): ModelDecision {
+    const deviceById = new Map(devices.map((device) => [device.id, device]));
+    const seen = new Set<string>();
+    const surviving: ChosenAction[] = [];
+    for (const action of payload.actions) {
+      for (const intent of IntentValidator.sanitize([action.intent], devices, scenes)) {
+        const key = JSON.stringify(intent);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        surviving.push({ intent, confidence: action.confidence, primaryChoice: action.primaryChoice });
+      }
     }
-  },
-
-  partition(
-    intents: readonly DeviceIntent[],
-    devices: readonly SmartDevice[]
-  ): { run: DeviceIntent[]; confirm: DeviceIntent[] } {
-    const run: DeviceIntent[] = [];
-    const confirm: DeviceIntent[] = [];
-    for (const intent of intents) {
-      (this.needsConfirmation(intent, devices) ? confirm : run).push(intent);
-    }
-    return { run, confirm };
+    const deviceIDs = new Set(surviving.filter((action) => deviceById.has(action.intent.targetId)).map((action) => action.intent.targetId));
+    const wide = deviceIDs.size > this.maxAutoRunDevices;
+    const judged = surviving.map((action) => {
+      if (wide) return { action, confirms: true };
+      const device = deviceById.get(action.intent.targetId);
+      if (device) {
+        const lowConfidence = action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD;
+        const confirms =
+          device.isSharedHome === true ||
+          sanitizePromptText(device.name, PROMPT_NAME_LIMIT) !== device.name ||
+          sanitizePromptText(device.roomName, PROMPT_NAME_LIMIT) !== device.roomName ||
+          lowConfidence ||
+          categoryNeedsConfirmation(action.intent, device);
+        return { action, confirms };
+      }
+      return {
+        action,
+        confirms: action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD,
+      };
+    });
+    const waiting = judged.filter((item) => item.confirms).map((item) => item.action);
+    return {
+      intents: judged.filter((item) => !item.confirms).map((item) => item.action.intent),
+      suggestions: decisionSuggestions(waiting, wide, devices, scenes),
+    };
   },
 
   /** One chip per device, or one chip for the whole group when `grouped`. */
@@ -2780,38 +2907,35 @@ export class ModelIntentResolver {
     const tempChoice = String(answers["temp"]?.["choice"] ?? "none");
 
     const targetIds = aliasToIds.get(targetChoice) ?? [];
-    const raw: DeviceIntent[] = [];
     const primaryOp = this.decodeSystemOneOp(opChoice);
     const hasTemp = tempChoice !== "none" && Number.isFinite(Number(tempChoice));
 
-    // Runs by itself only when every answer involved is at least 80% sure (#21).
     let confidence = ModelActionPolicy.probabilityOf(answers["target"], targetChoice);
     if (primaryOp) confidence = Math.min(confidence, ModelActionPolicy.probabilityOf(answers["op"], opChoice));
     if (hasTemp) confidence = Math.min(confidence, ModelActionPolicy.probabilityOf(answers["temp"], tempChoice));
 
-    for (const id of targetIds) {
-      if (primaryOp) raw.push({ targetId: id, operation: primaryOp });
-      if (hasTemp) {
-        raw.push({ targetId: id, operation: { kind: "targetTemperature", celsius: Number(tempChoice) } });
+    const actions: ChosenAction[] = [];
+    if (targetChoice !== "none") {
+      for (const id of targetIds) {
+        if (primaryOp) actions.push({ intent: { targetId: id, operation: primaryOp }, confidence, primaryChoice: true });
+        if (hasTemp) {
+          actions.push({
+            intent: { targetId: id, operation: { kind: "targetTemperature", celsius: Number(tempChoice) } },
+            confidence,
+            primaryChoice: true,
+          });
+        }
       }
     }
-
-    const sanitized = IntentValidator.sanitize(raw, devices, scenes);
-    const confident = confidence >= ModelActionPolicy.AUTO_RUN_THRESHOLD;
-    const split = ModelActionPolicy.partition(sanitized, devices);
-    const intents = confident ? split.run : [];
-    const waiting = confident ? split.confirm : sanitized;
-    // Below the auto-run threshold everything waits for a tap, including answers with no
-    // probability at all (#21: 低于门槛的一律进候选胶囊, never silently dropped).
-    const suggestions = ModelActionPolicy.chips(waiting, confidence, `jev:primary:${targetChoice}:${opChoice}`, devices, scenes, true);
-    const described = IntentReply.describe(intents, devices, scenes);
+    const decision = ModelActionPolicy.decide(devices, scenes, { actions });
+    const described = IntentReply.describe(decision.intents, devices, scenes);
     return {
-      intents,
-      reply: suggestions.length > 0
-        ? ModelActionPolicy.confirmationReply(intents.length > 0 ? described : null)
+      intents: decision.intents,
+      reply: decision.suggestions.length > 0
+        ? ModelActionPolicy.confirmationReply(decision.intents.length > 0 ? described : null)
         : described,
       source: "model",
-      suggestions,
+      suggestions: decision.suggestions,
     };
   }
 
@@ -2925,7 +3049,7 @@ export class ModelIntentResolver {
     const payload = JSON.parse(jsonSlice) as Record<string, unknown>;
     const actions = (payload["actions"] as Array<Record<string, unknown>>) ?? [];
 
-    const raw: DeviceIntent[] = [];
+    const chosen: ChosenAction[] = [];
     for (const act of actions) {
       const alias = String(act["device"] ?? "").trim();
       const opName = String(act["op"] ?? "").trim();
@@ -2934,19 +3058,16 @@ export class ModelIntentResolver {
       const targetIds = aliasToIds.get(alias) ?? (alias ? [alias] : []);
       if (op) {
         for (const targetId of targetIds) {
-          raw.push({ targetId, operation: op });
+          chosen.push({ intent: { targetId, operation: op }, confidence: null, primaryChoice: false });
         }
       }
     }
-    // Heaters, plugs and vacuums wait for a tap even when the model asks for them directly (#21).
-    const { run: intents, confirm } = ModelActionPolicy.partition(IntentValidator.sanitize(raw, devices, scenes), devices);
-    const suggestions = ModelActionPolicy.chips(confirm, null, "confirm", devices, scenes);
-    const described = IntentReply.describe(intents, devices, scenes);
-    // The model's own reply may claim the waiting actions already happened.
-    const reply = suggestions.length > 0
-      ? ModelActionPolicy.confirmationReply(intents.length > 0 ? described : null)
+    const decision = ModelActionPolicy.decide(devices, scenes, { actions: chosen });
+    const described = IntentReply.describe(decision.intents, devices, scenes);
+    const reply = decision.suggestions.length > 0
+      ? ModelActionPolicy.confirmationReply(decision.intents.length > 0 ? described : null)
       : String(payload["reply"] ?? "").trim() || described;
-    return { intents, reply, source: "model", suggestions };
+    return { intents: decision.intents, reply, source: "model", suggestions: decision.suggestions };
   }
 
   static decodeChatOp(name: string, val: unknown): IntentOperation | null {

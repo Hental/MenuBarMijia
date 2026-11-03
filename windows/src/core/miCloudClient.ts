@@ -294,6 +294,7 @@ export interface MiRoom {
   readonly dids: readonly string[];
   readonly homeId?: string;
   readonly homeName?: string;
+  readonly isSharedHome?: boolean;
 }
 
 export interface MiotPropKey {
@@ -443,44 +444,48 @@ export class MiCloudClient {
   static parseRooms(result: unknown): MiRoom[] {
     if (!result || typeof result !== "object") return [];
     const obj = result as Record<string, unknown>;
-    const owned = Array.isArray(obj["homelist"]) ? obj["homelist"] : [];
-    const shared = Array.isArray(obj["share_home_list"]) ? obj["share_home_list"] : [];
     const rooms: MiRoom[] = [];
     const seenHomes = new Set<string>();
-    for (const home of [...owned, ...shared]) {
-      if (!home || typeof home !== "object") continue;
-      const h = home as Record<string, unknown>;
-      const homeId = asIdString(h["id"]) ?? "";
-      if (homeId) {
-        if (seenHomes.has(homeId)) continue;
-        seenHomes.add(homeId);
-      }
-      const homeName = typeof h["name"] === "string" ? h["name"] : "";
-      const roomlist = h["roomlist"];
-      if (Array.isArray(roomlist)) {
-        for (const rm of roomlist) {
-          if (!rm || typeof rm !== "object") continue;
-          const r = rm as Record<string, unknown>;
-          const id = asIdString(r["id"]);
-          if (!id) continue;
-          const rawDids = Array.isArray(r["dids"]) ? r["dids"] : [];
-          const dids = rawDids.map(asIdString).filter((d): d is string => d !== null);
-          rooms.push({
-            id,
-            name: typeof r["name"] === "string" ? r["name"] : "",
-            dids,
-            homeId,
-            homeName,
-          });
+    const appendHomes = (homes: readonly unknown[], shared: boolean) => {
+      for (const home of homes) {
+        if (!home || typeof home !== "object") continue;
+        const h = home as Record<string, unknown>;
+        const homeId = asIdString(h["id"]) ?? "";
+        if (homeId) {
+          if (seenHomes.has(homeId)) continue;
+          seenHomes.add(homeId);
+        }
+        const homeName = typeof h["name"] === "string" ? h["name"] : "";
+        const sharedFlag = shared ? { isSharedHome: true as const } : {};
+        const roomlist = h["roomlist"];
+        if (Array.isArray(roomlist)) {
+          for (const rm of roomlist) {
+            if (!rm || typeof rm !== "object") continue;
+            const r = rm as Record<string, unknown>;
+            const id = asIdString(r["id"]);
+            if (!id) continue;
+            const rawDids = Array.isArray(r["dids"]) ? r["dids"] : [];
+            const dids = rawDids.map(asIdString).filter((d): d is string => d !== null);
+            rooms.push({
+              id,
+              name: typeof r["name"] === "string" ? r["name"] : "",
+              dids,
+              homeId,
+              homeName,
+              ...sharedFlag,
+            });
+          }
+        }
+        const homeDids = Array.isArray(h["dids"])
+          ? h["dids"].map(asIdString).filter((d): d is string => d !== null)
+          : [];
+        if (homeId && homeDids.length > 0) {
+          rooms.push({ id: `home_${homeId}`, name: "", dids: homeDids, homeId, homeName, ...sharedFlag });
         }
       }
-      const homeDids = Array.isArray(h["dids"])
-        ? h["dids"].map(asIdString).filter((d): d is string => d !== null)
-        : [];
-      if (homeId && homeDids.length > 0) {
-        rooms.push({ id: `home_${homeId}`, name: "", dids: homeDids, homeId, homeName });
-      }
-    }
+    };
+    appendHomes(Array.isArray(obj["homelist"]) ? obj["homelist"] : [], false);
+    appendHomes(Array.isArray(obj["share_home_list"]) ? obj["share_home_list"] : [], true);
     return rooms;
   }
 
@@ -1504,6 +1509,7 @@ export const MiotSynthesizer = {
         model: record.model,
         isOnline: record.isOnline,
         kind,
+        ...(room?.isSharedHome === true ? { isSharedHome: true } : {}),
       };
       smartDevices.push(smartDevice);
 

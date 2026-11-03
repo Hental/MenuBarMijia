@@ -506,24 +506,26 @@ public struct ModelIntentResolver: Sendable {
             throw AssistantError.malformedResponse
         }
         let actions = object["actions"] as? [[String: Any]] ?? []
-        let raw: [DeviceIntent] = actions.flatMap { action -> [DeviceIntent] in
+        let chosen: [ChosenAction] = actions.flatMap { action -> [ChosenAction] in
             guard let alias = action["device"] as? String,
                   let opName = action["op"] as? String,
                   let op = operation(named: opName, value: action["value"]) else { return [] }
-            let targetIds = catalog.realIds(forTargetChoice: alias)
-            return targetIds.map { DeviceIntent(targetId: $0, operation: op) }
+            return catalog.realIds(forTargetChoice: alias).map { targetId in
+                ChosenAction(
+                    intent: DeviceIntent(targetId: targetId, operation: op),
+                    confidence: nil,
+                    primaryChoice: false
+                )
+            }
         }
-        // Heaters, plugs and vacuums wait for a tap even when the model asks for them directly (#21).
-        let split = ModelActionPolicy.partition(IntentValidator.sanitize(raw, devices: devices, scenes: scenes), devices: devices)
-        let intents = split.run
-        let confirmChips = ModelActionPolicy.confirmationChips(
-            for: split.confirm,
-            probability: nil,
-            idPrefix: "confirm",
+        let decision = ModelActionPolicy.decide(
             devices: devices,
-            scenes: scenes
+            scenes: scenes,
+            payload: ModelDecisionPayload(actions: chosen)
         )
-        let primaryTargetIds = Set((intents + split.confirm).map(\.targetId))
+        let intents = decision.intents
+        let confirmChips = decision.suggestions
+        let primaryTargetIds = Set((intents + confirmChips.flatMap(\.intents)).map(\.targetId))
         let rawSuggestions = object["suggestions"] as? [[String: Any]] ?? []
         let parsedSuggestions = parseChatSuggestionItems(
             rawSuggestions,
@@ -618,11 +620,9 @@ public struct ModelIntentResolver: Sendable {
         let opChoice = (answers["op"] as? [String: Any])?["choice"] as? String ?? ""
         let tempChoice = (answers["temp"] as? [String: Any])?["choice"] as? String ?? "none"
 
-        var raw: [DeviceIntent] = []
-        var candidateSuggestions: [(prob: Double, suggestion: AssistantSuggestion)] = []
+        var actions: [ChosenAction] = []
+        var runnerUps: [(prob: Double, suggestion: AssistantSuggestion)] = []
 
-        // 1. Primary target + op + temp head (single device, room light group, all_lights, or a scene).
-        //    It only runs by itself when every head involved is confident (#21); otherwise it becomes a chip.
         let targetIds = catalog.realIds(forTargetChoice: targetChoice)
         let hasPrimaryTarget = targetChoice != "none" && !targetIds.isEmpty
         if hasPrimaryTarget {
@@ -636,110 +636,90 @@ public struct ModelIntentResolver: Sendable {
                 ops.append(.targetTemperature(degree))
                 confidence = min(confidence, ModelActionPolicy.probability(of: answers["temp"] as? [String: Any], choice: tempChoice))
             }
-            var primary: [DeviceIntent] = []
             for id in targetIds {
                 for op in ops {
-                    primary.append(DeviceIntent(targetId: id, operation: op))
+                    actions.append(ChosenAction(
+                        intent: DeviceIntent(targetId: id, operation: op),
+                        confidence: confidence,
+                        primaryChoice: true
+                    ))
                 }
-            }
-            let sanitized = IntentValidator.sanitize(primary, devices: devices, scenes: scenes)
-            let split = ModelActionPolicy.partition(sanitized, devices: devices)
-            let waiting = confidence >= ModelActionPolicy.autoRunThreshold ? split.confirm : sanitized
-            if confidence >= ModelActionPolicy.autoRunThreshold {
-                raw.append(contentsOf: split.run)
-            }
-            // Below the auto-run threshold everything waits for a tap — including answers with no
-            // probability at all (#21: 低于门槛的一律进候选胶囊, never silently dropped).
-            if !waiting.isEmpty {
-                let chips = ModelActionPolicy.confirmationChips(
-                    for: waiting,
-                    probability: confidence,
-                    idPrefix: "jev:primary:\(targetChoice):\(opChoice)",
-                    devices: devices,
-                    scenes: scenes,
-                    grouped: true
-                )
-                candidateSuggestions.append(contentsOf: chips.map { (confidence, $0) })
             }
         }
 
-        // 2. Per-device parallel decision heads (dev_d1, dev_d2, ...) for multi-device ambient orchestration
-        //    and probability-ranked follow-up suggestions. A head runs by itself only at >= 80% (#21).
         let aliasDevices = controllableDevicesWithAliases(devices: devices)
-
         for (alias, device) in aliasDevices {
             guard let answer = answers["dev_\(alias)"] as? [String: Any] else { continue }
             let choice = answer["choice"] as? String ?? "none"
             let probs = answer["probabilities"] as? [String: Any] ?? [:]
             let choiceProb = ModelActionPolicy.probability(of: answer, choice: choice)
+            let isFallbackPowerOnForEffect = opChoice.hasPrefix("effect_") && choice == "power_on" && !targetIds.contains(device.id)
 
-            // A head's power_on next to a light-effect command is the model hedging, not a separate request.
-            let isFallbackPowerOnForEffect = (opChoice.hasPrefix("effect_") && choice == "power_on" && !targetIds.contains(device.id))
-            let deviceIntents = IntentValidator.sanitize(
-                systemOneDeviceOperations(for: choice).map { DeviceIntent(targetId: device.id, operation: $0) },
-                devices: devices,
-                scenes: scenes
-            )
-            let isConfident = choice != "none"
-                && !isFallbackPowerOnForEffect
-                && choiceProb >= ModelActionPolicy.autoRunThreshold
-            let needsTap = deviceIntents.contains { ModelActionPolicy.needsConfirmation($0, devices: devices) }
-
-            if isConfident && !needsTap {
-                raw.append(contentsOf: deviceIntents)
-            } else {
-                let candidate: (String, Double)?
-                if choice != "none" {
-                    // The model picked this device explicitly: below threshold it waits for a tap (#21),
-                    // it is never dropped just because the answer came without a usable probability.
-                    candidate = (choice, choiceProb)
-                } else {
-                    // The model declined the device; only a scored runner-up is worth offering.
-                    candidate = bestNonNoneProbability(in: probs)
+            if choice != "none", !isFallbackPowerOnForEffect {
+                for op in systemOneDeviceOperations(for: choice) {
+                    actions.append(ChosenAction(
+                        intent: DeviceIntent(targetId: device.id, operation: op),
+                        confidence: choiceProb,
+                        primaryChoice: false
+                    ))
                 }
-                if let (runnerUpChoice, runnerUpProb) = candidate,
-                   choice != "none" || runnerUpProb >= ModelActionPolicy.suggestionFloor {
-                    let ops = IntentValidator.sanitize(
-                        systemOneDeviceOperations(for: runnerUpChoice).map { DeviceIntent(targetId: device.id, operation: $0) },
-                        devices: devices,
-                        scenes: scenes
-                    )
-                    if let first = ops.first,
-                       let title = UserHabitMemory.suggestionTitle(for: first, devices: devices, scenes: scenes) {
-                        let pct: Int? = runnerUpProb > 0 ? max(20, min(99, Int((runnerUpProb * 100).rounded()))) : nil
-                        candidateSuggestions.append((
-                            runnerUpProb,
-                            AssistantSuggestion(
-                                id: "jev:\(device.id):\(runnerUpChoice)",
-                                title: title,
-                                confidencePercent: pct,
-                                intents: ops
-                            )
-                        ))
-                    }
+                continue
+            }
+
+            let candidate: (String, Double)?
+            if choice != "none" {
+                candidate = (choice, choiceProb)
+            } else {
+                candidate = bestNonNoneProbability(in: probs)
+            }
+            if let (runnerUpChoice, runnerUpProb) = candidate,
+               choice != "none" || runnerUpProb >= ModelActionPolicy.suggestionFloor {
+                let ops = IntentValidator.sanitize(
+                    systemOneDeviceOperations(for: runnerUpChoice).map { DeviceIntent(targetId: device.id, operation: $0) },
+                    devices: devices,
+                    scenes: scenes
+                )
+                if let first = ops.first,
+                   let title = UserHabitMemory.suggestionTitle(for: first, devices: devices, scenes: scenes) {
+                    let pct: Int? = runnerUpProb > 0 ? max(20, min(99, Int((runnerUpProb * 100).rounded()))) : nil
+                    runnerUps.append((
+                        runnerUpProb,
+                        AssistantSuggestion(
+                            id: "jev:\(device.id):\(runnerUpChoice)",
+                            title: title,
+                            confidencePercent: pct,
+                            intents: ops
+                        )
+                    ))
                 }
             }
         }
 
-        let intents = IntentValidator.sanitize(raw, devices: devices, scenes: scenes)
-        let executedTargetIds = Set(intents.map(\.targetId))
+        let decision = ModelActionPolicy.decide(
+            devices: devices,
+            scenes: scenes,
+            payload: ModelDecisionPayload(actions: actions)
+        )
+        let taken = Set((decision.intents + decision.suggestions.flatMap(\.intents)).map(\.targetId))
         var seenTargetSets: Set<Set<String>> = []
-        let filteredSuggestions = candidateSuggestions
-            .filter { item in !item.suggestion.intents.allSatisfy { executedTargetIds.contains($0.targetId) } }
+        let extras = runnerUps
+            .filter { item in
+                Set(item.suggestion.intents.map(\.targetId)).isDisjoint(with: taken)
+            }
             .sorted { $0.prob > $1.prob }
             .filter { item in seenTargetSets.insert(Set(item.suggestion.intents.map(\.targetId))).inserted }
             .prefix(3)
             .map(\.suggestion)
-
-        let described = IntentReply.describe(intents, devices: devices, scenes: scenes)
-        let reply = filteredSuggestions.isEmpty
+        let suggestions = decision.suggestions + extras
+        let described = IntentReply.describe(decision.intents, devices: devices, scenes: scenes)
+        let reply = suggestions.isEmpty
             ? described
-            : ModelActionPolicy.confirmationReply(ranReply: intents.isEmpty ? nil : described)
+            : ModelActionPolicy.confirmationReply(ranReply: decision.intents.isEmpty ? nil : described)
         return IntentPlan(
-            intents: intents,
+            intents: decision.intents,
             reply: reply,
             source: .model,
-            suggestions: Array(filteredSuggestions)
+            suggestions: suggestions
         )
     }
 
@@ -931,7 +911,7 @@ public struct ModelIntentResolver: Sendable {
         }
     }
 
-    private static func operation(named name: String, value: Any?) -> IntentOperation? {
+    static func operation(named name: String, value: Any?) -> IntentOperation? {
         switch name.lowercased() {
         case "power":
             return bool(from: value).map(IntentOperation.power)

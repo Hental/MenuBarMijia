@@ -810,10 +810,21 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
         { id: 1, name: "我的家", roomlist: [{ id: 12, name: "重复", dids: [] }] },
       ],
     });
-    assert.deepEqual(withShared.map((r) => [r.id, r.homeId, r.homeName]), [
-      ["11", "1", "我的家"],
-      ["21", "2", "爸妈家"],
+    assert.deepEqual(withShared.map((r) => [r.id, r.homeId, r.homeName, r.isSharedHome === true]), [
+      ["11", "1", "我的家", false],
+      ["21", "2", "爸妈家", true],
     ]);
+    const sharedHome = MiotSynthesizer.synthesize(
+      [
+        { did: "a", name: "客厅灯", model: "yeelink.light.ceiling22", isOnline: true, specType: null },
+        { did: "b", name: "卧室灯", model: "yeelink.light.ceiling22", isOnline: true, specType: null },
+      ],
+      withShared,
+      { "yeelink.light.ceiling22": lightSpec },
+      new Map(),
+    );
+    assert.equal(sharedHome.devices.find((device) => device.id === "a")?.isSharedHome, undefined);
+    assert.equal(sharedHome.devices.find((device) => device.id === "b")?.isSharedHome, true);
   });
 
   it("maps explicit MIoT kWh, 0.01kWh, and Wh cumulative counters while ignoring untagged integers (#62)", () => {
@@ -1337,14 +1348,19 @@ describe("AI guesses below 80% and risky actions wait for a tap (#21)", () => {
   });
 
   it("flags heater on but not heater off", () => {
-    const needs = (isOn: boolean) =>
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_heater", operation: { kind: "power", isOn } }, devices);
-    assert.equal(needs(true), true);
-    assert.equal(needs(false), false);
-    assert.equal(
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_light", operation: { kind: "power", isOn: true } }, devices),
-      false
-    );
+    const decisionFor = (targetId: string, isOn: boolean) =>
+      ModelActionPolicy.decide(devices, [], {
+        actions: [{ intent: { targetId, operation: { kind: "power", isOn } }, confidence: 1, primaryChoice: false }],
+      });
+    const heaterOn = decisionFor("dev_heater", true);
+    assert.deepEqual(heaterOn.intents, []);
+    assert.deepEqual(heaterOn.suggestions.flatMap((chip) => chip.intents.map((intent) => intent.targetId)), ["dev_heater"]);
+    const heaterOff = decisionFor("dev_heater", false);
+    assert.deepEqual(heaterOff.intents.map((intent) => intent.targetId), ["dev_heater"]);
+    assert.deepEqual(heaterOff.suggestions, []);
+    const lightOn = decisionFor("dev_light", true);
+    assert.deepEqual(lightOn.intents.map((intent) => intent.targetId), ["dev_light"]);
+    assert.deepEqual(lightOn.suggestions, []);
   });
 
   it("turns a 60% System One answer into a chip instead of running it", async () => {
@@ -1402,6 +1418,119 @@ describe("AI guesses below 80% and risky actions wait for a tap (#21)", () => {
     assert.equal(plan.suggestions[0]?.confidencePercent, null);
     assert.equal(plan.reply, "已打开书房台灯；下面的建议要点一下才执行");
   });
+});
+
+describe("Prompt injection golden corpus", () => {
+  const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/prompt_injection_golden.json"), "utf8");
+  const corpus = JSON.parse(raw) as {
+    cases: Array<{
+      id: string;
+      devices: Array<{ id: string; name: string; roomName: string; model: string; kind: string; isSharedHome?: boolean }>;
+      scenes: Array<{ id: string; name: string; entityId: string }>;
+      payload: { actions: Array<{ targetId: string; op: string; value: unknown; confidence?: number; primaryChoice?: boolean }> };
+      expect: { runTargetIds: string[]; confirmTargetIds: string[]; suggestionIds: string[] };
+    }>;
+  };
+
+  function injectionDevice(row: (typeof corpus.cases)[number]["devices"][number]): SmartDevice {
+    const base = {
+      id: row.id,
+      name: row.name,
+      roomId: row.roomName,
+      roomName: row.roomName,
+      model: row.model,
+      isOnline: true,
+    };
+    let kind: SmartDevice["kind"];
+    switch (row.kind) {
+      case "heater":
+        kind = {
+          kind: "climate",
+          entityId: `climate.${row.id}`,
+          isOn: false,
+          hvacMode: "off",
+          availableModes: ["off", "heat"],
+          targetTemperature: 22,
+          currentTemperature: null,
+          minTemp: 16,
+          maxTemp: 30,
+          step: 1,
+          fanMode: null,
+          availableFanModes: [],
+        };
+        break;
+      case "plug":
+        kind = {
+          kind: "plug",
+          switchEntityId: `switch.${row.id}`,
+          isOn: false,
+          powerWatts: null,
+          childLockEntityId: null,
+          isChildLocked: false,
+        };
+        break;
+      case "camera":
+        kind = {
+          kind: "camera",
+          entityId: `camera.${row.id}`,
+          isOn: false,
+          nightShot: null,
+          availableNightShots: [],
+          motionDetectionEntityId: null,
+          isMotionDetectionOn: null,
+          streamEntityId: null,
+        };
+        break;
+      case "vacuum":
+        kind = {
+          kind: "vacuum",
+          entityId: `vacuum.${row.id}`,
+          status: "docked",
+          battery: null,
+          modeEntityId: null,
+          currentMode: null,
+          availableModes: [],
+        };
+        break;
+      default:
+        kind = {
+          kind: "light",
+          entityId: `light.${row.id}`,
+          isOn: false,
+          brightnessPercent: null,
+          colorTempKelvin: null,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+        };
+    }
+    return { ...base, kind, ...(row.isSharedHome ? { isSharedHome: true } : {}) };
+  }
+
+  for (const row of corpus.cases) {
+    it(row.id, () => {
+      const devices = row.devices.map(injectionDevice);
+      const scenes = row.scenes;
+      const actions = row.payload.actions.map((action) => {
+        const operation = ModelIntentResolver.decodeChatOp(action.op, action.value);
+        assert.ok(operation, `${row.id} ${action.op}`);
+        return {
+          intent: { targetId: action.targetId, operation },
+          confidence: "confidence" in action ? action.confidence ?? null : null,
+          primaryChoice: action.primaryChoice === true,
+        };
+      });
+      const decision = ModelActionPolicy.decide(devices, scenes, { actions });
+      assert.deepEqual(decision.intents.map((intent) => intent.targetId), row.expect.runTargetIds, `${row.id} run`);
+      assert.deepEqual(
+        decision.suggestions.flatMap((chip) => chip.intents.map((intent) => intent.targetId)),
+        row.expect.confirmTargetIds,
+        `${row.id} confirm`,
+      );
+      assert.deepEqual(decision.suggestions.map((chip) => chip.id), row.expect.suggestionIds, `${row.id} chips`);
+    });
+  }
 });
 
 describe("Timers the PC slept through wait for the user (#22)", () => {
