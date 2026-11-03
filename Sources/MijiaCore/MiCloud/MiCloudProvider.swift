@@ -461,8 +461,8 @@ public actor MiCloudProvider: HomeProvider {
         // Split wall-switch cards report `100.s2` while property reads are keyed by `100`.
         let did = devices.first { $0.did == deviceId }?.miotDid ?? deviceId
         do {
+            // Only a full poll may clear home-wide staleness; this read refreshes one device.
             try await poll(api, dids: [did])
-            reportConnected()
             return .published
         } catch {
             report(error)
