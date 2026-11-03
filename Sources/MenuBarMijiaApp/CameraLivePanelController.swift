@@ -466,7 +466,7 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         )
         let session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
         self.mjpegSession = session
-        var req = URLRequest(url: url)
+        var req = XiaomiCameraBridge.authorizedURLRequest(for: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         let task = session.dataTask(with: req)
 
@@ -488,9 +488,10 @@ public final class CameraLivePanelController: NSObject, NSWindowDelegate {
         comps?.queryItems = items
         let targetURL = comps?.url ?? url
 
-        var req = URLRequest(url: targetURL)
+        var req = XiaomiCameraBridge.authorizedURLRequest(for: targetURL)
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        if let store, store.homeBackend == .homeAssistant,
+        if req.value(forHTTPHeaderField: "Authorization") == nil,
+           let store, store.homeBackend == .homeAssistant,
            targetURL.query?.contains("token=") != true {
             let token = KeychainHelper.loadToken().trimmingCharacters(in: .whitespacesAndNewlines)
             if !token.isEmpty {
@@ -834,7 +835,7 @@ struct CameraLivePanelView: View {
                 .foregroundStyle(.secondary)
 
             TextField(
-                L10n.tr("输入 HLS (.m3u8) / go2rtc / 抓拍 URL，例如 http://127.0.0.1:1984/api/stream.m3u8?src=cam", "Enter HLS (.m3u8) / go2rtc / snapshot URL"),
+                L10n.tr("输入 HLS (.m3u8) / go2rtc / 抓拍 URL，例如 http://127.0.0.1:<port>/api/stream.m3u8?src=cam", "Enter HLS (.m3u8) / go2rtc / snapshot URL"),
                 text: $controller.customURLInput
             )
             .textFieldStyle(.plain)

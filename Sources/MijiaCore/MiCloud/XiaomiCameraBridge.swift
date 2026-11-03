@@ -21,6 +21,12 @@ public protocol XiaomiCameraBridging: Sendable {
     ) async throws -> XiaomiCameraStreamEndpoints
 
     func stopBridge(did: String) async
+
+    func probeRegisteredStream(candidates: [String]) async -> URL?
+}
+
+extension XiaomiCameraBridging {
+    public func probeRegisteredStream(candidates: [String]) async -> URL? { nil }
 }
 
 /// Local go2rtc URLs for one bridged camera (#97).
@@ -36,6 +42,74 @@ public struct XiaomiCameraStreamEndpoints: Equatable, Sendable {
     }
 }
 
+struct Go2RTCSession: Equatable, Sendable {
+    var apiListen: String
+    var rtspListen: String
+    var username: String
+    var password: String
+    var nonce: String
+}
+
+struct Go2RTCOwnerRecord: Equatable, Sendable {
+    var pid: Int32
+    var session: Go2RTCSession
+
+    func serialized() -> String {
+        [
+            "pid=\(pid)",
+            "nonce=\(session.nonce)",
+            "api_listen=\(session.apiListen)",
+            "rtsp_listen=\(session.rtspListen)",
+            "username=\(session.username)",
+            "password=\(session.password)",
+            "",
+        ].joined(separator: "\n")
+    }
+
+    static func parse(_ text: String) -> Go2RTCOwnerRecord? {
+        var fields: [String: String] = [:]
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let key = String(line[..<eq])
+            let value = String(line[line.index(after: eq)...])
+            if !key.isEmpty, !value.isEmpty {
+                fields[key] = value
+            }
+        }
+        guard let pidRaw = fields["pid"], let pid = Int32(pidRaw), pid >= 0,
+              let nonce = fields["nonce"], XiaomiCameraBridge.isCredentialToken(nonce),
+              let apiListen = fields["api_listen"], XiaomiCameraBridge.isAcceptableGo2RTCListen(apiListen),
+              let rtspListen = fields["rtsp_listen"], XiaomiCameraBridge.isAcceptableGo2RTCListen(rtspListen),
+              let username = fields["username"], XiaomiCameraBridge.isCredentialToken(username),
+              let password = fields["password"], XiaomiCameraBridge.isCredentialToken(password) else {
+            return nil
+        }
+        return Go2RTCOwnerRecord(
+            pid: pid,
+            session: Go2RTCSession(
+                apiListen: apiListen,
+                rtspListen: rtspListen,
+                username: username,
+                password: password,
+                nonce: nonce
+            )
+        )
+    }
+}
+
+enum Go2RTCAction: Equatable, Sendable {
+    case reuseOwned
+    case restartOwned
+    case spawnFresh
+}
+
+struct Go2RTCOwnershipProbe: Equatable, Sendable {
+    var pidAlive: Bool
+    var authenticated: Bool
+    var nonceMatches: Bool
+    var configChanged: Bool
+}
+
 /// Manages the local CS2 UDP LAN relay and `go2rtc` transcode daemon for Xiaomi P2P cameras (#97).
 public actor XiaomiCameraBridge: XiaomiCameraBridging {
     public static let shared = XiaomiCameraBridge()
@@ -43,6 +117,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
     private let logger = Logger(subsystem: "com.jryang1997.MenuBarMijia", category: "XiaomiCameraBridge")
     private var relays: [String: RelayHandle] = [:]
     private var go2rtcProcess: Process?
+    private var activeOwner: Go2RTCOwnerRecord?
 
     private struct RelayHandle {
         let port: UInt16
@@ -85,7 +160,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         defer { session.invalidateAndCancel() }
 
         // h264Name is no longer registered but is still deleted, so streams left by older builds go away.
-        await stopBridgeInternal(session: session, cleanDid: cleanDid, names: [rawName, h264Name, mjpegName])
+        await stopBridgeInternal(http: session, cleanDid: cleanDid, names: [rawName, h264Name, mjpegName])
 
         let relayPort = try ensureRelayPort(cleanDid: cleanDid, camIP: ipv4)
 
@@ -106,13 +181,16 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         }
         let xiaomiURL = "xiaomi://127.0.0.1:\(relayPort)?\(query)"
 
-        try await putStream(session: session, name: rawName, src: xiaomiURL)
-        try await putStream(session: session, name: mjpegName, src: "ffmpeg:\(rawName)#video=mjpeg")
+        guard let owner = activeOwner else {
+            throw HomeProviderError.serviceCallFailed(500, "Local streaming service did not start")
+        }
+        try await putStream(http: session, owner: owner.session, name: rawName, src: xiaomiURL)
+        try await putStream(http: session, owner: owner.session, name: mjpegName, src: "ffmpeg:\(rawName)#video=mjpeg")
 
         // `mp4` (empty) selects go2rtc's H.264 + H.265 fMP4 profile, so the camera's own
         // bitstream reaches VideoToolbox without an FFmpeg transcode in between.
-        guard let mp4URL = URL(string: "http://127.0.0.1:1984/api/stream.mp4?src=\(Self.urlEncode(rawName))&mp4"),
-              let mjpegURL = URL(string: "http://127.0.0.1:1984/api/stream.mjpeg?src=\(Self.urlEncode(mjpegName))") else {
+        guard let mp4URL = Self.streamURL(session: owner.session, path: "/api/stream.mp4", query: "src=\(Self.urlEncode(rawName))&mp4"),
+              let mjpegURL = Self.streamURL(session: owner.session, path: "/api/stream.mjpeg", query: "src=\(Self.urlEncode(mjpegName))") else {
             throw HomeProviderError.serviceCallFailed(500, "Invalid go2rtc stream URL")
         }
         return XiaomiCameraStreamEndpoints(mp4: mp4URL, mjpeg: mjpegURL)
@@ -123,18 +201,45 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         let rawName = "cam_raw_\(cleanDid)"
         let h264Name = "cam_h264_\(cleanDid)"
         let mjpegName = "cam_mjpeg_\(cleanDid)"
-        let session = Self.makeLocalHTTPClient(timeout: 3.0)
-        defer { session.invalidateAndCancel() }
-        await stopBridgeInternal(session: session, cleanDid: cleanDid, names: [rawName, h264Name, mjpegName])
+        let http = Self.makeLocalHTTPClient(timeout: 3.0)
+        defer { http.invalidateAndCancel() }
+        await stopBridgeInternal(http: http, cleanDid: cleanDid, names: [rawName, h264Name, mjpegName])
     }
 
-    private func stopBridgeInternal(session: URLSession, cleanDid: String, names: [String]) async {
-        for name in names {
-            if let url = URL(string: "http://127.0.0.1:1984/api/streams?src=\(Self.urlEncode(name))") {
-                var req = URLRequest(url: url)
-                req.httpMethod = "DELETE"
-                _ = try? await session.data(for: req)
+    public func probeRegisteredStream(candidates: [String]) async -> URL? {
+        guard let owner = activeOwner else { return nil }
+        let lowered = candidates.map { $0.lowercased() }.filter { !$0.isEmpty }
+        guard !lowered.isEmpty,
+              let streamsURL = Self.streamURL(session: owner.session, path: "/api/streams", query: nil) else {
+            return nil
+        }
+        let http = Self.makeLocalHTTPClient(timeout: 1.2)
+        defer { http.invalidateAndCancel() }
+        let req = Self.authorizedURLRequest(for: streamsURL)
+        guard let (data, response) = try? await http.data(for: req),
+              let status = (response as? HTTPURLResponse)?.statusCode,
+              (200..<300).contains(status),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              !json.isEmpty else {
+            return nil
+        }
+        let matchedKey = json.keys.first { key in
+            let lower = key.lowercased()
+            return lowered.contains { lower == $0 || lower.contains($0) || $0.contains(lower) }
+        } ?? (json.keys.count == 1 ? json.keys.first : nil)
+        guard let src = matchedKey else { return nil }
+        return Self.streamURL(session: owner.session, path: "/api/stream.m3u8", query: "src=\(Self.urlEncode(src))")
+    }
+
+    private func stopBridgeInternal(http: URLSession, cleanDid: String, names: [String]) async {
+        if let owner = activeOwner {
+            for name in names {
+                if let url = Self.streamURL(session: owner.session, path: "/api/streams", query: "src=\(Self.urlEncode(name))") {
+                    let req = Self.authorizedURLRequest(for: url, method: "DELETE")
+                    _ = try? await http.data(for: req)
+                }
             }
+            Self.restrictSecretFile(Self.go2rtcConfigURL())
         }
         if let existing = relays.removeValue(forKey: cleanDid) {
             existing.stopBox.stop()
@@ -145,42 +250,59 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
     }
 
     private static func scrubPersistedStreamsFromConfig() {
-        let cfgURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MenuBarMijia/bin/go2rtc.yaml")
+        let cfgURL = go2rtcConfigURL()
         guard let existing = try? String(contentsOf: cfgURL, encoding: .utf8),
               existing.contains("streams:") else { return }
         let cleaned = baseConfig(existing) + "\n"
-        try? cleaned.write(to: cfgURL, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cfgURL.path)
+        try? writeSecretFile(cleaned, to: cfgURL)
     }
 
-    static func desiredGo2RTCConfig(ffmpegBin: String) -> String {
-        // `webrtc: listen: ""` keeps go2rtc from opening port 8555 on every LAN interface;
-        // omitting `origin: "*"` blocks cross-origin browser pages from reading `/api/streams`.
-        """
+    /// `webrtc: listen: ""` keeps go2rtc from opening port 8555. `local_auth` is required
+    /// because v1.9.15 skips Basic auth for every loopback request when it is false.
+    static func desiredGo2RTCConfig(ffmpegBin: String, session: Go2RTCSession) -> String {
+        let ffmpeg = yamlDoubleQuoted(ffmpegBin)
+        let apiListen = sanitizedListen(session.apiListen)
+        let rtspListen = sanitizedListen(session.rtspListen)
+        return """
         api:
-          listen: 127.0.0.1:1984
+          listen: \(apiListen)
+          username: \(yamlDoubleQuoted(session.username))
+          password: \(yamlDoubleQuoted(session.password))
+          local_auth: true
         rtsp:
-          listen: 127.0.0.1:8554
+          listen: \(rtspListen)
         webrtc:
           listen: ""
         log:
           level: info
           ffmpeg: error
         ffmpeg:
-          bin: \(ffmpegBin)
+          bin: \(ffmpeg)
+        exec:
+          allow_paths:
+            - \(ffmpeg)
+        menubarmijia:
+          nonce: \(yamlDoubleQuoted(session.nonce))
         """
     }
 
-    private func putStream(session: URLSession, name: String, src: String) async throws {
-        let urlString = "http://127.0.0.1:1984/api/streams?name=\(Self.urlEncode(name))&src=\(Self.urlEncode(src))"
-        guard let url = URL(string: urlString) else {
+    static func decideGo2RTCAction(_ probe: Go2RTCOwnershipProbe) -> Go2RTCAction {
+        let owned = probe.pidAlive && probe.authenticated && probe.nonceMatches
+        if !owned {
+            return .spawnFresh
+        }
+        return probe.configChanged ? .restartOwned : .reuseOwned
+    }
+
+    private func putStream(http: URLSession, owner: Go2RTCSession, name: String, src: String) async throws {
+        let query = "name=\(Self.urlEncode(name))&src=\(Self.urlEncode(src))"
+        guard let url = Self.streamURL(session: owner, path: "/api/streams", query: query) else {
             throw HomeProviderError.serviceCallFailed(500, "Invalid go2rtc stream URL")
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PUT"
-        let (_, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        let req = Self.authorizedURLRequest(for: url, method: "PUT")
+        let (_, response) = try await http.data(for: req)
+        Self.restrictSecretFile(Self.go2rtcConfigURL())
+        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 500
             throw HomeProviderError.serviceCallFailed(code, L10n.tr("注册摄像机流失败 (HTTP \(code))", "Failed to register camera stream (HTTP \(code))"))
         }
@@ -197,8 +319,7 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
     }
 
     private func ensureGo2RTCRunning() async throws {
-        let appSupportBin = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MenuBarMijia/bin", isDirectory: true)
+        let appSupportBin = Self.supportBinDirectory()
         try FileManager.default.createDirectory(at: appSupportBin, withIntermediateDirectories: true)
 
         let exePath: String
@@ -207,77 +328,159 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         } else {
             exePath = try await Self.downloadGo2RTCBinary(into: appSupportBin)
         }
-
         let ffmpegBin = Self.locateFFmpegBinary()
-        let desiredConfig = Self.desiredGo2RTCConfig(ffmpegBin: ffmpegBin)
-        let cfgURL = appSupportBin.appendingPathComponent("go2rtc.yaml")
-        let existingConfig = (try? String(contentsOf: cfgURL, encoding: .utf8)) ?? ""
-        // go2rtc appends every API-registered stream to its config file, so only the part
-        // this app writes is compared; otherwise every open looked like a config change and
-        // restarted (or duplicated) the daemon.
-        let configChanged = Self.baseConfig(existingConfig) != Self.baseConfig(desiredConfig)
-        if configChanged {
-            try desiredConfig.write(to: cfgURL, atomically: true, encoding: .utf8)
-        }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cfgURL.path)
 
-        let probeSession = Self.makeLocalHTTPClient(timeout: 0.8)
-        defer { probeSession.invalidateAndCancel() }
-        let apiURL = URL(string: "http://127.0.0.1:1984/api")!
-        func probe() async -> Bool {
-            guard let (_, resp) = try? await probeSession.data(from: apiURL),
-                  let http = resp as? HTTPURLResponse else { return false }
-            return (200..<300).contains(http.statusCode)
+        if let record = existingOwnedRecord() {
+            let probe = await probeOwned(record.session)
+            let desired = Self.desiredGo2RTCConfig(ffmpegBin: ffmpegBin, session: record.session)
+            let existing = (try? String(contentsOf: Self.go2rtcConfigURL(), encoding: .utf8)) ?? ""
+            let changed = Self.baseConfig(existing) != Self.baseConfig(desired)
+            let action = Self.decideGo2RTCAction(Go2RTCOwnershipProbe(
+                pidAlive: true,
+                authenticated: probe.authenticated,
+                nonceMatches: probe.nonceMatches,
+                configChanged: changed
+            ))
+            switch action {
+            case .reuseOwned:
+                activeOwner = record
+                return
+            case .restartOwned:
+                await stopOwnedProcess(record)
+            case .spawnFresh:
+                if let proc = go2rtcProcess, proc.isRunning, proc.processIdentifier == record.pid {
+                    proc.terminate()
+                    go2rtcProcess = nil
+                    activeOwner = nil
+                }
+            }
         }
 
-        let isRunning = await probe()
-        if isRunning && !configChanged {
-            return
+        try await spawnFreshGo2RTC(exePath: exePath, ffmpegBin: ffmpegBin, appSupportBin: appSupportBin)
+    }
+
+    private func existingOwnedRecord() -> Go2RTCOwnerRecord? {
+        if let proc = go2rtcProcess, proc.isRunning, let activeOwner {
+            return Go2RTCOwnerRecord(pid: proc.processIdentifier, session: activeOwner.session)
         }
-        if isRunning {
-            if let proc = go2rtcProcess, proc.isRunning {
+        if let activeOwner, Self.processIsAlive(activeOwner.pid) {
+            return activeOwner
+        }
+        if let saved = Self.readOwner(), Self.processIsAlive(saved.pid) {
+            return saved
+        }
+        return nil
+    }
+
+    private func spawnFreshGo2RTC(exePath: String, ffmpegBin: String, appSupportBin: URL) async throws {
+        for _ in 0..<4 {
+            let session = try Self.makeEphemeralGo2RTCSession()
+            let desired = Self.desiredGo2RTCConfig(ffmpegBin: ffmpegBin, session: session)
+            try Self.writeSecretFile(desired, to: Self.go2rtcConfigURL())
+            let logURL = appSupportBin.appendingPathComponent("go2rtc.log")
+            _ = FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: logURL.path)
+            let logHandle = try? FileHandle(forWritingTo: logURL)
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: exePath)
+            proc.arguments = ["-c", Self.go2rtcConfigURL().path]
+            proc.currentDirectoryURL = appSupportBin
+            proc.standardOutput = logHandle ?? FileHandle.nullDevice
+            proc.standardError = logHandle ?? FileHandle.nullDevice
+            try proc.run()
+
+            let record = Go2RTCOwnerRecord(pid: proc.processIdentifier, session: session)
+            try Self.writeSecretFile(record.serialized(), to: Self.go2rtcOwnerURL())
+            go2rtcProcess = proc
+            activeOwner = record
+            if await waitForOwnedAPI(session) {
+                return
+            }
+            if proc.isRunning {
                 proc.terminate()
-            } else if !existingConfig.isEmpty, let exitURL = URL(string: "http://127.0.0.1:1984/api/exit") {
-                // A daemon left by an earlier app launch: ask it to quit instead of starting a
-                // second copy that cannot bind the API port.
-                var req = URLRequest(url: exitURL)
-                req.httpMethod = "POST"
-                _ = try? await probeSession.data(for: req)
-            } else {
-                // Another application already owns a go2rtc instance on 127.0.0.1:1984; reuse it
-                // rather than killing user processes.
-                return
             }
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .milliseconds(100))
-                if await !probe() { break }
-            }
-            if await probe() {
-                return
-            }
+            go2rtcProcess = nil
+            activeOwner = nil
         }
+        throw HomeProviderError.serviceCallFailed(
+            504,
+            L10n.tr("本地流媒体服务启动超时", "Local streaming service timed out starting")
+        )
+    }
 
-        let logURL = appSupportBin.appendingPathComponent("go2rtc.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: logURL.path)
-        let logHandle = try? FileHandle(forWritingTo: logURL)
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: exePath)
-        proc.arguments = ["-c", cfgURL.path]
-        proc.currentDirectoryURL = appSupportBin
-        proc.standardOutput = logHandle ?? FileHandle.nullDevice
-        proc.standardError = logHandle ?? FileHandle.nullDevice
-        try proc.run()
-        go2rtcProcess = proc
-
+    private func waitForOwnedAPI(_ session: Go2RTCSession) async -> Bool {
         for _ in 0..<25 {
             try? await Task.sleep(for: .milliseconds(120))
-            if await probe() {
-                return
+            let probe = await probeOwned(session)
+            if probe.authenticated && probe.nonceMatches {
+                return true
+            }
+            if probe.reachable && !probe.authenticated {
+                return false
+            }
+            if probe.authenticated && !probe.nonceMatches {
+                return false
             }
         }
-        throw HomeProviderError.serviceCallFailed(504, L10n.tr("本地流媒体服务 (127.0.0.1:1984) 启动超时", "Local streaming service (127.0.0.1:1984) timed out starting"))
+        return false
+    }
+
+    private func stopOwnedProcess(_ record: Go2RTCOwnerRecord) async {
+        await requestOwnedExit(record.session)
+        if let proc = go2rtcProcess, proc.isRunning, proc.processIdentifier == record.pid {
+            proc.terminate()
+        }
+        for _ in 0..<20 {
+            if !Self.processIsAlive(record.pid) { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if Self.processIsAlive(record.pid) {
+            Self.terminateProcess(record.pid, force: true)
+        }
+        go2rtcProcess = nil
+        activeOwner = nil
+    }
+
+    private func requestOwnedExit(_ session: Go2RTCSession) async {
+        guard let url = Self.streamURL(session: session, path: "/api/exit", query: "code=0") else { return }
+        let http = Self.makeLocalHTTPClient(timeout: 0.8)
+        defer { http.invalidateAndCancel() }
+        let req = Self.authorizedURLRequest(for: url, method: "POST")
+        _ = try? await http.data(for: req)
+    }
+
+    private struct OwnedAPIProbe {
+        var reachable: Bool
+        var authenticated: Bool
+        var nonceMatches: Bool
+    }
+
+    private func probeOwned(_ session: Go2RTCSession) async -> OwnedAPIProbe {
+        let missed = OwnedAPIProbe(reachable: false, authenticated: false, nonceMatches: false)
+        guard let apiURL = Self.streamURL(session: session, path: "/api", query: nil) else { return missed }
+        let http = Self.makeLocalHTTPClient(timeout: 0.8)
+        defer { http.invalidateAndCancel() }
+        let apiReq = Self.authorizedURLRequest(for: apiURL)
+        guard let (_, response) = try? await http.data(for: apiReq),
+              let status = (response as? HTTPURLResponse)?.statusCode else {
+            return missed
+        }
+        guard (200..<300).contains(status) else {
+            return OwnedAPIProbe(reachable: true, authenticated: false, nonceMatches: false)
+        }
+        guard let configURL = Self.streamURL(session: session, path: "/api/config", query: nil) else {
+            return missed
+        }
+        let configReq = Self.authorizedURLRequest(for: configURL)
+        guard let (data, configResponse) = try? await http.data(for: configReq),
+              let configStatus = (configResponse as? HTTPURLResponse)?.statusCode,
+              (200..<300).contains(configStatus),
+              let body = String(data: data, encoding: .utf8) else {
+            return missed
+        }
+        let needle = "nonce: \(Self.yamlDoubleQuoted(session.nonce))"
+        return OwnedAPIProbe(reachable: true, authenticated: true, nonceMatches: body.contains(needle))
     }
 
     private static func downloadGo2RTCBinary(into appSupportBin: URL) async throws -> String {
@@ -359,6 +562,216 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
         }
         try FileManager.default.moveItem(at: extractedURL, to: targetURL)
         return targetURL.path
+    }
+
+    static let forbiddenListenPorts: Set<UInt16> = [1984, 8554, 8555]
+
+    static func supportBinDirectory() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MenuBarMijia/bin", isDirectory: true)
+    }
+
+    static func go2rtcConfigURL() -> URL {
+        supportBinDirectory().appendingPathComponent("go2rtc.yaml")
+    }
+
+    static func go2rtcOwnerURL() -> URL {
+        supportBinDirectory().appendingPathComponent("go2rtc.owner")
+    }
+
+    static func writeSecretFile(_ text: String, to url: URL) throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        restrictSecretFile(url)
+    }
+
+    static func restrictSecretFile(_ url: URL) {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    static func readOwner() -> Go2RTCOwnerRecord? {
+        guard let text = try? String(contentsOf: go2rtcOwnerURL(), encoding: .utf8) else { return nil }
+        return Go2RTCOwnerRecord.parse(text)
+    }
+
+    static func isCredentialToken(_ value: String) -> Bool {
+        let scalars = value.unicodeScalars
+        return (8...128).contains(scalars.count) && scalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
+    }
+
+    static func isAcceptableGo2RTCListen(_ value: String) -> Bool {
+        let prefix = "127.0.0.1:"
+        guard value.hasPrefix(prefix),
+              let port = UInt16(value.dropFirst(prefix.count)),
+              port > 0,
+              !forbiddenListenPorts.contains(port) else {
+            return false
+        }
+        return value == "127.0.0.1:\(port)"
+    }
+
+    static func sanitizedListen(_ value: String) -> String {
+        isAcceptableGo2RTCListen(value) ? value : "127.0.0.1:9"
+    }
+
+    static func yamlDoubleQuoted(_ value: String) -> String {
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\":
+                out += "\\\\"
+            case "\"":
+                out += "\\\""
+            case "\n", "\r":
+                continue
+            default:
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        out += "\""
+        return out
+    }
+
+    static func randomCredentialToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for index in bytes.indices {
+            bytes[index] = UInt8.random(in: 0...255)
+        }
+        return "m" + bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func makeEphemeralGo2RTCSession() throws -> Go2RTCSession {
+        let ports = try reserveLoopbackTCPPorts(count: 2)
+        return Go2RTCSession(
+            apiListen: "127.0.0.1:\(ports[0])",
+            rtspListen: "127.0.0.1:\(ports[1])",
+            username: randomCredentialToken(),
+            password: randomCredentialToken(),
+            nonce: randomCredentialToken()
+        )
+    }
+
+    static func streamURL(session: Go2RTCSession, path: String, query: String?) -> URL? {
+        guard isAcceptableGo2RTCListen(session.apiListen),
+              let port = UInt16(session.apiListen.dropFirst("127.0.0.1:".count)) else {
+            return nil
+        }
+        var comps = URLComponents()
+        comps.scheme = "http"
+        comps.host = "127.0.0.1"
+        comps.port = Int(port)
+        comps.user = session.username
+        comps.password = session.password
+        comps.path = path.hasPrefix("/") ? path : "/" + path
+        if let query, !query.isEmpty {
+            comps.percentEncodedQuery = query
+        }
+        return comps.url
+    }
+
+    public static func authorizedURLRequest(for url: URL, method: String = "GET") -> URLRequest {
+        guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            var req = URLRequest(url: url)
+            req.httpMethod = method
+            return req
+        }
+        let user = comps.user
+        let password = comps.password
+        comps.user = nil
+        comps.password = nil
+        var req = URLRequest(url: comps.url ?? url)
+        req.httpMethod = method
+        if let user, let password, !user.isEmpty {
+            let token = Data("\(user):\(password)".utf8).base64EncodedString()
+            req.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return req
+    }
+
+    static func processIsAlive(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        #if canImport(Darwin)
+        return Darwin.kill(pid, 0) == 0
+        #elseif canImport(Glibc)
+        return Glibc.kill(pid, 0) == 0
+        #else
+        return false
+        #endif
+    }
+
+    static func terminateProcess(_ pid: Int32, force: Bool) {
+        guard pid > 0 else { return }
+        let signal: Int32 = force ? SIGKILL : SIGTERM
+        #if canImport(Darwin)
+        _ = Darwin.kill(pid, signal)
+        #elseif canImport(Glibc)
+        _ = Glibc.kill(pid, signal)
+        #endif
+    }
+
+    static func reserveLoopbackTCPPorts(count: Int) throws -> [UInt16] {
+        var fds: [Int32] = []
+        var ports: [UInt16] = []
+        defer { fds.forEach(closeFD) }
+        var attempts = 0
+        while ports.count < count && attempts < 64 {
+            attempts += 1
+            #if canImport(Darwin)
+            let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+            #else
+            let fd = Glibc.socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+            #endif
+            guard fd >= 0 else { continue }
+            var addr = sockaddr_in()
+            #if canImport(Darwin)
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            #endif
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = 0
+            addr.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+            let bound = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { ptr in
+                    #if canImport(Darwin)
+                    Darwin.bind(fd, ptr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    #else
+                    Glibc.bind(fd, ptr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    #endif
+                }
+            }
+            guard bound == 0 else {
+                closeFD(fd)
+                continue
+            }
+            var boundAddr = sockaddr_in()
+            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let named = withUnsafeMutablePointer(to: &boundAddr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { ptr in
+                    #if canImport(Darwin)
+                    Darwin.getsockname(fd, ptr, &length)
+                    #else
+                    Glibc.getsockname(fd, ptr, &length)
+                    #endif
+                }
+            }
+            let port = UInt16(bigEndian: boundAddr.sin_port)
+            if named != 0 || port == 0 || forbiddenListenPorts.contains(port) || ports.contains(port) {
+                closeFD(fd)
+                continue
+            }
+            fds.append(fd)
+            ports.append(port)
+        }
+        if ports.count != count {
+            throw HomeProviderError.networkError("Loopback port reservation failed")
+        }
+        return ports
+    }
+
+    private static func closeFD(_ fd: Int32) {
+        #if canImport(Darwin)
+        Darwin.close(fd)
+        #else
+        _ = Glibc.close(fd)
+        #endif
     }
 
     /// The app-owned part of go2rtc.yaml, without the `streams:` section go2rtc appends.

@@ -110,7 +110,7 @@ final class CameraLiveVideoPlayer: NSObject, URLSessionDataDelegate, @unchecked 
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: cfg, delegate: self, delegateQueue: delegateQueue)
         self.session = session
-        session.dataTask(with: URLRequest(url: url)).resume()
+        session.dataTask(with: XiaomiCameraBridge.authorizedURLRequest(for: url)).resume()
     }
 
     private func finish(failure reason: String?) {

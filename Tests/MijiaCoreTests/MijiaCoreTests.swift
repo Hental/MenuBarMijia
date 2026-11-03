@@ -548,9 +548,9 @@ struct MijiaCoreTests {
         #expect(cmds.contains(.setSelectOption(entityId: spec.entityId, option: "On")))
         #expect(cmds.contains(.setSwitch(entityId: "switch.living_cam_motion_detection", isOn: false)))
 
-        store.setCameraCustomStreamURL("http://127.0.0.1:1984/api/stream.m3u8?src=living", for: "dev_cam_1")
+        store.setCameraCustomStreamURL("http://127.0.0.1:43123/api/stream.m3u8?src=living", for: "dev_cam_1")
         let resolved = try await store.resolveCameraStream(for: "dev_cam_1")
-        #expect(resolved == .hls(URL(string: "http://127.0.0.1:1984/api/stream.m3u8?src=living")!))
+        #expect(resolved == .hls(URL(string: "http://127.0.0.1:43123/api/stream.m3u8?src=living")!))
     }
 
     @Test("Issue #98: Air purifier (zhimi.airp.rma3) synthesizes PM2.5, air quality, temperature/humidity, filter life, and maps speed slider to Favorite fan-level")

@@ -8,6 +8,7 @@ static ORIGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use ring::digest::{digest, SHA256};
+use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{UnparsedPublicKey, ED25519};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1127,6 +1128,7 @@ async fn start_xiaomi_camera_bridge(
     }
 
     ensure_go2rtc_running().await?;
+    let session = current_go2rtc_session()?;
 
     let clean_did: String = did
         .chars()
@@ -1144,7 +1146,7 @@ async fn start_xiaomi_camera_bridge(
 
     // A camera keeps exactly one P2P session, and the relay thread dies with its old port.
     // Dropping the previous bridge first is what makes the second open work.
-    stop_bridge(&http, &clean_did, &[&raw_name, &h264_name, &mjpeg_name]).await;
+    stop_bridge(&http, Some(&session), &clean_did, &[&raw_name, &h264_name, &mjpeg_name]).await;
 
     let relay_port = camera_relay_port(&clean_did, cam_ip)?;
 
@@ -1162,15 +1164,15 @@ async fn start_xiaomi_camera_bridge(
     }
     let xiaomi_url = format!("xiaomi://127.0.0.1:{relay_port}?{query}");
 
-    put_stream(&http, &raw_name, &xiaomi_url)
+    put_stream(&http, &session, &raw_name, &xiaomi_url)
         .await
         .map_err(|e| format!("注册摄像机原始流失败：{e}"))?;
     // Two transcode targets: WebRTC plays H.264 with real-time pacing (it drops late frames
     // instead of buffering), while MJPEG is the fallback that paints on the first frame.
-    put_stream(&http, &h264_name, &format!("ffmpeg:{raw_name}#video=h264"))
+    put_stream(&http, &session, &h264_name, &format!("ffmpeg:{raw_name}#video=h264"))
         .await
         .map_err(|e| format!("注册摄像机 H.264 转码流失败：{e}"))?;
-    put_stream(&http, &mjpeg_name, &format!("ffmpeg:{raw_name}#video=mjpeg"))
+    put_stream(&http, &session, &mjpeg_name, &format!("ffmpeg:{raw_name}#video=mjpeg"))
         .await
         .map_err(|e| format!("注册摄像机 MJPEG 转码流失败：{e}"))?;
 
@@ -1186,6 +1188,7 @@ async fn bridge_hls_camera_stream(did: String, hls_url: String) -> Result<String
         return Err("HLS 流地址必须使用 http 或 https 协议".to_string());
     }
     ensure_go2rtc_running().await?;
+    let session = current_go2rtc_session()?;
     let clean_did: String = did
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
@@ -1196,13 +1199,15 @@ async fn bridge_hls_camera_stream(did: String, hls_url: String) -> Result<String
         .timeout(Duration::from_secs(6))
         .build()
         .map_err(|e| e.to_string())?;
-    let _ = http
-        .delete(format!(
-            "http://127.0.0.1:1984/api/streams?src={}",
-            urlencoding_simple(&mjpeg_name)
-        ))
-        .send()
-        .await;
+    let _ = authed(
+        http.delete(api_url(
+            &session,
+            &format!("/api/streams?src={}", urlencoding_simple(&mjpeg_name)),
+        )),
+        &session,
+    )
+    .send()
+    .await;
     let path_lower = parsed.path().to_ascii_lowercase();
     let stream_src = if path_lower.contains("/api/camera_proxy")
         || path_lower.ends_with(".mjpeg")
@@ -1213,7 +1218,7 @@ async fn bridge_hls_camera_stream(did: String, hls_url: String) -> Result<String
     } else {
         format!("ffmpeg:{}#video=mjpeg", parsed.as_str())
     };
-    put_stream(&http, &mjpeg_name, &stream_src)
+    put_stream(&http, &session, &mjpeg_name, &stream_src)
         .await
         .map_err(|e| format!("注册 HLS 转码流失败：{e}"))?;
     Ok(mjpeg_name)
@@ -1234,17 +1239,38 @@ async fn stop_xiaomi_camera_bridge(did: String) -> Result<(), String> {
     let raw_name = format!("cam_raw_{clean_did}");
     let h264_name = format!("cam_h264_{clean_did}");
     let mjpeg_name = format!("cam_mjpeg_{clean_did}");
-    stop_bridge(&http, &clean_did, &[&raw_name, &h264_name, &mjpeg_name]).await;
+    let session = current_go2rtc_session().ok();
+    stop_bridge(
+        &http,
+        session.as_ref(),
+        &clean_did,
+        &[&raw_name, &h264_name, &mjpeg_name],
+    )
+    .await;
     Ok(())
 }
 
-async fn put_stream(http: &reqwest::Client, name: &str, src: &str) -> Result<(), String> {
-    let url = format!(
-        "http://127.0.0.1:1984/api/streams?name={}&src={}",
-        urlencoding_simple(name),
-        urlencoding_simple(src)
+async fn put_stream(
+    http: &reqwest::Client,
+    session: &Go2RtcSession,
+    name: &str,
+    src: &str,
+) -> Result<(), String> {
+    let url = api_url(
+        session,
+        &format!(
+            "/api/streams?name={}&src={}",
+            urlencoding_simple(name),
+            urlencoding_simple(src)
+        ),
     );
-    let resp = http.put(&url).send().await.map_err(|e| e.to_string())?;
+    let resp = authed(http.put(&url), session)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(path) = go2rtc_config_path() {
+        restrict_secret_file(&path);
+    }
     if resp.status().is_success() {
         Ok(())
     } else {
@@ -1252,13 +1278,23 @@ async fn put_stream(http: &reqwest::Client, name: &str, src: &str) -> Result<(),
     }
 }
 
-async fn stop_bridge(http: &reqwest::Client, clean_did: &str, names: &[&str]) {
-    for name in names {
-        let url = format!(
-            "http://127.0.0.1:1984/api/streams?src={}",
-            urlencoding_simple(name)
-        );
-        let _ = http.delete(&url).send().await;
+async fn stop_bridge(
+    http: &reqwest::Client,
+    session: Option<&Go2RtcSession>,
+    clean_did: &str,
+    names: &[&str],
+) {
+    if let Some(session) = session {
+        for name in names {
+            let url = api_url(
+                session,
+                &format!("/api/streams?src={}", urlencoding_simple(name)),
+            );
+            let _ = authed(http.delete(&url), session).send().await;
+        }
+        if let Some(path) = go2rtc_config_path() {
+            restrict_secret_file(&path);
+        }
     }
     let no_active_relays = if let Ok(mut relays) = CAMERA_RELAYS.lock() {
         if let Some(relay) = relays.remove(clean_did) {
@@ -1285,6 +1321,8 @@ static CAMERA_RELAYS: LazyLock<std::sync::Mutex<HashMap<String, CameraRelay>>> =
 /// terminate user-started `go2rtc.exe` processes by image name (#97).
 static GO2RTC_PROCESS: LazyLock<std::sync::Mutex<Option<std::process::Child>>> =
     LazyLock::new(|| std::sync::Mutex::new(None));
+static GO2RTC_SESSION: LazyLock<std::sync::Mutex<Option<Go2RtcOwnerRecord>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Serializes bridge start/stop end to end: two overlapping starts for the same
 /// camera otherwise interleave their stop_bridge/register sequences and the
@@ -1293,13 +1331,9 @@ static CAMERA_BRIDGE_LOCK: LazyLock<tauri::async_runtime::Mutex<()>> =
     LazyLock::new(|| tauri::async_runtime::Mutex::new(()));
 
 fn scrub_persisted_streams_from_config() {
-    let Ok(local_app_data) = std::env::var("LOCALAPPDATA").map(std::path::PathBuf::from) else {
+    let Some(cfg_path) = go2rtc_config_path() else {
         return;
     };
-    let cfg_path = local_app_data
-        .join("MenuBarMijia")
-        .join("bin")
-        .join("go2rtc.yaml");
     let Ok(existing) = std::fs::read_to_string(&cfg_path) else {
         return;
     };
@@ -1307,7 +1341,7 @@ fn scrub_persisted_streams_from_config() {
         return;
     }
     let cleaned = format!("{}\n", base_go2rtc_config(&existing));
-    let _ = std::fs::write(&cfg_path, cleaned);
+    let _ = write_secret_file(&cfg_path, &cleaned);
 }
 
 fn shutdown_camera_daemons() {
@@ -1321,6 +1355,9 @@ fn shutdown_camera_daemons() {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+    if let Ok(mut guard) = GO2RTC_SESSION.lock() {
+        *guard = None;
     }
     scrub_persisted_streams_from_config();
 }
@@ -1345,46 +1382,59 @@ fn base_go2rtc_config(yaml: &str) -> String {
     kept.join("\n").trim().to_string()
 }
 
-fn desired_go2rtc_config(ffmpeg_bin: &str) -> String {
-    format!(
-        "api:\n  listen: 127.0.0.1:1984\nrtsp:\n  listen: 127.0.0.1:8554\nwebrtc:\n  listen: \"\"\nlog:\n  level: info\n  ffmpeg: error\nffmpeg:\n  bin: {ffmpeg_bin}\n"
-    )
+#[derive(Clone)]
+struct Go2RtcSession {
+    api_listen: String,
+    rtsp_listen: String,
+    username: String,
+    password: String,
+    nonce: String,
+}
+
+struct Go2RtcOwnerRecord {
+    pid: u32,
+    session: Go2RtcSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Go2RtcAction {
-    /// Port 1984 is already served by a compatible go2rtc instance (either ours or another app's).
-    ReuseRunning,
-    /// We spawned the running child and our base config changed; restart only our child PID.
-    RestartOwnedChild,
-    /// An orphan go2rtc from an earlier MenuBarMijia session is running with an older config;
-    /// request `/api/exit` gracefully (never `taskkill /IM`).
-    RequestGracefulExit,
-    /// Port 1984 is not running; spawn our own child process.
+    ReuseOwned,
+    RestartOwned,
     SpawnFresh,
 }
 
-fn decide_go2rtc_action(
-    running: bool,
+#[derive(Clone, Copy)]
+struct Go2RtcOwnershipProbe {
+    pid_alive: bool,
+    authenticated: bool,
+    nonce_matches: bool,
     config_changed: bool,
-    owns_child: bool,
-    has_previous_app_config: bool,
-) -> Go2RtcAction {
-    if !running {
-        return Go2RtcAction::SpawnFresh;
+}
+
+const FORBIDDEN_GO2RTC_PORTS: [u16; 3] = [1984, 8554, 8555];
+
+fn decide_go2rtc_action(probe: Go2RtcOwnershipProbe) -> Go2RtcAction {
+    let owned = probe.pid_alive && probe.authenticated && probe.nonce_matches;
+    if !owned {
+        Go2RtcAction::SpawnFresh
+    } else if probe.config_changed {
+        Go2RtcAction::RestartOwned
+    } else {
+        Go2RtcAction::ReuseOwned
     }
-    if !config_changed {
-        return Go2RtcAction::ReuseRunning;
-    }
-    if owns_child {
-        return Go2RtcAction::RestartOwnedChild;
-    }
-    if has_previous_app_config {
-        return Go2RtcAction::RequestGracefulExit;
-    }
-    // Another application started go2rtc on 127.0.0.1:1984 before MenuBarMijia ever wrote a config:
-    // reuse its API rather than terminating a user-owned process.
-    Go2RtcAction::ReuseRunning
+}
+
+/// v1.9.15 skips Basic auth on loopback unless `local_auth` is true.
+fn desired_go2rtc_config(session: &Go2RtcSession, ffmpeg_bin: &str) -> String {
+    let ffmpeg = yaml_double_quoted(ffmpeg_bin);
+    let api = sanitized_listen(&session.api_listen);
+    let rtsp = sanitized_listen(&session.rtsp_listen);
+    format!(
+        "api:\n  listen: {api}\n  username: {user}\n  password: {password}\n  local_auth: true\nrtsp:\n  listen: {rtsp}\nwebrtc:\n  listen: \"\"\nlog:\n  level: info\n  ffmpeg: error\nffmpeg:\n  bin: {ffmpeg}\nexec:\n  allow_paths:\n    - {ffmpeg}\nmenubarmijia:\n  nonce: {nonce}\n",
+        user = yaml_double_quoted(&session.username),
+        password = yaml_double_quoted(&session.password),
+        nonce = yaml_double_quoted(&session.nonce),
+    )
 }
 
 /// Reuses a live relay so reopening the panel does not renegotiate P2P from scratch.
@@ -1484,112 +1534,557 @@ async fn download_go2rtc_win64(
     Ok(())
 }
 
-fn owns_running_go2rtc_child() -> bool {
-    let Ok(mut guard) = GO2RTC_PROCESS.lock() else {
-        return false;
-    };
-    let Some(child) = guard.as_mut() else {
-        return false;
-    };
+fn running_child_pid() -> Option<u32> {
+    let mut guard = GO2RTC_PROCESS.lock().ok()?;
+    let child = guard.as_mut()?;
     match child.try_wait() {
-        Ok(None) => true,
+        Ok(None) => Some(child.id()),
         _ => {
             *guard = None;
-            false
+            None
         }
     }
 }
 
-fn terminate_owned_go2rtc_child() {
-    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+fn current_go2rtc_session() -> Result<Go2RtcSession, String> {
+    let guard = GO2RTC_SESSION
+        .lock()
+        .map_err(|_| "流媒体会话不可用".to_string())?;
+    guard
+        .as_ref()
+        .map(|record| record.session.clone())
+        .ok_or_else(|| "本地流媒体服务未启动".to_string())
+}
+
+fn store_go2rtc_session(record: Go2RtcOwnerRecord) {
+    if let Ok(mut guard) = GO2RTC_SESSION.lock() {
+        *guard = Some(record);
+    }
+}
+
+fn bin_directory() -> Result<std::path::PathBuf, String> {
+    let local = std::env::var("LOCALAPPDATA").map_err(|_| "无法读取 LOCALAPPDATA 目录".to_string())?;
+    Ok(std::path::PathBuf::from(local).join("MenuBarMijia").join("bin"))
+}
+
+fn go2rtc_config_path() -> Option<std::path::PathBuf> {
+    bin_directory().ok().map(|dir| dir.join("go2rtc.yaml"))
+}
+
+fn go2rtc_owner_path() -> Option<std::path::PathBuf> {
+    bin_directory().ok().map(|dir| dir.join("go2rtc.owner"))
+}
+
+fn write_secret_file(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建组件目录失败：{e}"))?;
+    }
+    std::fs::write(path, contents).map_err(|e| format!("写入 go2rtc 配置失败：{e}"))?;
+    restrict_secret_file(path);
+    Ok(())
+}
+
+fn restrict_secret_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        let Ok(user) = std::env::var("USERNAME") else {
+            return;
+        };
+        if user.is_empty()
+            || user
+                .bytes()
+                .any(|byte| matches!(byte, b'"' | b'&' | b'|' | b'\n' | b'\r' | b'%'))
+        {
+            return;
+        }
+        let mut cmd = std::process::Command::new("icacls");
+        cmd.arg(path)
+            .arg("/inheritance:r")
+            .arg("/grant:r")
+            .arg(format!("{user}:(F)"))
+            .creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.status();
+    }
+}
+
+fn api_url(session: &Go2RtcSession, path_and_query: &str) -> String {
+    format!("http://{}{path_and_query}", session.api_listen)
+}
+
+fn authed(builder: reqwest::RequestBuilder, session: &Go2RtcSession) -> reqwest::RequestBuilder {
+    builder.basic_auth(&session.username, Some(&session.password))
+}
+
+fn basic_authorization_value(username: &str, password: &str) -> String {
+    format!(
+        "Basic {}",
+        base64_encode(format!("{username}:{password}").as_bytes())
+    )
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut index = 0;
+    while index + 3 <= data.len() {
+        let value = ((data[index] as u32) << 16)
+            | ((data[index + 1] as u32) << 8)
+            | (data[index + 2] as u32);
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        out.push(TABLE[((value >> 6) & 63) as usize] as char);
+        out.push(TABLE[(value & 63) as usize] as char);
+        index += 3;
+    }
+    if index < data.len() {
+        let remain = data.len() - index;
+        let mut value = (data[index] as u32) << 16;
+        if remain == 2 {
+            value |= (data[index + 1] as u32) << 8;
+        }
+        out.push(TABLE[((value >> 18) & 63) as usize] as char);
+        out.push(TABLE[((value >> 12) & 63) as usize] as char);
+        if remain == 2 {
+            out.push(TABLE[((value >> 6) & 63) as usize] as char);
+            out.push('=');
+        } else {
+            out.push('=');
+            out.push('=');
         }
     }
+    out
+}
+
+fn yaml_double_quoted(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' | '\r' => {}
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn is_credential_token(value: &str) -> bool {
+    (8..=128).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn is_acceptable_go2rtc_listen(value: &str) -> bool {
+    let Some(port_text) = value.strip_prefix("127.0.0.1:") else {
+        return false;
+    };
+    let Ok(port) = port_text.parse::<u16>() else {
+        return false;
+    };
+    port > 0 && !FORBIDDEN_GO2RTC_PORTS.contains(&port) && value == format!("127.0.0.1:{port}")
+}
+
+fn sanitized_listen(value: &str) -> String {
+    if is_acceptable_go2rtc_listen(value) {
+        value.to_string()
+    } else {
+        "127.0.0.1:9".to_string()
+    }
+}
+
+fn random_credential_token() -> Result<String, String> {
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 16];
+    rng.fill(&mut bytes)
+        .map_err(|_| "无法生成流媒体凭据".to_string())?;
+    let mut out = String::from("m");
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    Ok(out)
+}
+
+fn make_ephemeral_go2rtc_session() -> Result<Go2RtcSession, String> {
+    let ports = reserve_loopback_ports(2)?;
+    Ok(Go2RtcSession {
+        api_listen: format!("127.0.0.1:{}", ports[0]),
+        rtsp_listen: format!("127.0.0.1:{}", ports[1]),
+        username: random_credential_token()?,
+        password: random_credential_token()?,
+        nonce: random_credential_token()?,
+    })
+}
+
+fn reserve_loopback_ports(count: usize) -> Result<Vec<u16>, String> {
+    let mut listeners = Vec::new();
+    let mut ports = Vec::new();
+    for _ in 0..64 {
+        if ports.len() == count {
+            break;
+        }
+        let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+            continue;
+        };
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        if FORBIDDEN_GO2RTC_PORTS.contains(&port) || ports.contains(&port) {
+            drop(listener);
+            continue;
+        }
+        ports.push(port);
+        listeners.push(listener);
+    }
+    drop(listeners);
+    if ports.len() != count {
+        return Err("无法分配本地流媒体端口".to_string());
+    }
+    Ok(ports)
+}
+
+fn serialize_owner(record: &Go2RtcOwnerRecord) -> String {
+    format!(
+        "pid={}\nnonce={}\napi_listen={}\nrtsp_listen={}\nusername={}\npassword={}\n",
+        record.pid,
+        record.session.nonce,
+        record.session.api_listen,
+        record.session.rtsp_listen,
+        record.session.username,
+        record.session.password
+    )
+}
+
+fn parse_owner(text: &str) -> Option<Go2RtcOwnerRecord> {
+    let mut fields = std::collections::HashMap::<String, String>::new();
+    for line in text.split('\n') {
+        let line = line.trim_end_matches('\r');
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.is_empty() && !value.is_empty() {
+            fields.insert(key.to_string(), value.to_string());
+        }
+    }
+    let pid = fields.get("pid")?.parse::<u32>().ok()?;
+    let nonce = fields.get("nonce")?.clone();
+    let api_listen = fields.get("api_listen")?.clone();
+    let rtsp_listen = fields.get("rtsp_listen")?.clone();
+    let username = fields.get("username")?.clone();
+    let password = fields.get("password")?.clone();
+    if !is_credential_token(&nonce)
+        || !is_credential_token(&username)
+        || !is_credential_token(&password)
+        || !is_acceptable_go2rtc_listen(&api_listen)
+        || !is_acceptable_go2rtc_listen(&rtsp_listen)
+    {
+        return None;
+    }
+    Some(Go2RtcOwnerRecord {
+        pid,
+        session: Go2RtcSession {
+            api_listen,
+            rtsp_listen,
+            username,
+            password,
+            nonce,
+        },
+    })
+}
+
+fn read_owner() -> Option<Go2RtcOwnerRecord> {
+    let path = go2rtc_owner_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_owner(&text)
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut core::ffi::c_void;
+            fn GetExitCodeProcess(handle: *mut core::ffi::c_void, code: *mut u32) -> i32;
+            fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+        }
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const STILL_ACTIVE: u32 = 259;
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+fn terminate_pid(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut core::ffi::c_void;
+            fn TerminateProcess(handle: *mut core::ffi::c_void, code: u32) -> i32;
+            fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+        }
+        const PROCESS_TERMINATE: u32 = 0x0001;
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !handle.is_null() {
+                TerminateProcess(handle, 1);
+                CloseHandle(handle);
+            }
+        }
+    }
+}
+
+struct OwnedApiProbe {
+    reachable: bool,
+    authenticated: bool,
+    nonce_matches: bool,
+}
+
+async fn probe_owned(http: &reqwest::Client, session: &Go2RtcSession) -> OwnedApiProbe {
+    let missed = OwnedApiProbe {
+        reachable: false,
+        authenticated: false,
+        nonce_matches: false,
+    };
+    let Ok(response) = authed(http.get(api_url(session, "/api")), session).send().await else {
+        return missed;
+    };
+    if !response.status().is_success() {
+        return OwnedApiProbe {
+            reachable: true,
+            authenticated: false,
+            nonce_matches: false,
+        };
+    }
+    let Ok(config) = authed(http.get(api_url(session, "/api/config")), session)
+        .send()
+        .await
+    else {
+        return missed;
+    };
+    if !config.status().is_success() {
+        return missed;
+    }
+    let Ok(body) = config.text().await else {
+        return missed;
+    };
+    let needle = format!("nonce: {}", yaml_double_quoted(&session.nonce));
+    OwnedApiProbe {
+        reachable: true,
+        authenticated: true,
+        nonce_matches: body.contains(&needle),
+    }
+}
+
+fn existing_owned_record() -> Option<Go2RtcOwnerRecord> {
+    if let Some(pid) = running_child_pid() {
+        if let Ok(guard) = GO2RTC_SESSION.lock() {
+            if let Some(record) = guard.as_ref() {
+                return Some(Go2RtcOwnerRecord {
+                    pid,
+                    session: record.session.clone(),
+                });
+            }
+        }
+    }
+    if let Ok(guard) = GO2RTC_SESSION.lock() {
+        if let Some(record) = guard.as_ref() {
+            if process_is_alive(record.pid) {
+                return Some(Go2RtcOwnerRecord {
+                    pid: record.pid,
+                    session: record.session.clone(),
+                });
+            }
+        }
+    }
+    let saved = read_owner()?;
+    if process_is_alive(saved.pid) {
+        Some(saved)
+    } else {
+        None
+    }
+}
+
+async fn request_owned_exit(http: &reqwest::Client, session: &Go2RtcSession) {
+    let _ = authed(http.post(api_url(session, "/api/exit?code=0")), session)
+        .send()
+        .await;
+}
+
+async fn stop_owned_process(http: &reqwest::Client, record: &Go2RtcOwnerRecord) {
+    request_owned_exit(http, &record.session).await;
+    let child_pid = running_child_pid();
+    if child_pid == Some(record.pid) {
+        if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    for _ in 0..20 {
+        if !process_is_alive(record.pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if process_is_alive(record.pid) {
+        terminate_pid(record.pid);
+    }
+    if let Ok(mut guard) = GO2RTC_SESSION.lock() {
+        *guard = None;
+    }
+}
+
+async fn wait_for_owned_api(http: &reqwest::Client, session: &Go2RtcSession) -> bool {
+    for _ in 0..25 {
+        std::thread::sleep(Duration::from_millis(120));
+        let probe = probe_owned(http, session).await;
+        if probe.authenticated && probe.nonce_matches {
+            return true;
+        }
+        if probe.reachable && !probe.authenticated {
+            return false;
+        }
+        if probe.authenticated && !probe.nonce_matches {
+            return false;
+        }
+    }
+    false
+}
+
+async fn spawn_fresh_go2rtc(
+    http: &reqwest::Client,
+    bin_dir: &std::path::Path,
+    ffmpeg_bin: &str,
+) -> Result<(), String> {
+    let exe_path = bin_dir.join("go2rtc.exe");
+    if !exe_path.exists() {
+        download_go2rtc_win64(bin_dir, &exe_path).await?;
+    }
+    let cfg_path = bin_dir.join("go2rtc.yaml");
+    let owner_path = bin_dir.join("go2rtc.owner");
+    for _ in 0..4 {
+        let session = make_ephemeral_go2rtc_session()?;
+        let desired = desired_go2rtc_config(&session, ffmpeg_bin);
+        write_secret_file(&cfg_path, &desired)?;
+        let mut command = std::process::Command::new(&exe_path);
+        command.arg("-c").arg(&cfg_path).current_dir(bin_dir);
+        #[cfg(windows)]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let child = command.spawn().map_err(|e| format!("启动 go2rtc 失败：{e}"))?;
+        let pid = child.id();
+        if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+            *guard = Some(child);
+        }
+        let record = Go2RtcOwnerRecord { pid, session: session.clone() };
+        write_secret_file(&owner_path, &serialize_owner(&record))?;
+        store_go2rtc_session(record);
+        if wait_for_owned_api(http, &session).await {
+            return Ok(());
+        }
+        if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        if let Ok(mut guard) = GO2RTC_SESSION.lock() {
+            *guard = None;
+        }
+    }
+    Err("本地流媒体服务启动超时".to_string())
 }
 
 async fn ensure_go2rtc_running() -> Result<(), String> {
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .map_err(|_| "无法读取 LOCALAPPDATA 目录".to_string())?;
-    let bin_dir = local_app_data.join("MenuBarMijia").join("bin");
+    let bin_dir = bin_directory()?;
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("创建组件目录失败：{e}"))?;
-
     let http = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_millis(800))
         .build()
         .map_err(|e| e.to_string())?;
-    let probe = || async {
-        matches!(
-            http.get("http://127.0.0.1:1984/api").send().await,
-            Ok(resp) if resp.status().is_success()
-        )
-    };
-
     let ffmpeg_bin = resolve_ffmpeg_bin(&bin_dir);
-    let desired = desired_go2rtc_config(&ffmpeg_bin);
-    let cfg_path = bin_dir.join("go2rtc.yaml");
-    let existing_cfg = std::fs::read_to_string(&cfg_path).unwrap_or_default();
-    let has_previous_app_config = !existing_cfg.trim().is_empty();
-    let config_changed = base_go2rtc_config(&existing_cfg) != base_go2rtc_config(&desired);
-    if config_changed {
-        std::fs::write(&cfg_path, &desired).map_err(|e| format!("写入 go2rtc 配置失败：{e}"))?;
-    }
 
-    let running = probe().await;
-    let owns_child = owns_running_go2rtc_child();
-    match decide_go2rtc_action(running, config_changed, owns_child, has_previous_app_config) {
-        Go2RtcAction::ReuseRunning => return Ok(()),
-        Go2RtcAction::RestartOwnedChild => {
-            terminate_owned_go2rtc_child();
-            for _ in 0..20 {
-                std::thread::sleep(Duration::from_millis(100));
-                if !probe().await {
-                    break;
-                }
-            }
-        }
-        Go2RtcAction::RequestGracefulExit => {
-            let _ = http.post("http://127.0.0.1:1984/api/exit").send().await;
-            for _ in 0..20 {
-                std::thread::sleep(Duration::from_millis(100));
-                if !probe().await {
-                    break;
-                }
-            }
-            if probe().await {
-                // External user-owned go2rtc that disabled `/api/exit`: reuse it without killing.
+    if let Some(record) = existing_owned_record() {
+        let probe = probe_owned(&http, &record.session).await;
+        let desired = desired_go2rtc_config(&record.session, &ffmpeg_bin);
+        let existing = go2rtc_config_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let changed = base_go2rtc_config(&existing) != base_go2rtc_config(&desired);
+        let action = decide_go2rtc_action(Go2RtcOwnershipProbe {
+            pid_alive: true,
+            authenticated: probe.authenticated,
+            nonce_matches: probe.nonce_matches,
+            config_changed: changed,
+        });
+        match action {
+            Go2RtcAction::ReuseOwned => {
+                store_go2rtc_session(record);
                 return Ok(());
             }
-        }
-        Go2RtcAction::SpawnFresh => {}
-    }
-
-    let exe_path = bin_dir.join("go2rtc.exe");
-    if !exe_path.exists() {
-        download_go2rtc_win64(&bin_dir, &exe_path).await?;
-    }
-
-    let child = std::process::Command::new(&exe_path)
-        .arg("-c")
-        .arg(&cfg_path)
-        .current_dir(&bin_dir)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("启动 go2rtc 失败：{e}"))?;
-    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
-        *guard = Some(child);
-    }
-
-    for _ in 0..25 {
-        std::thread::sleep(Duration::from_millis(120));
-        if probe().await {
-            return Ok(());
+            Go2RtcAction::RestartOwned => {
+                stop_owned_process(&http, &record).await;
+            }
+            Go2RtcAction::SpawnFresh => {
+                if running_child_pid() == Some(record.pid) {
+                    if let Ok(mut guard) = GO2RTC_PROCESS.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                    if let Ok(mut guard) = GO2RTC_SESSION.lock() {
+                        *guard = None;
+                    }
+                }
+            }
         }
     }
-    Err("本地流媒体服务 (127.0.0.1:1984) 启动超时".to_string())
+
+    spawn_fresh_go2rtc(&http, &bin_dir, &ffmpeg_bin).await
+}
+
+#[derive(Serialize)]
+struct Go2RtcEndpoint {
+    origin: String,
+    authorization: String,
+}
+
+#[tauri::command]
+async fn go2rtc_endpoint() -> Result<Go2RtcEndpoint, String> {
+    let _bridge_order = CAMERA_BRIDGE_LOCK.lock().await;
+    ensure_go2rtc_running().await?;
+    let session = current_go2rtc_session()?;
+    let origin = format!("http://{}", session.api_listen);
+    if !origin.starts_with("http://127.0.0.1:") || !is_acceptable_go2rtc_listen(&session.api_listen) {
+        return Err("本地流媒体地址无效".to_string());
+    }
+    Ok(Go2RtcEndpoint {
+        origin,
+        authorization: basic_authorization_value(&session.username, &session.password),
+    })
 }
 
 fn spawn_cs2_udp_relay(
@@ -1767,7 +2262,8 @@ fn main() {
             install_update,
             start_xiaomi_camera_bridge,
             bridge_hls_camera_stream,
-            stop_xiaomi_camera_bridge
+            stop_xiaomi_camera_bridge,
+            go2rtc_endpoint
         ])
         .setup(move |app| {
             sweep_stale_update_installers();
@@ -2300,14 +2796,40 @@ mod tests {
     }
 
     #[test]
-    fn go2rtc_config_omits_wildcard_cors_and_ignores_appended_streams() {
-        let written = desired_go2rtc_config("C:/Users/test/AppData/Local/MenuBarMijia/bin/ffmpeg-silent.exe");
+    fn go2rtc_config_requires_local_auth_and_ignores_appended_streams() {
+        let session = Go2RtcSession {
+            api_listen: "127.0.0.1:43123".to_string(),
+            rtsp_listen: "127.0.0.1:43124".to_string(),
+            username: "muser0001".to_string(),
+            password: "mpass0001".to_string(),
+            nonce: "mnonce0001".to_string(),
+        };
+        let ffmpeg = "C:/Users/test/AppData/Local/MenuBarMijia/bin/ffmpeg-silent.exe";
+        let written = desired_go2rtc_config(&session, ffmpeg);
         assert!(
             !written.contains("origin:"),
             "go2rtc config must not expose wildcard CORS to arbitrary web pages: {written}"
         );
-        assert!(written.contains("listen: 127.0.0.1:1984"));
+        assert!(!written.contains('*'));
+        assert!(!written.contains("1984"));
+        assert!(!written.contains("8554"));
+        assert!(written.contains("listen: 127.0.0.1:43123"));
+        assert!(written.contains("listen: 127.0.0.1:43124"));
+        assert!(written.contains("local_auth: true"));
+        assert!(written.contains("username: \"muser0001\""));
+        assert!(written.contains("password: \"mpass0001\""));
+        assert!(written.contains("nonce: \"mnonce0001\""));
+        assert!(written.contains("allow_paths:"));
+        assert!(written.contains(&yaml_double_quoted(ffmpeg)));
         assert!(written.contains("webrtc:\n  listen: \"\""));
+        assert_eq!(
+            basic_authorization_value("muser", "mpass"),
+            "Basic bXVzZXI6bXBhc3M="
+        );
+        assert!(parse_owner(
+            "pid=1\napi_listen=127.0.0.1:1984\nrtsp_listen=127.0.0.1:43124\nusername=muser0001\npassword=mpass0001\nnonce=mnonce0001\n"
+        )
+        .is_none());
 
         let rewritten_by_go2rtc = format!(
             "{written}\nstreams:\n  cam_raw_1105610385:\n    - xiaomi://127.0.0.1:5000?client_private=secret\n"
@@ -2317,38 +2839,59 @@ mod tests {
             base_go2rtc_config(&written)
         );
         assert_ne!(
-            base_go2rtc_config(&written.replace("1984", "1985")),
+            base_go2rtc_config(&written.replace("43123", "43125")),
             base_go2rtc_config(&written)
         );
     }
 
     #[test]
-    fn go2rtc_lifecycle_reuses_external_instance_without_killing_it() {
-        // Not running -> spawn our own child
+    fn go2rtc_reuses_only_an_authenticated_owned_instance() {
+        let owned = Go2RtcOwnershipProbe {
+            pid_alive: true,
+            authenticated: true,
+            nonce_matches: true,
+            config_changed: false,
+        };
+        assert_eq!(decide_go2rtc_action(owned), Go2RtcAction::ReuseOwned);
         assert_eq!(
-            decide_go2rtc_action(false, true, false, false),
+            decide_go2rtc_action(Go2RtcOwnershipProbe {
+                config_changed: true,
+                ..owned
+            }),
+            Go2RtcAction::RestartOwned
+        );
+        assert_eq!(
+            decide_go2rtc_action(Go2RtcOwnershipProbe {
+                pid_alive: true,
+                authenticated: false,
+                nonce_matches: false,
+                config_changed: true,
+            }),
             Go2RtcAction::SpawnFresh
         );
-        // Running and base config unchanged -> reuse without restarting (even when opening a 2nd camera)
         assert_eq!(
-            decide_go2rtc_action(true, false, true, true),
-            Go2RtcAction::ReuseRunning
+            decide_go2rtc_action(Go2RtcOwnershipProbe {
+                pid_alive: true,
+                authenticated: true,
+                nonce_matches: false,
+                config_changed: false,
+            }),
+            Go2RtcAction::SpawnFresh
         );
-        // Another application started go2rtc on 127.0.0.1:1984 before MenuBarMijia ever wrote a config:
-        // must reuse it rather than killing user processes.
         assert_eq!(
-            decide_go2rtc_action(true, true, false, false),
-            Go2RtcAction::ReuseRunning
+            decide_go2rtc_action(Go2RtcOwnershipProbe {
+                pid_alive: false,
+                authenticated: true,
+                nonce_matches: true,
+                config_changed: false,
+            }),
+            Go2RtcAction::SpawnFresh
         );
-        // Our own child process is running and base config changed -> restart only our owned child PID
-        assert_eq!(
-            decide_go2rtc_action(true, true, true, true),
-            Go2RtcAction::RestartOwnedChild
-        );
-        // Orphaned MenuBarMijia go2rtc from an earlier session -> request graceful `/api/exit`
-        assert_eq!(
-            decide_go2rtc_action(true, true, false, true),
-            Go2RtcAction::RequestGracefulExit
-        );
+        let ports = reserve_loopback_ports(2).expect("loopback ports");
+        assert_eq!(ports.len(), 2);
+        assert_ne!(ports[0], ports[1]);
+        for port in ports {
+            assert!(!FORBIDDEN_GO2RTC_PORTS.contains(&port));
+        }
     }
 }

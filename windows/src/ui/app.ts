@@ -817,6 +817,7 @@ export class MenuMijiaWindowsApp {
   /** The live picture arrives as MJPEG frames in a persistent `<img>`, which never restarts on re-render. */
   private liveCameraMode: "mjpeg" | null = null;
   private liveCameraImgEl: HTMLImageElement | null = null;
+  private liveCameraAbort: AbortController | null = null;
   private liveCameraToken = 0;
   private readonly pendingCameraReleases = new Map<string, Promise<void>>();
   private updateState: UpdateState = { lastCheckedAtMs: null, release: null };
@@ -4005,6 +4006,8 @@ export class MenuMijiaWindowsApp {
   /** Drops the MJPEG image and any pending negotiation. */
   private stopLiveTransport(): void {
     this.liveCameraToken += 1;
+    this.liveCameraAbort?.abort();
+    this.liveCameraAbort = null;
     this.liveCameraImgEl?.remove();
     this.liveCameraImgEl = null;
     this.liveCameraMode = null;
@@ -4022,6 +4025,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private startMjpegTransport(name: string): void {
+    this.liveCameraAbort?.abort();
     const img = document.createElement("img");
     img.id = "cc-camera-live-img";
     img.alt = "";
@@ -4032,9 +4036,85 @@ export class MenuMijiaWindowsApp {
       retried = true;
       window.setTimeout(() => this.reconnectCameraLiveView(), 1200);
     });
-    img.src = `http://127.0.0.1:1984/api/stream.mjpeg?src=${encodeURIComponent(name)}`;
+    const abort = new AbortController();
+    this.liveCameraAbort = abort;
     this.liveCameraImgEl = img;
     this.liveCameraMode = "mjpeg";
+    void this.pumpAuthenticatedMjpeg(name, img, this.liveCameraToken, abort.signal);
+  }
+
+  private ownedGo2rtcOrigin(origin: string): boolean {
+    const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(origin);
+    if (!match) return false;
+    const port = Number(match[1]);
+    return port > 0 && port !== 1984 && port !== 8554 && port !== 8555;
+  }
+
+  private async pumpAuthenticatedMjpeg(
+    name: string,
+    img: HTMLImageElement,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    let endpoint: { origin: string; authorization: string };
+    try {
+      endpoint = await invoke<{ origin: string; authorization: string }>("go2rtc_endpoint");
+    } catch {
+      return;
+    }
+    if (token !== this.liveCameraToken || signal.aborted || !this.ownedGo2rtcOrigin(endpoint.origin)) return;
+    const url = `${endpoint.origin}/api/stream.mjpeg?src=${encodeURIComponent(name)}`;
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: { Authorization: endpoint.authorization },
+        signal,
+      });
+    } catch {
+      return;
+    }
+    if (!response.ok || !response.body) {
+      img.dispatchEvent(new Event("error"));
+      return;
+    }
+    const reader = response.body.getReader();
+    let pending = new Uint8Array(0);
+    let lastObjectURL: string | null = null;
+    const find = (haystack: Uint8Array, needle0: number, needle1: number, from: number) => {
+      for (let index = from; index < haystack.length - 1; index += 1) {
+        if (haystack[index] === needle0 && haystack[index + 1] === needle1) return index;
+      }
+      return -1;
+    };
+    while (token === this.liveCameraToken && !signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      const next = new Uint8Array(pending.length + value.length);
+      next.set(pending);
+      next.set(value, pending.length);
+      pending = next;
+      while (token === this.liveCameraToken) {
+        const start = find(pending, 0xff, 0xd8, 0);
+        if (start < 0) {
+          pending = pending.length > 1 ? pending.slice(pending.length - 1) : pending;
+          break;
+        }
+        const end = find(pending, 0xff, 0xd9, start + 2);
+        if (end < 0) {
+          pending = pending.slice(start);
+          break;
+        }
+        const jpeg = pending.slice(start, end + 2);
+        pending = pending.slice(end + 2);
+        const objectURL = URL.createObjectURL(new Blob([jpeg], { type: "image/jpeg" }));
+        if (lastObjectURL) URL.revokeObjectURL(lastObjectURL);
+        lastObjectURL = objectURL;
+        img.src = objectURL;
+      }
+    }
+    if (lastObjectURL && token !== this.liveCameraToken) URL.revokeObjectURL(lastObjectURL);
   }
 
   /**
@@ -4045,16 +4125,20 @@ export class MenuMijiaWindowsApp {
   private normalizeWindowsCameraStreamUrl(rawUrl: string): string {
     return rawUrl
       .trim()
-      .replace(/^https?:\/\/localhost:1984(\/|$)/i, "http://127.0.0.1:1984$1")
+      .replace(/^https?:\/\/localhost:(\d+)(\/|$)/i, "http://127.0.0.1:$1$2")
       .replace(
-        /^(https?:\/\/127\.0\.0\.1:1984\/api\/)stream\.m3u8(\?|$)/i,
+        /^(https?:\/\/127\.0\.0\.1:\d+\/api\/)stream\.m3u8(\?|$)/i,
         "$1stream.mjpeg$2",
       );
   }
 
+  private isLoopbackGo2rtcUrl(url: string): boolean {
+    return /^https?:\/\/(127\.0\.0\.1|localhost):\d+(\/|$)/i.test(url);
+  }
+
   private needsHlsTranscodeBridge(url: string): boolean {
     if (!window.__TAURI_INTERNALS__?.invoke) return false;
-    if (/^http:\/\/127\.0\.0\.1:1984(\/|$)/i.test(url)) return false;
+    if (this.isLoopbackGo2rtcUrl(url)) return false;
     if (/\.m3u8(\?|$|#)/i.test(url)) {
       const probe = document.createElement("video");
       const canPlayNative =
@@ -4413,7 +4497,7 @@ export class MenuMijiaWindowsApp {
           ${
             this.liveCameraShowingURLInput
               ? `<div class="cc-field" style="margin-bottom:10px;">
-                  <input id="camera-stream-url-input" class="cc-input" type="text" value="${this.escapeHtml(customURL)}" placeholder="http://127.0.0.1:1984/api/stream.m3u8?src=camera" />
+                  <input id="camera-stream-url-input" class="cc-input" type="text" value="${this.escapeHtml(customURL)}" placeholder="http://127.0.0.1:<port>/api/stream.m3u8?src=camera" />
                   <div style="display:flex;gap:6px;margin-top:6px;">
                     <button class="cc-btn-primary" id="btn-save-camera-url">${t("连接流地址")}</button>
                   </div>

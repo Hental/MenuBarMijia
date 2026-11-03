@@ -1193,11 +1193,11 @@ describe("Smart camera support and live view (#97)", () => {
     await click('[data-body-device="camera.living_cam"]');
     await click("#btn-toggle-camera-url");
     const input = element("#camera-stream-url-input") as HTMLInputElement;
-    input.value = "http://127.0.0.1:1984/api/stream.m3u8?src=living_custom";
+    input.value = "http://127.0.0.1:43123/api/stream.m3u8?src=living_custom";
     await click("#btn-save-camera-url");
     assert.equal(
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
     );
 
     // Re-instantiate the app to verify the saved stream URL survived in localStorage.
@@ -1206,7 +1206,7 @@ describe("Smart camera support and live view (#97)", () => {
     await click('[data-body-device="camera.living_cam"]');
     assert.equal(
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
     );
 
     // Put the camera to sleep, then wake it from inside the modal and verify the stream resumes immediately.
@@ -1215,14 +1215,26 @@ describe("Smart camera support and live view (#97)", () => {
     await click('.cc-camera-stage.is-sleeping [data-toggle-device="camera.living_cam"]');
     assert.equal(
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=living_custom",
+      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
     );
   });
 
   it("bridges Home Assistant camera_proxy_stream URLs through the loopback go2rtc endpoint allowed by CSP", async () => {
     const bridgedCalls: Array<{ did: string; hlsUrl: string }> = [];
+    const fetched: Array<{ url: string; authorization: string }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const headers = new Headers(init?.headers);
+      fetched.push({ url, authorization: headers.get("Authorization") ?? "" });
+      assert.equal(url.includes("127.0.0.1:1984"), false);
+      return new Response(null, { status: 401 });
+    }) as typeof fetch;
     const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
       if (name === "secure_store_get") return args.name === "ha_token" ? "ha-token" : null;
+      if (name === "go2rtc_endpoint") {
+        return { origin: "http://127.0.0.1:43123", authorization: "Basic bXVzZXI6bXBhc3M=" };
+      }
       if (name === "ha_snapshot") {
         return {
           areas: [{ area_id: "living", name: "客厅" }],
@@ -1247,6 +1259,7 @@ describe("Smart camera support and live view (#97)", () => {
       return undefined;
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke }, configurable: true });
+    try {
     localStorage.setItem(
       "menumijia.windows.settings.v2",
       JSON.stringify({
@@ -1263,10 +1276,13 @@ describe("Smart camera support and live view (#97)", () => {
       did: "dev_cam",
       hlsUrl: "http://192.168.1.50:8123/api/camera_proxy_stream/camera.front?token=short-lived",
     });
-    assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:1984/api/stream.mjpeg?src=cam_mjpeg_dev_cam",
-    );
+    await waitFor(() => fetched.length === 1);
+    assert.equal(fetched[0]?.url, "http://127.0.0.1:43123/api/stream.mjpeg?src=cam_mjpeg_dev_cam");
+    assert.equal(fetched[0]?.authorization, "Basic bXVzZXI6bXBhc3M=");
+    assert.equal(fetched.some((call) => call.url.includes("127.0.0.1:1984")), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("releases an active P2P session when negotiation fails while the camera modal remains open", async () => {
