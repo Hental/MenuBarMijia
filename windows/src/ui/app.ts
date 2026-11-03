@@ -211,6 +211,8 @@ interface PersistedSettings {
   hasCompletedOnboarding: boolean;
   isCompactGridMode: boolean;
   cachedXiaomiDevices: SmartDevice[];
+  /** Version of the cached device shape; legacy caches are migrated once on load (#148). */
+  cachedDevicesVersion: number;
   cachedHAHome: { identity: string; home: SynthesizedHome } | null;
   cachedModelTypes: Record<string, string>;
   skin: AppSkin;
@@ -257,6 +259,8 @@ const STORAGE_KEY = "menumijia.windows.settings.v2";
 // The #52 language/unit preferences live inside the one settings blob above, so a save writes them
 // atomically with the rest; `i18n.ts` and `temperature.ts` expose matching standalone keys for tools.
 const LEGACY_STORAGE_KEY = "menumijia.windows.settings.v1";
+// Bump when a cached device shape needs a one-time migration on load (#148).
+const CACHED_DEVICES_VERSION = 1;
 
 // Injected at build time by vite.config.ts from the repository's VERSION file (#39).
 const APP_VERSION =
@@ -500,7 +504,7 @@ interface LoadedSettings {
   /** An old localStorage copy still contains secrets that must move to the credential manager (#28). */
   readonly hasLegacyCredentials: boolean;
 }
-function upgradeCachedDevices(devices: SmartDevice[]): SmartDevice[] {
+function upgradeCachedDevices(devices: SmartDevice[], migrateLegacyFridgeCache: boolean): SmartDevice[] {
   return devices.map((dev) => {
     const m = dev.model.toLowerCase();
     if (
@@ -521,6 +525,20 @@ function upgradeCachedDevices(devices: SmartDevice[]): SmartDevice[] {
         },
       };
     }
+    if (migrateLegacyFridgeCache && dev.kind.kind === "fridge") {
+      // A legacy cache can carry ids from the guessed fallback; cloud re-synthesis
+      // restores only verified writable targets afterwards (#148).
+      return {
+        ...dev,
+        kind: {
+          ...dev.kind,
+          modeEntityId: null,
+          availableModes: [],
+          fridgeTargetEntityId: null,
+          freezerTargetEntityId: null,
+        },
+      };
+    }
     return dev;
   });
 }
@@ -532,6 +550,8 @@ function loadSettings(): LoadedSettings {
     const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PersistedSettings> & Record<string, unknown>;
+      const cachedDevicesVersion =
+        typeof parsed.cachedDevicesVersion === "number" ? parsed.cachedDevicesVersion : 0;
       const rawHaToken = typeof parsed.haToken === "string" ? parsed.haToken : "";
       const rawApiKey = typeof parsed.openRouterApiKey === "string" ? parsed.openRouterApiKey : "";
       const hasLegacyCredentials =
@@ -581,8 +601,12 @@ function loadSettings(): LoadedSettings {
           hasCompletedOnboarding: parsed.hasCompletedOnboarding ?? Boolean(miSession),
           isCompactGridMode: parsed.isCompactGridMode ?? true,
           cachedXiaomiDevices: Array.isArray(parsed.cachedXiaomiDevices)
-            ? upgradeCachedDevices(parsed.cachedXiaomiDevices)
+            ? upgradeCachedDevices(
+                parsed.cachedXiaomiDevices,
+                cachedDevicesVersion < CACHED_DEVICES_VERSION,
+              )
             : [],
+          cachedDevicesVersion: Math.max(cachedDevicesVersion, CACHED_DEVICES_VERSION),
           cachedHAHome: parseCachedHAHome(parsed.cachedHAHome),
           cachedModelTypes:
             parsed.cachedModelTypes && typeof parsed.cachedModelTypes === "object"
@@ -644,6 +668,7 @@ function loadSettings(): LoadedSettings {
       hasCompletedOnboarding: false,
       isCompactGridMode: true,
       cachedXiaomiDevices: [],
+      cachedDevicesVersion: CACHED_DEVICES_VERSION,
       cachedHAHome: null,
       cachedModelTypes: {},
       skin: "classic",
@@ -3839,17 +3864,23 @@ export class MenuMijiaWindowsApp {
     }
     if (k.kind === "fridge") {
       const id = this.escapeHtml(dev.id);
+      const fridgeStep = k.fridgeTargetEntityId
+        ? `<button class="cc-seg-pill" data-fridgestep="${id}:fridge:-1" aria-label="${t("降低冷藏室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:1" aria-label="${t("升高冷藏室温度")}">＋</button>`
+        : "";
+      const freezerStep = k.freezerTargetEntityId
+        ? `<button class="cc-seg-pill" data-fridgestep="${id}:freezer:-1" aria-label="${t("降低冷冻室温度")}">−</button>
+            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:1" aria-label="${t("升高冷冻室温度")}">＋</button>`
+        : "";
       return `
         <div class="cc-tile-drawer">
           <div class="cc-segmented-pills">
             <span class="cc-pill-label">${t("冷藏室")} (${formatTemperature(k.fridgeTargetTemp)})</span>
-            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:-1" aria-label="${t("降低冷藏室温度")}">−</button>
-            <button class="cc-seg-pill" data-fridgestep="${id}:fridge:1" aria-label="${t("升高冷藏室温度")}">＋</button>
+            ${fridgeStep}
           </div>
           <div class="cc-segmented-pills">
             <span class="cc-pill-label">${t("冷冻室")} (${formatTemperature(k.freezerTargetTemp)})</span>
-            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:-1" aria-label="${t("降低冷冻室温度")}">−</button>
-            <button class="cc-seg-pill" data-fridgestep="${id}:freezer:1" aria-label="${t("升高冷冻室温度")}">＋</button>
+            ${freezerStep}
           </div>
           ${
             k.availableModes.length > 0
