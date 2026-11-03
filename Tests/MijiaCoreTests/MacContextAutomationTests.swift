@@ -245,6 +245,14 @@ struct MacContextAutomationTests {
         #expect(empty.endHour == 0)
     }
 
+    @Test("Decoded late-night windows clamp hostile hour values")
+    func lateNightWindowDecoding() throws {
+        let data = Data(#"{"startHour":99,"endHour":-5}"#.utf8)
+        let window = try JSONDecoder().decode(LateNightWindow.self, from: data)
+        #expect(window.startHour == 23)
+        #expect(window.endHour == 0)
+    }
+
     @Test("Only enabled rules contribute their required permissions")
     func requiredPermissions() {
         let rules = [
