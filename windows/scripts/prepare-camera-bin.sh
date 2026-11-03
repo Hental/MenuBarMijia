@@ -17,6 +17,9 @@ out_dir="${1:-${repo_root}/windows/src-tauri/camera-bin}"
 mkdir -p "${out_dir}"
 out_dir="$(cd "${out_dir}" && pwd)"
 work_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/menubarmijia-camera-bin"
+if command -v cygpath >/dev/null 2>&1; then
+  work_dir="$(cygpath -u "${work_dir}")"
+fi
 mkdir -p "${work_dir}"
 
 if [[ ! -f "${out_dir}/go2rtc.exe" || "${FORCE:-0}" == "1" ]]; then

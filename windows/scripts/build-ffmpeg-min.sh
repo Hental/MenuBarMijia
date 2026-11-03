@@ -29,6 +29,9 @@ if [[ -f "${out_dir}/ffmpeg-silent.exe" && "${FORCE:-0}" != "1" ]]; then
 fi
 
 work_dir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ffmpeg-min-${ffmpeg_version}"
+if command -v cygpath >/dev/null 2>&1; then
+  work_dir="$(cygpath -u "${work_dir}")"
+fi
 mkdir -p "${work_dir}" "${out_dir}"
 
 archive="${work_dir}/ffmpeg-${ffmpeg_version}.tar.xz"
@@ -43,7 +46,7 @@ echo "${ffmpeg_sha256}  ${archive}" | sha256sum -c -
 source_dir="${work_dir}/src"
 rm -rf "${source_dir}"
 mkdir -p "${source_dir}"
-tar -xf "${archive}" -C "${source_dir}" --strip-components=1
+tar --force-local -xf "${archive}" -C "${source_dir}" --strip-components=1
 
 echo "▶ 配置最小 LGPL 构建"
 (
