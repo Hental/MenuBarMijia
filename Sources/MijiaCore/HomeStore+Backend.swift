@@ -458,6 +458,7 @@ extension HomeStore {
             self.rooms = []
             self.environmentReadings = []
             self.scenes = []
+            selectRoom(nil)
             eventTask?.cancel()
             shutdownCurrentProvider()
             self.provider = makeMiAccountsProvider()
