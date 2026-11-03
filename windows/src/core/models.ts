@@ -562,7 +562,8 @@ export function deviceStatusSummary(device: SmartDevice): string {
       if (k.humidity !== null) parts.push(`${Math.round(k.humidity)}%`);
       if (parts.length > 0) return parts.join(" · ");
       if (k.statusText) {
-        return k.battery !== null ? `${k.statusText} · ${t("电量")} ${k.battery}%` : k.statusText;
+        const label = t(k.statusText);
+        return k.battery !== null ? `${label} · ${t("电量")} ${k.battery}%` : label;
       }
       return t("在线");
     }

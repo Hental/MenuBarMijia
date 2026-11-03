@@ -4,6 +4,10 @@ from pathlib import Path
 import re
 import sys
 
+# Windows consoles default to a legacy code page; keep the check's UTF-8 output intact.
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 root = Path(__file__).resolve().parent.parent
 surfaces = (
     'AssistantCommandBar', 'AutomationSettingsSection', 'ClimatePanelModule',
@@ -19,7 +23,7 @@ rules = (
 errors = []
 for name in surfaces:
     path = root / 'Sources/MenuBarMijiaApp' / (name + '.swift')
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8')
     start = 0
     end = len(text)
     first_line = 1

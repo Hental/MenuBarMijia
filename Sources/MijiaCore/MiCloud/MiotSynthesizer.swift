@@ -106,7 +106,7 @@ public enum MiotSynthesizer {
                 roomName: roomName,
                 model: record.model,
                 isOnline: record.isOnline,
-                kind: kind
+                kind: record.isOnline ? kind : Self.redactOfflineLockClaim(kind)
             )
             smartDevices.append(device)
 
@@ -505,7 +505,7 @@ public enum MiotSynthesizer {
         if temp == nil && hum == nil {
             switch s.shortName {
             case "lock":
-                statusText = L10n.tr("守护中", "Guarding")
+                statusText = lockStatusText(r, s)
             case "motion-sensor", "occupancy-sensor":
                 let motion = r.ref("motion-state", in: s) ?? r.ref("occupancy-status", in: s)
                 let lux = r.first("illumination", in: [s] + r.spec.services(named: "illumination-sensor"))
@@ -551,6 +551,81 @@ public enum MiotSynthesizer {
             battery: battery?.value?.intValue,
             statusText: statusText
         ))
+    }
+
+    /// Readable `door-state` properties the poll must refresh. A missing one is a failed read.
+    static func doorStateKeys(for device: MiDeviceRecord, spec: MiotDeviceSpec) -> [MiotPropKey] {
+        let scoped = specForRecord(device, spec: spec)
+        var keys: [MiotPropKey] = []
+        for service in scoped.services where service.shortName == "lock" || service.shortName == "door" {
+            for property in service.properties where property.shortName == "door-state" && property.isReadable {
+                let key = MiotPropKey(did: device.miotDid, siid: service.iid, piid: property.iid)
+                if !keys.contains(key) { keys.append(key) }
+            }
+        }
+        return keys
+    }
+
+    /// `door-state` is the only property treated as the current lock condition.
+    /// Event fields (`lock-action`, `abnormal-condition`) and toggles (`child-lock`, `anti-lock`)
+    /// are not a fresh locked/unlocked reading. An unreadable or unmapped value stays unknown
+    /// instead of claiming the door is guarding (#149).
+    static func lockStatusText(_ r: MiotReader, _ s: MiotService) -> String {
+        let doors = [s] + r.spec.services(named: "door")
+        if let door = r.first("door-state", in: doors),
+           let description = door.valueDescription,
+           let text = interpretedLockStatus(description) {
+            return text
+        }
+        return L10n.tr("锁状态未知", "Lock status unknown")
+    }
+
+    static func interpretedLockStatus(_ description: String) -> String? {
+        let lower = description.lowercased()
+        if lower.contains("child") || lower.contains("童锁") || lower.contains("反锁")
+            || lower.contains("anti-lock") || lower.contains("antilock") {
+            return nil
+        }
+        if lower.contains("unlock") || lower.contains("已开锁") || lower.contains("未上锁")
+            || lower.contains("not locked") || lower.contains("未锁") {
+            return L10n.tr("已开锁", "Unlocked")
+        }
+        if (lower.contains("ajar") || lower.contains("虚掩")),
+           !lower.contains("解除"), !lower.contains("clear"), !lower.contains("release") {
+            return L10n.tr("门虚掩", "Ajar")
+        }
+        if lower.contains("not closed") || lower.contains("not close") || lower.contains("未关") || lower.contains("没关") {
+            return L10n.tr("门未关", "Not Closed")
+        }
+        if lower.contains("jam") || lower.contains("卡住") {
+            return L10n.tr("门锁卡住", "Jammed")
+        }
+        if lower.contains("locked") || lower.contains("已上锁") || lower.contains("已锁") {
+            return L10n.tr("已上锁", "Locked")
+        }
+        return nil
+    }
+
+    /// A cached door reading must not keep claiming a security state after the device goes offline.
+    static func redactOfflineLockClaim(_ kind: DeviceKind) -> DeviceKind {
+        guard case .sensor(var sensor) = kind,
+              let text = sensor.statusText,
+              affirmativeLockStatuses.contains(text) else { return kind }
+        sensor.statusText = L10n.tr("锁状态未知", "Lock status unknown")
+        return .sensor(sensor)
+    }
+
+    private static var affirmativeLockStatuses: Set<String> {
+        [
+            L10n.tr("已上锁", "Locked"),
+            L10n.tr("已开锁", "Unlocked"),
+            L10n.tr("门虚掩", "Ajar"),
+            L10n.tr("门未关", "Not Closed"),
+            L10n.tr("门锁卡住", "Jammed"),
+            L10n.tr("正在上锁", "Locking"),
+            L10n.tr("正在开锁", "Unlocking"),
+            L10n.tr("守护中", "Guarding"),
+        ]
     }
 
     // MARK: Value Translation

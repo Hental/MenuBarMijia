@@ -149,4 +149,122 @@ struct HADeviceDiscoveryTests {
         )
         #expect(reply == "已触发书房台式机" || reply == "Triggered 书房台式机")
     }
+
+    @Test("Home Assistant locks show a reported state and stay unknown without one (#149)")
+    func lockStatusRequiresALockEntity() throws {
+        let batteryOnly = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "front", name: "入户门锁", model: "xiaomi.lock.s2")],
+            entities: [HAEntityEntry(entity_id: "sensor.front_battery", device_id: "front")],
+            states: [
+                "sensor.front_battery": HAEntityState(
+                    entityId: "sensor.front_battery",
+                    state: "80",
+                    attributes: ["device_class": .string("battery")]
+                )
+            ]
+        )
+        let batteryDevice = try #require(batteryOnly.devices.first)
+        guard case .sensor(let batterySensor) = batteryDevice.kind else {
+            Issue.record("battery-only lock should stay a sensor")
+            return
+        }
+        #expect(batterySensor.battery == 80)
+        #expect(batterySensor.statusText == "锁状态未知")
+        #expect(batteryDevice.isOnline)
+
+        let locked = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "front", name: "入户门锁", model: "Aqara Lock")],
+            entities: [
+                HAEntityEntry(entity_id: "lock.front", device_id: "front"),
+                HAEntityEntry(entity_id: "sensor.front_battery", device_id: "front")
+            ],
+            states: [
+                "lock.front": HAEntityState(entityId: "lock.front", state: "locked"),
+                "sensor.front_battery": HAEntityState(
+                    entityId: "sensor.front_battery",
+                    state: "64",
+                    attributes: ["device_class": .string("battery")]
+                )
+            ]
+        )
+        let lockedDevice = try #require(locked.devices.first)
+        guard case .sensor(let lockedSensor) = lockedDevice.kind else {
+            Issue.record("lock entity should synthesize as a sensor")
+            return
+        }
+        #expect(lockedSensor.statusText == "已上锁")
+        #expect(lockedSensor.battery == 64)
+
+        let unavailable = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "front", name: "入户门锁", model: "xiaomi.lock.s2")],
+            entities: [HAEntityEntry(entity_id: "lock.front", device_id: "front")],
+            states: ["lock.front": HAEntityState(entityId: "lock.front", state: "unavailable")]
+        )
+        let stale = try #require(unavailable.devices.first)
+        guard case .sensor(let staleSensor) = stale.kind else {
+            Issue.record("unavailable lock should stay a sensor")
+            return
+        }
+        #expect(staleSensor.statusText == "锁状态未知")
+        #expect(!stale.isOnline)
+
+        let clock = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "desk", name: "闹钟", model: "xiaomi.clock.watch")],
+            entities: [HAEntityEntry(entity_id: "sensor.clock_battery", device_id: "desk")],
+            states: ["sensor.clock_battery": HAEntityState(entityId: "sensor.clock_battery", state: "90")]
+        )
+        #expect(clock.devices.isEmpty)
+    }
+
+    @Test("A lock with a companion switch stays a lock, not an outlet")
+    func lockBeatsCompanionSwitch() throws {
+        let withModel = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "front", name: "入户门锁", model: "lumi.lock.acn02")],
+            entities: [
+                HAEntityEntry(entity_id: "lock.front", device_id: "front"),
+                HAEntityEntry(entity_id: "switch.front_door_relay", device_id: "front"),
+                HAEntityEntry(entity_id: "sensor.front_battery", device_id: "front")
+            ],
+            states: [
+                "lock.front": HAEntityState(entityId: "lock.front", state: "locked"),
+                "switch.front_door_relay": HAEntityState(entityId: "switch.front_door_relay", state: "on"),
+                "sensor.front_battery": HAEntityState(
+                    entityId: "sensor.front_battery",
+                    state: "64",
+                    attributes: ["device_class": .string("battery")]
+                )
+            ]
+        )
+        let modeled = try #require(withModel.devices.first)
+        guard case .sensor(let modeledSensor) = modeled.kind else {
+            Issue.record("lock with a companion switch was synthesized as an outlet")
+            return
+        }
+        #expect(modeledSensor.statusText == "已上锁")
+        #expect(modeledSensor.battery == 64)
+
+        let byEntity = DeviceSynthesizer.synthesize(
+            areas: [],
+            devices: [HADeviceEntry(id: "side", name: "侧门", model: "vendor.door.v1")],
+            entities: [
+                HAEntityEntry(entity_id: "lock.side", device_id: "side"),
+                HAEntityEntry(entity_id: "switch.side_power", device_id: "side")
+            ],
+            states: [
+                "lock.side": HAEntityState(entityId: "lock.side", state: "unlocked"),
+                "switch.side_power": HAEntityState(entityId: "switch.side_power", state: "on")
+            ]
+        )
+        let entityOnly = try #require(byEntity.devices.first)
+        guard case .sensor(let entitySensor) = entityOnly.kind else {
+            Issue.record("lock entity was hidden by a companion switch")
+            return
+        }
+        #expect(entitySensor.statusText == "已开锁")
+    }
 }

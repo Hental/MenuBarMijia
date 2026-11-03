@@ -54,6 +54,33 @@ function strings(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+/** `clock` and `block` contain the letters "lock" but are not door locks. */
+function isLockModel(model: string): boolean {
+  const lower = model.toLowerCase();
+  if (lower.includes(".lock.") || lower.startsWith("lock.") || lower.endsWith(".lock")) return true;
+  if (lower.includes("clock") || lower.includes("block")) return false;
+  return lower.includes("lock");
+}
+
+function haLockStatusText(state: HAState | undefined): string {
+  if (!state || state.state === "unknown" || state.state === "unavailable") return "锁状态未知";
+  switch (state.state.toLowerCase()) {
+    case "locked":
+      return "已上锁";
+    case "unlocked":
+    case "open":
+      return "已开锁";
+    case "locking":
+      return "正在上锁";
+    case "unlocking":
+      return "正在开锁";
+    case "jammed":
+      return "门锁卡住";
+    default:
+      return "锁状态未知";
+  }
+}
 function decode(value: unknown): HASnapshot {
   const raw = object(value);
   return {
@@ -335,6 +362,25 @@ function buildKind(
           : typeof camera?.attributes.access_token === "string" && camera.entityId
             ? `/api/camera_proxy/${camera.entityId}?token=${camera.attributes.access_token}`
             : null,
+    };
+  } else if (
+    // Companion switch.* entities must not hide the real lock state.
+    isLockModel(model) ||
+    entities.some((entry) => text(entry.entity_id).startsWith("lock."))
+  ) {
+    const lockState = find("lock");
+    const battery = sensor("battery");
+    const batteryFresh = battery != null && battery.state !== "unknown" && battery.state !== "unavailable";
+    const lockFresh = lockState != null && lockState.state !== "unknown" && lockState.state !== "unavailable";
+    return {
+      kind: {
+        kind: "sensor",
+        temperature: null,
+        humidity: null,
+        battery: reading("battery"),
+        statusText: haLockStatusText(lockFresh ? lockState : undefined),
+      },
+      online: lockFresh || batteryFresh,
     };
   } else if (
     (state = find(
