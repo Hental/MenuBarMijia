@@ -428,6 +428,15 @@ describe("Silent Xiaomi cloud refresh (#81)", { concurrency: false }, () => {
     assert.equal(element("#btn-toggle-hide-offline").getAttribute("aria-pressed"), "true");
   });
 
+  it("marks values stale when the read-back after a write fails", async () => {
+    const { cloud } = await readyCloudApp();
+    cloud.failNextGets();
+    await click('[data-toggle-device="fixture-light"]');
+    await waitFor(() => !!document.querySelector('[data-tile-id="fixture-light"]')?.classList.contains("is-stale"));
+    assert.match(textOf(".cc-feedback-text"), /HTTP 500|未能读回设备状态/);
+    assert.match(textOf('[data-tile-id="fixture-light"]'), /可能过期/);
+  });
+
   it("shows a collapsed group again when its only device comes online", async () => {
     const { cloud, triggerRefresh } = await readyCloudApp((fixture) => {
       const sensor = fixture.sensorRecord("sensor-bedroom", "主卧温湿度计");

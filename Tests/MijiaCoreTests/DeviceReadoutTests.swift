@@ -179,6 +179,42 @@ struct DeviceReadoutTests {
         #expect(store.toastNotice == nil, "The older retry must not report failure after a newer toggle confirmed")
     }
 
+    @Test("An older retry stops when a newer toggle finishes during the second read")
+    func olderRetrySupersededDuringSecondRead() async throws {
+        let lamp = light(on: true)
+        let provider = EchoHomeProvider(snapshot: SynthesizedHome(
+            rooms: [RoomArea(id: "room", name: "书房", sortOrder: 0)],
+            devices: [lamp]
+        ))
+        let suite = "test.readout.echo-second.\(UUID().uuidString)"
+        let store = HomeStore(provider: provider, defaultsSuiteName: suite)
+        store.holdReadBackEcho = true
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let first = store.togglePrimary(store.devices[0])
+        for _ in 0..<50 where !store.isHoldingReadBackEcho {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await provider.publishCommand()
+        for _ in 0..<50 where store.devices[0].isActiveOn {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        await provider.holdNextReadBack()
+        store.releaseReadBackEcho()
+        for _ in 0..<50 where await provider.readCount < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let second = store.togglePrimary(store.devices[0])
+        #expect(await second?.value == true)
+        await provider.releaseReadBack()
+
+        #expect(await first?.value == true)
+        #expect(store.devices[0].isActiveOn == true)
+        #expect(store.toastNotice == nil, "The superseded retry must not report failure")
+    }
+
     @Test("A LAN TV toggle is confirmed by the accepted command instead of a cloud read-back")
     func lanTVToggleSkipsCloudReadBack() async throws {
         let tv = SmartDevice(
@@ -315,6 +351,17 @@ private actor EchoHomeProvider: HomeProvider {
     private var continuation: AsyncStream<HomeProviderEvent>.Continuation?
     private var command: DeviceCommand?
     private var reads = 0
+    private var holdRead = false
+    private var readGate: CheckedContinuation<Void, Never>?
+
+    var readCount: Int { reads }
+
+    func holdNextReadBack() { holdRead = true }
+
+    func releaseReadBack() {
+        readGate?.resume()
+        readGate = nil
+    }
 
     init(snapshot: SynthesizedHome) {
         self.snapshot = snapshot
@@ -344,6 +391,10 @@ private actor EchoHomeProvider: HomeProvider {
 
     func readBack(deviceId: String) async -> ControlReadBack {
         reads += 1
+        if holdRead {
+            holdRead = false
+            await withCheckedContinuation { readGate = $0 }
+        }
         if reads >= 2, let command {
             snapshot = DemoHomeProvider.applying(command, to: snapshot)
         }

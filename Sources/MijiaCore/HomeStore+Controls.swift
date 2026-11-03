@@ -212,8 +212,11 @@ extension HomeStore {
             }
             if latestReadBackTicket[deviceId] != ticket { return .superseded }
             let second = await provider.readBack(deviceId: deviceId)
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
             if case .failed = second { return .unmatched }
             await settleSnapshot(after: again)
+            // A newer toggle may have started and even finished during the second read.
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
             return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
         }
     }

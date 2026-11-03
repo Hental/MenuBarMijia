@@ -1483,15 +1483,16 @@ export class MenuMijiaWindowsApp {
             : new Map<string, unknown>();
       } catch (error) {
         // A failed property read must not rebuild every device from defaults.
-        if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
-          this.cloudValuesStale = true;
+        if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
+          this.markCloudValuesStale();
         }
         throw error;
       }
 
       const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
-      if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
+      // An old refresh must not clear or set freshness for the connection that replaced it.
       if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
+      this.markCloudValuesFresh();
       // Cloud list order is not a layout preference. Keep known devices in their
       // displayed order, use fresh values, drop removed ids and append new ones.
       this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
@@ -1528,8 +1529,8 @@ export class MenuMijiaWindowsApp {
         };
       }
     } catch (err) {
-      if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
-        this.cloudValuesStale = true;
+      if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
+        this.markCloudValuesStale();
       }
       if (!silent) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2809,10 +2810,20 @@ export class MenuMijiaWindowsApp {
       if (readBackPower) {
         const power = mapped.writes.find((write) => typeof write.value === "boolean");
         if (power) {
-          const read = await client.getProps([power]);
+          let read: Map<string, unknown>;
+          try {
+            read = await client.getProps([power]);
+          } catch (error) {
+            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
+            throw error;
+          }
           const value = read.get(propKeyString(power));
           const isOn = readMiotPower(value);
-          if (isOn === null) throw new Error(t("未能读回设备状态"));
+          if (isOn === null) {
+            // The write may have landed; the old row is no longer a trusted reading.
+            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
+            throw new Error(t("未能读回设备状态"));
+          }
           return isOn;
         }
       }
@@ -2820,6 +2831,16 @@ export class MenuMijiaWindowsApp {
       await client.action(mapped.call);
     }
     return null;
+  }
+
+  private markCloudValuesStale(): void {
+    if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
+      this.cloudValuesStale = true;
+    }
+  }
+
+  private markCloudValuesFresh(): void {
+    if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
   }
 
   private get valuesAreStale(): boolean {
