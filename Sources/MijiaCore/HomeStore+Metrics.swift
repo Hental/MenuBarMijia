@@ -62,7 +62,6 @@ extension HomeStore {
         devices.filter { passesVisibility($0) && listCut.matches($0) }
     }
 
-    /// Tags that pass visibility, plus the selected tag when its devices are gone. Rank order.
     public var kindChips: [DeviceKindTag] {
         var tags = Set(devices.filter(passesVisibility).map { $0.kind.tag })
         if case .kind(let selected) = listCut { tags.insert(selected) }

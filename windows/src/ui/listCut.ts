@@ -1,6 +1,5 @@
 import type { DeviceKind, SmartDevice } from "../core/models.js";
 
-/** Windows card kinds. Speaker and TV are not in this client. */
 export type DeviceKindTag = DeviceKind["kind"];
 
 export type DeviceListCut =
@@ -8,7 +7,6 @@ export type DeviceListCut =
   | { readonly kind: "room"; readonly roomName: string }
   | { readonly kind: "deviceKind"; readonly tag: DeviceKindTag };
 
-/** Build fails if a Windows kind has no rank. */
 export const KIND_RANK: Record<DeviceKindTag, number> = {
   climate: 0,
   light: 1,
@@ -20,7 +18,6 @@ export const KIND_RANK: Record<DeviceKindTag, number> = {
   sensor: 7,
 };
 
-/** Titles and hints are catalog keys. Same words as `DeviceKindTag.chipTitle`, minus speaker and TV. */
 export const KIND_CHIP: Record<
   DeviceKindTag,
   { readonly title: string; readonly hint?: string }

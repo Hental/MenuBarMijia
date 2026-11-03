@@ -55,7 +55,6 @@ public final class HomeStore {
     public internal(set) var scenes: [HomeScene] = []
     public internal(set) var hasReceivedInitialSnapshot = false
 
-    /// Ephemeral cut of the home-scoped list. Not persisted.
     public internal(set) var listCut: DeviceListCut = .all
     public var expandedDeviceId: String? = nil
     public var focusedDeviceId: String? = nil

@@ -203,7 +203,6 @@ extension HomeStore {
         filteredDevices.filter { $0.isActiveOn && joinsAllOff($0) && Self.allOffChange(for: $0) != nil }
     }
 
-    /// Nil for every device. A room name, or the kind chip's title.
     public var allOffScopeName: String? {
         switch listCut {
         case .all:
