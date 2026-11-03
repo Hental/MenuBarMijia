@@ -4,7 +4,10 @@ mod home_assistant;
 mod placement;
 mod update_manifest;
 use home_assistant::{ha_execute, ha_snapshot};
-use placement::{place, resized_top, taskbar_edge, PanelAnchor, PanelPlacement, PlacementInput, Rect};
+use placement::{
+    move_is_user_driven, move_suppression_deadline, place, resized_top, taskbar_edge, PanelAnchor,
+    PanelPlacement, PlacementInput, Rect, DRAG_SETTLE_MS,
+};
 
 #[cfg(test)]
 static ORIGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1076,7 +1079,13 @@ fn set_panel_placement(app: AppHandle, anchor: PanelAnchor) -> Result<(), String
 
 /// The panel has no title bar, so a press on the header hands over to the OS move loop (#204).
 #[tauri::command]
-fn start_panel_drag(window: WebviewWindow) {
+fn start_panel_drag(app: AppHandle, window: WebviewWindow) {
+    // A header press is user movement from here on: stop ignoring `Moved` events even if the panel was
+    // placed moments ago, and let the settle watcher end the session once the pointer rests.
+    USER_DRAG_ACTIVE.store(true, Ordering::SeqCst);
+    USER_MOVES_SEEN.store(false, Ordering::SeqCst);
+    PROGRAMMATIC_MOVE_UNTIL_MS.store(0, Ordering::SeqCst);
+    schedule_drag_settle(app);
     let _ = window.start_dragging();
 }
 
@@ -1099,6 +1108,11 @@ static PANEL_PLACEMENT: LazyLock<RwLock<PanelPlacement>> =
 
 /// Until this timestamp, `Moved` events come from our own placement calls, not from a drag.
 static PROGRAMMATIC_MOVE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Set from a header press until the drag settles; while it is set, placement calls must not swallow
+/// the movement the user is producing (#204 review).
+static USER_DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Whether the current drag session actually moved the window, so a plain click never snaps it.
+static USER_MOVES_SEEN: AtomicBool = AtomicBool::new(false);
 /// Last user-driven move; the drag is over once the window stops moving for a moment.
 static MOVE_SNAP_DEADLINE_MS: AtomicU64 = AtomicU64::new(0);
 static MOVE_SNAP_SCHEDULED: AtomicBool = AtomicBool::new(false);
@@ -2356,30 +2370,46 @@ fn position_popover(window: &WebviewWindow, anchor: Option<PhysicalPosition<f64>
 }
 
 /// Ignore `Moved` events caused by our own placement calls; the window covers the IPC round trips.
+/// A running drag keeps the window: arming here would swallow the movement the user is producing.
 fn suppress_move_snaps() {
-    PROGRAMMATIC_MOVE_UNTIL_MS.store(now_epoch_ms() + 600, Ordering::SeqCst);
+    let drag_active = USER_DRAG_ACTIVE.load(Ordering::SeqCst);
+    if let Some(deadline) = move_suppression_deadline(drag_active, now_epoch_ms()) {
+        PROGRAMMATIC_MOVE_UNTIL_MS.store(deadline, Ordering::SeqCst);
+    }
 }
 
-/// A drag emits `Moved` on every mouse step; the panel snaps once the window has been still for a
-/// moment, so the snap never fights the pointer.
-fn note_user_move(app: &AppHandle) {
-    if now_epoch_ms() < PROGRAMMATIC_MOVE_UNTIL_MS.load(Ordering::SeqCst) {
-        return;
-    }
-    MOVE_SNAP_DEADLINE_MS.store(now_epoch_ms() + 350, Ordering::SeqCst);
+/// Watches one native drag until the window has been still for a moment, then ends the session. Only a
+/// drag that actually moved the window snaps, so a plain header click leaves the panel where it is.
+fn schedule_drag_settle(app: AppHandle) {
+    MOVE_SNAP_DEADLINE_MS.store(now_epoch_ms() + DRAG_SETTLE_MS, Ordering::SeqCst);
     if MOVE_SNAP_SCHEDULED.swap(true, Ordering::SeqCst) {
         return;
     }
-    let app = app.clone();
     std::thread::spawn(move || {
         while now_epoch_ms() < MOVE_SNAP_DEADLINE_MS.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(60));
         }
+        let moved = USER_MOVES_SEEN.swap(false, Ordering::SeqCst);
+        USER_DRAG_ACTIVE.store(false, Ordering::SeqCst);
         MOVE_SNAP_SCHEDULED.store(false, Ordering::SeqCst);
+        if !moved {
+            return;
+        }
         if let Some(window) = app.get_webview_window("main") {
             snap_panel_to_work_area(&window);
         }
     });
+}
+
+/// A drag emits `Moved` on every mouse step; keep the session alive until the pointer rests.
+fn note_user_move(app: &AppHandle) {
+    let drag_active = USER_DRAG_ACTIVE.load(Ordering::SeqCst);
+    let suppressed_until = PROGRAMMATIC_MOVE_UNTIL_MS.load(Ordering::SeqCst);
+    if !move_is_user_driven(drag_active, now_epoch_ms(), suppressed_until) {
+        return;
+    }
+    USER_MOVES_SEEN.store(true, Ordering::SeqCst);
+    schedule_drag_settle(app.clone());
 }
 
 /// Drag-to-move lands on the nearest work-area corner, and that corner becomes the preference.
@@ -2399,10 +2429,11 @@ fn snap_panel_to_work_area(window: &WebviewWindow) {
     };
     let (full, work) = monitor_rects(&monitor);
     let anchor = PanelAnchor::nearest(work, center);
-    if anchor == current_panel_placement().anchor {
-        return;
+    // A drop inside the current quadrant still snaps the window back to its corner; only a different
+    // corner needs a write, so an unchanged preference never rewrites the file (#204 review).
+    if anchor != current_panel_placement().anchor {
+        let _ = store_panel_placement(PanelPlacement { anchor });
     }
-    let _ = store_panel_placement(PanelPlacement { anchor });
     let scale = monitor.scale_factor();
     let (x, y) = place(&PlacementInput {
         monitor: full,

@@ -235,6 +235,28 @@ pub fn resized_top(
     top.clamp(min_y, max_y)
 }
 
+/// How long our own `set_position` calls may still deliver `Moved` events (IPC plus event-loop hops).
+pub const MOVE_SUPPRESS_MS: u64 = 600;
+
+/// Quiet time after the last drag move before the panel snaps, so the snap never fights the pointer.
+pub const DRAG_SETTLE_MS: u64 = 350;
+
+/// Deadline for ignoring our own moves, or `None` while a native drag owns the window. A placement
+/// call must never arm the window mid-drag, or the movement the user is producing would be discarded.
+pub fn move_suppression_deadline(drag_active: bool, now_ms: u64) -> Option<u64> {
+    if drag_active {
+        None
+    } else {
+        Some(now_ms + MOVE_SUPPRESS_MS)
+    }
+}
+
+/// Whether a `Moved` event belongs to the user. A live drag session always wins; otherwise the move
+/// has to fall outside the window armed by our own placement calls.
+pub fn move_is_user_driven(drag_active: bool, now_ms: u64, suppressed_until_ms: u64) -> bool {
+    drag_active || now_ms >= suppressed_until_ms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,6 +401,21 @@ mod tests {
         assert_eq!(PanelAnchor::nearest(work, (1700, 100)), PanelAnchor::TopRight);
         assert_eq!(PanelAnchor::nearest(work, (200, 900)), PanelAnchor::BottomLeft);
         assert_eq!(PanelAnchor::nearest(work, (1700, 900)), PanelAnchor::BottomRight);
+    }
+
+    #[test]
+    fn a_live_drag_suppresses_nothing_and_keeps_user_movement() {
+        // A placement call may not arm the window while a native drag owns the window…
+        assert_eq!(move_suppression_deadline(true, 1_000), None);
+        // …and a move that lands inside a window armed before the press is still the user's.
+        assert!(move_is_user_driven(true, 1_050, 1_600));
+
+        // Outside a drag the window is armed, and moves inside it are our own.
+        assert_eq!(move_suppression_deadline(false, 1_000), Some(1_600));
+        assert!(!move_is_user_driven(false, 1_050, 1_600));
+        // Once the window lapses, the next move is user movement again.
+        assert!(move_is_user_driven(false, 1_600, 1_600));
+        assert!(move_is_user_driven(false, 1_601, 0));
     }
 
     #[test]
