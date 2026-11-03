@@ -203,12 +203,17 @@ struct DeviceReadoutTests {
 
         await provider.holdNextReadBack()
         store.releaseReadBackEcho()
-        for _ in 0..<50 where await provider.readCount < 2 {
+        for _ in 0..<200 where await provider.readCount < 2 {
             try await Task.sleep(for: .milliseconds(10))
         }
+        guard await provider.readCount >= 2 else {
+            await provider.cancelHeldReadBack()
+            Issue.record("The echo retry did not start")
+            return
+        }
         let second = store.togglePrimary(store.devices[0])
-        #expect(await second?.value == true)
         await provider.releaseReadBack()
+        #expect(await second?.value == true)
 
         #expect(await first?.value == true)
         #expect(store.devices[0].isActiveOn == true)
@@ -359,6 +364,13 @@ private actor EchoHomeProvider: HomeProvider {
     func holdNextReadBack() { holdRead = true }
 
     func releaseReadBack() {
+        readGate?.resume()
+        readGate = nil
+    }
+
+    /// Clears an armed gate so a read that never started cannot block a later one.
+    func cancelHeldReadBack() {
+        holdRead = false
         readGate?.resume()
         readGate = nil
     }
