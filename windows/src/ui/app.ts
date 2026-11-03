@@ -176,6 +176,7 @@ import { createTransport, invokeTauriVoid } from "./transport.js";
 import { loadSettings, stripCredentialFieldsFromStoredCopies, upgradeCachedDevices, writeSettingsForStorage } from "./settings.js";
 import { CameraLiveController } from "./cameraLive.js";
 import { renderClimateStrip, renderDeviceDrawer, renderSensorCard } from "./deviceViews.js";
+import { renderSettingsModal } from "./settingsViews.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
 export { waitForCameraFrameGap } from "./dom.js";
 function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
@@ -258,7 +259,7 @@ export class MenuMijiaWindowsApp {
   private grokBallOnLeft = false;
   private panelGeometryUpdates: Promise<void> = Promise.resolve();
   /** Panel anchor the backend persists (#204); the window position itself is owned by Rust. */
-  private panelAnchor: PanelAnchor = "auto";
+  public panelAnchor: PanelAnchor = "auto";
   /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
   private proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
@@ -278,15 +279,15 @@ export class MenuMijiaWindowsApp {
   /** Timers that came due while the PC slept; they only run when the user taps 立即执行 (#22). */
   private missedScheduledCommands: ScheduledCommand[] = [];
   private lastUndoAction: UndoAction | null = null;
-  private qrTicket: QRLoginTicket | null = null;
-  private qrStatusText = t("点击下方按钮获取安全二维码，用手机「米家 App → 扫一扫」即可同步真实全屋设备。");
-  private isPollingQR = false;
+  public qrTicket: QRLoginTicket | null = null;
+  public qrStatusText = t("点击下方按钮获取安全二维码，用手机「米家 App → 扫一扫」即可同步真实全屋设备。");
+  public isPollingQR = false;
   /** Latest GitHub release found by the daily check (#39); shown in settings and the tray menu. */
-  private availableUpdate: GitHubRelease | null = null;
+  public availableUpdate: GitHubRelease | null = null;
   private updateState: UpdateState = { lastCheckedAtMs: null, release: null };
-  private isCheckingUpdate = false;
-  private isInstallingUpdate = false;
-  private updateStatusMessage: { text: string; isError: boolean } | null = null;
+  public isCheckingUpdate = false;
+  public isInstallingUpdate = false;
+  public updateStatusMessage: { text: string; isError: boolean } | null = null;
   public readonly transport: HttpTransport = createTransport();
   public readonly specResolver: MiotSpecResolver;
   public readonly cameraLive: CameraLiveController;
@@ -308,9 +309,9 @@ export class MenuMijiaWindowsApp {
   private poppedDeviceId: string | null = null;
   private dimPreview: { id: string; percent: number } | null = null;
   private suppressNextClick = false;
-  private isRecordingHotkey = false;
-  private hotkeyNeedsHint = false;
-  private hotkeyRegistrationError: string | null = null;
+  public isRecordingHotkey = false;
+  public hotkeyNeedsHint = false;
+  public hotkeyRegistrationError: string | null = null;
 
   constructor(public readonly root: HTMLElement) {
     this.specResolver = new MiotSpecResolver(
@@ -1742,7 +1743,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Sequence entries and lastAction persist alongside the entries (ADR-0009). */
-  private habitSequences(): HabitSequenceEntry[] {
+  public habitSequences(): HabitSequenceEntry[] {
     const raw = localStorage.getItem("menumijia.windows.habit.sequences.v1");
     if (!raw) return [];
     try {
@@ -3295,351 +3296,24 @@ export class MenuMijiaWindowsApp {
   }
 
   private renderSettingsModal(): string {
-    return `
-      <div class="cc-sheet-backdrop">
-        <div class="cc-sheet" role="dialog" aria-modal="true" aria-label="${t("偏好设置")}">
-          <div class="cc-sheet-header">
-            <strong>${t("偏好设置与米家连接")}</strong>
-            <button class="cc-circle-btn is-small" id="btn-close-settings" title="${t("返回控制中心")}" aria-label="${t("返回控制中心")}">
-              ${SF_ICONS.xmark}
-            </button>
-          </div>
-
-          ${this.availableUpdate ? this.renderUpdateSection() : ""}
-
-          <div class="cc-field">
-            <label>${t("外观模式")}</label>
-            <div class="cc-segmented-pills is-even">
-              ${APPEARANCES.map(
-                (a) =>
-                  `<button class="cc-seg-pill ${this.settings.appearance === a.id ? "is-active" : ""}" data-appearance="${a.id}" aria-pressed="${this.settings.appearance === a.id}">${this.escapeHtml(a.title)}</button>`,
-              ).join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label>${t("界面语言 / 语言")}</label>
-            <div class="cc-segmented-pills">
-              ${([["system", t("跟随系统")], ["zh-Hans", t("简体中文")], ["en", "English"]] as const)
-                .map(
-                  ([value, label]) =>
-                    `<button class="cc-seg-pill ${this.settings.interfaceLanguage === value ? "is-active" : ""}" data-interface-language="${value}" aria-pressed="${this.settings.interfaceLanguage === value}">${this.escapeHtml(label)}</button>`,
-                )
-                .join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label>${t("温度单位")}</label>
-            <div class="cc-segmented-pills">
-              ${([["system", t("跟随系统")], ["celsius", t("摄氏度 (°C)")], ["fahrenheit", t("华氏度 (°F)")]] as const)
-                .map(
-                  ([value, label]) =>
-                    `<button class="cc-seg-pill ${this.settings.temperatureUnit === value ? "is-active" : ""}" data-temperature-unit="${value}" aria-pressed="${this.settings.temperatureUnit === value}">${this.escapeHtml(label)}</button>`,
-                )
-                .join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label>${t("面板高度")}</label>
-            <div class="cc-segmented-pills">
-              ${PANEL_HEIGHTS.map((h) => `<button class="cc-seg-pill ${this.settings.panelHeight === h.id ? "is-active" : ""}" data-panel-height="${h.id}" aria-pressed="${this.settings.panelHeight === h.id}">${h.title}</button>`).join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label>${t("面板位置")}</label>
-            <div class="cc-segmented-pills">
-              ${PANEL_ANCHORS.map((a) => `<button class="cc-seg-pill ${this.panelAnchor === a.id ? "is-active" : ""}" data-panel-anchor="${a.id}" aria-pressed="${this.panelAnchor === a.id}">${this.escapeHtml(a.title)}</button>`).join("")}
-            </div>
-            <p class="cc-field-hint">${t("拖动面板顶部即可移动，松开后吸附到最近的角落。")}</p>
-          </div>
-
-          <div class="cc-field cc-field-row">
-            <label for="settings-climate-panel">${t("空调使用整行控制条")}</label>
-            <input id="settings-climate-panel" type="checkbox" ${this.settings.climatePanel ? "checked" : ""} />
-          </div>
-
-          <div class="cc-field cc-field-row">
-            <label for="settings-hide-offline">${t("隐藏离线/未通电的设备")}</label>
-            <input id="settings-hide-offline" type="checkbox" ${this.settings.hideOfflineDevices ? "checked" : ""} />
-          </div>
-
-          <div class="cc-field cc-field-row">
-            <label for="settings-hide-grouped-lights">${t("灯组内的单灯不重复显示")}</label>
-            <input id="settings-hide-grouped-lights" type="checkbox" ${this.settings.hideGroupedLights ? "checked" : ""} />
-          </div>
-
-          <div class="cc-field cc-field-row">
-            <label for="settings-quick-actions">${t("显示顶部快捷场景栏")}</label>
-            <input id="settings-quick-actions" type="checkbox" ${this.settings.showQuickActionsBar ? "checked" : ""} />
-          </div>
-
-          <div class="cc-field cc-field-row">
-            <label for="settings-grok-ball">${t("启用侧边情绪智能球")}</label>
-            <input id="settings-grok-ball" type="checkbox" ${this.settings.enableGrokBall ? "checked" : ""} />
-          </div>
-
-          <div class="cc-field">
-            <div class="cc-field-row">
-              <label for="settings-enable-hotkey">${t("启用全局呼出快捷键")}</label>
-              <input id="settings-enable-hotkey" type="checkbox" ${this.settings.enableGlobalHotkey ? "checked" : ""} />
-            </div>
-            ${
-              this.settings.enableGlobalHotkey
-                ? `<div class="cc-update-row" style="margin-top: 6px;">
-                     <span>${t("呼出面板的快捷键")}</span>
-                     <div style="display: flex; gap: 6px; align-items: center;">
-                       <button
-                         type="button"
-                         class="cc-seg-pill ${this.isRecordingHotkey ? "is-active" : ""}"
-                         id="btn-record-hotkey"
-                         title="${t("点击后按下新的组合；Esc 取消")}"
-                         aria-pressed="${this.isRecordingHotkey}"
-                       >${this.isRecordingHotkey ? t("按下组合…") : this.escapeHtml(this.settings.globalHotkey)}</button>
-                       ${
-                         this.settings.globalHotkey !== DEFAULT_GLOBAL_SHORTCUT
-                           ? `<button type="button" class="cc-btn-secondary" id="btn-reset-hotkey">${t("恢复 Alt+M")}</button>`
-                           : ""
-                       }
-                     </div>
-                   </div>`
-                : ""
-            }
-            ${
-              this.settings.enableGlobalHotkey && (this.isRecordingHotkey || this.hotkeyNeedsHint)
-                ? `<p class="cc-field-hint" id="hotkey-record-hint">${t("需要至少一个 Ctrl / Alt / Shift / Win，或单按 F1–F20。Esc 取消。")}</p>`
-                : ""
-            }
-            ${
-              this.settings.enableGlobalHotkey && this.hotkeyRegistrationError
-                ? `<div class="cc-update-row" id="hotkey-conflict-row" style="margin-top: 6px;">
-                     <span class="cc-field-hint" style="color: #e67e22; margin: 0;">${this.escapeHtml(this.hotkeyRegistrationError)}</span>
-                     <button type="button" class="cc-btn-secondary" id="btn-retry-hotkey">${t("重试")}</button>
-                   </div>`
-                : ""
-            }
-          </div>
-
-          <div class="cc-field">
-            <label>${t("设备数据源")}</label>
-            <div class="cc-segmented-pills">
-              <button
-                class="cc-seg-pill ${this.settings.connectionMode === "xiaomiCloud" ? "is-active" : ""}"
-                data-conn-mode="xiaomiCloud"
-              >
-                米家云真实设备
-              </button>
-              <button class="cc-seg-pill ${this.settings.connectionMode === "homeAssistant" ? "is-active" : ""}" data-conn-mode="homeAssistant">Home Assistant</button>
-              <button
-                class="cc-seg-pill ${this.settings.connectionMode === "demo" ? "is-active" : ""}"
-                data-conn-mode="demo"
-              >
-                演示设备预览
-              </button>
-            </div>
-          </div>
-          <div class="cc-field">
-            <label for="settings-ha-url">Home Assistant URL</label>
-            <input id="settings-ha-url" class="cc-input" type="url" value="${this.escapeHtml(this.settings.haBaseURL)}" placeholder="http://homeassistant.local:8123" />
-            <label for="settings-ha-token">Home Assistant access token</label>
-            <input id="settings-ha-token" class="cc-input" type="password" autocomplete="off" value="${this.escapeHtml(this.settings.haToken)}" />
-          </div>
-
-          <div class="cc-field">
-            <label>${t("云端服务器地区")}</label>
-            <select class="cc-input" data-mi-region>
-              ${MI_CLOUD_REGIONS.map(
-                (region) => `<option value="${region.code}" ${normalizeMiCloudRegion(this.settings.miCloudRegion) === region.code ? "selected" : ""}>${this.escapeHtml(region.label)}</option>`,
-              ).join("")}
-            </select>
-            <p class="cc-field-hint">当前选择：${this.escapeHtml(miCloudRegionLabel(this.settings.miCloudRegion))}。切换后请重新扫码登录该地区的米家账号；已登录会话仍使用登录时的地区。</p>
-          </div>
-
-          <div class="cc-qr-box">
-            <button class="cc-btn-primary is-full" id="btn-start-qr" ${this.isPollingQR ? "disabled" : ""}>
-              ${SF_ICONS.qrcode}
-              <span>
-                ${
-                  this.settings.miSession
-                    ? t("切换/重新扫码 (已登录 {user})", { user: maskedMiUserId(this.settings.miSession.userId) })
-                    : t("获取米家登录二维码")
-                }
-              </span>
-            </button>
-            <div class="cc-qr-status">${this.escapeHtml(this.qrStatusText)}</div>
-            ${
-              this.qrTicket
-                ? `<div class="cc-qr-frame"><img src="${this.escapeHtml(this.qrTicket.qrImageURL)}" alt="Xiaomi QR" /></div>`
-                : ""
-            }
-          </div>
-
-          <div class="cc-field">
-            <label>${t("AI 服务商预设（支持 OpenRouter Jev、原生 Jev、DeepSeek、千问、GLM 等）")}</label>
-            <div class="cc-segmented-pills" style="flex-wrap: wrap;">
-              ${ASSISTANT_PROVIDER_PRESETS.filter((p) => p.id !== "custom")
-                .map((preset) => {
-                  const currentPreset = inferAssistantPreset(this.settings.assistantBaseURL);
-                  return `<button
-                    type="button"
-                    class="cc-seg-pill ${currentPreset.id === preset.id ? "is-active" : ""}"
-                    data-ai-preset="${this.escapeHtml(preset.id)}"
-                  >${this.escapeHtml(preset.shortTitle)}</button>`;
-                })
-                .join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label>${t("AI 服务地址（支持 /v1/systemone 与 OpenAI 兼容 /v1/chat/completions）")}</label>
-            <input
-              id="settings-base-url"
-              class="cc-input"
-              type="text"
-              placeholder="https://openrouter.ai/api/v1"
-              value="${this.escapeHtml(this.settings.assistantBaseURL)}"
-            />
-          </div>
-
-          <div class="cc-field">
-            <label>${t("决策模型（如 ~typesafe/jev-latest、jev-latest、deepseek-chat）")}</label>
-            <input
-              id="settings-model"
-              class="cc-input"
-              type="text"
-              value="${this.escapeHtml(this.settings.assistantModel)}"
-            />
-          </div>
-
-          <div class="cc-field">
-            <label>${t("API Key（本机安全保存）")}</label>
-            <input
-              id="settings-api-key"
-              class="cc-input"
-              type="password"
-              placeholder="${this.escapeHtml(inferAssistantPreset(this.settings.assistantBaseURL).keyPlaceholder)}"
-              value="${this.escapeHtml(this.apiKeyFor(this.settings.assistantBaseURL))}"
-            />
-          </div>
-
-          ${
-            this.settings.cloudConsentEndpoints.length > 0
-              ? `<div class="cc-field">
-            <label>${t("已允许发送到：{endpoints}", { endpoints: this.escapeHtml(this.settings.cloudConsentEndpoints.join("、")) })}</label>
-            <button type="button" class="cc-btn-secondary" id="btn-revoke-cloud">${t("撤销授权（下次发往云端前再问）")}</button>
-          </div>`
-              : ""
-          }
-
-          <div class="cc-field">
-            <label>${t("「全关」包含哪些设备（插座、扫地机默认不包含）")}</label>
-            <div class="cc-timers-stack">
-              ${this.devices
-                .filter((d) => d.kind.kind !== "sensor" && d.kind.kind !== "fridge")
-                .map(
-                  (d) => `
-                <label class="cc-checkbox">
-                  <input type="checkbox" data-alloff-device="${this.escapeHtml(d.id)}" ${joinsAllOff(d, this.settings.allOffOverrides) ? "checked" : ""} />
-                  <span>${this.escapeHtml(d.name)}${d.roomName ? ` · ${this.escapeHtml(d.roomName)}` : ""}</span>
-                </label>`,
-                )
-                .join("")}
-            </div>
-          </div>
-
-          <div class="cc-field">
-            <label class="cc-checkbox">
-              <input type="checkbox" id="settings-habit" ${this.settings.habitLearningEnabled ? "checked" : ""} />
-              <span>${t("自动记住自然语言习惯（相同表达下次 0ms 本地直达）")}</span>
-            </label>
-            <label class="cc-checkbox">
-              <input type="checkbox" id="settings-habit-share" ${this.settings.habitShareEnabled ? "checked" : ""} />
-              <span>${t("发送习惯摘要（只包含这句话点名的设备）")}</span>
-            </label>
-            <label>${t("预览这句话会发送的习惯摘要")}</label>
-            <input id="settings-habit-share-sample" class="cc-input" type="text" />
-            <div id="settings-habit-share-preview">${t("不会发送习惯摘要")}</div>
-            ${
-              this.settings.learnedShortcuts.length > 0
-                ? `<div class="cc-timers-stack">
-                    ${this.settings.learnedShortcuts
-                      .map(
-                        (s, idx) => `
-                      <div class="cc-timer-row">
-                        <span>「${this.escapeHtml(s.phrase)}」→ ${this.escapeHtml(s.reply)}</span>
-                        <button class="cc-inline-pill" data-del-habit="${idx}">删除</button>
-                      </div>
-                    `,
-                      )
-                      .join("")}
-                  </div>`
-                : ""
-            }
-            ${
-              this.settings.habitEntries.length > 0 || this.habitSequences().length > 0
-                ? `<div class="cc-timers-stack">
-                    <div class="cc-timer-row">
-                      <span>${t("已学习 {count} 条时段习惯、{sequences} 条先后习惯（用于猜你想控）", {
-                        count: this.settings.habitEntries.length,
-                        sequences: this.habitSequences().length,
-                      })}</span>
-                      <button class="cc-inline-pill" id="btn-clear-habits">${t("清空")}</button>
-                    </div>
-                  </div>`
-                : ""
-            }
-          </div>
-
-          ${!this.availableUpdate ? this.renderUpdateSection() : ""}
-
-          <div class="cc-sheet-footer">
-            <button class="cc-btn-danger" id="btn-settings-quit">${t("退出 MenuBarMijia")}</button>
-            <button class="cc-btn-primary" id="btn-save-settings">${t("完成并保存")}</button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  private renderUpdateSection(): string {
-    const release = this.availableUpdate;
-    const hasInstaller = Boolean(release?.installerAsset);
-    const notes = release?.notes?.trim() ?? "";
-    const statusText = this.updateStatusMessage?.text ?? (release && hasInstaller ? t("可直接下载并安装，无需打开浏览器") : "");
-    return `
-      <div class="cc-field cc-update-card ${release ? "is-available" : ""}">
-        <label>${release ? t("发现新版本 v{version}", { version: release.version }) : t("软件更新")}</label>
-        <div class="cc-update-row">
-          <span>${t("当前版本 v{version}", { version: APP_VERSION })}</span>
-          <div class="cc-update-actions">
-            ${
-              release
-                ? `${
-                    hasInstaller
-                      ? `<button type="button" class="cc-btn-primary" id="btn-install-update" ${this.isInstallingUpdate ? "disabled" : ""}>${this.isInstallingUpdate ? t("正在更新…") : t("立即更新")}</button>`
-                      : ""
-                  }
-                  <button type="button" class="cc-btn-secondary" id="btn-open-update">${
-                    hasInstaller ? t("手动下载") : t("有新版本 v{version}，点击查看", { version: release.version })
-                  }</button>`
-                : `<button type="button" class="cc-btn-secondary" id="btn-check-update" ${this.isCheckingUpdate ? "disabled" : ""}>${this.isCheckingUpdate ? t("检查中…") : t("立即检查")}</button>`
-            }
-          </div>
-        </div>
-        ${
-          statusText
-            ? `<div class="cc-update-status ${this.updateStatusMessage?.isError ? "is-error" : ""}">${this.escapeHtml(statusText)}</div>`
-            : ""
-        }
-        ${notes ? `<div class="cc-update-notes">${this.escapeHtml(notes)}</div>` : ""}
-        <label class="cc-checkbox" style="margin-top: 6px;">
-          <input type="checkbox" id="settings-auto-update" ${this.settings.autoCheckUpdates ? "checked" : ""} />
-          <span>${t("每天自动检查更新（关闭后不再请求 GitHub）")}</span>
-        </label>
-      </div>
-    `;
+    return renderSettingsModal({
+      settings: this.settings,
+      devices: this.devices,
+      availableUpdate: this.availableUpdate,
+      apiKeyFor: (baseURL) => this.apiKeyFor(baseURL),
+      habitSequences: () => this.habitSequences(),
+      hotkeyNeedsHint: this.hotkeyNeedsHint,
+      hotkeyRegistrationError: this.hotkeyRegistrationError,
+      isPollingQR: this.isPollingQR,
+      isRecordingHotkey: this.isRecordingHotkey,
+      panelAnchor: this.panelAnchor,
+      qrStatusText: this.qrStatusText,
+      qrTicket: this.qrTicket,
+      isCheckingUpdate: this.isCheckingUpdate,
+      isInstallingUpdate: this.isInstallingUpdate,
+      updateStatusMessage: this.updateStatusMessage,
+      escapeHtml: (value) => this.escapeHtml(value),
+    });
   }
 
   private bindEvents(): void {
@@ -5116,7 +4790,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** The saved API key, only when it was saved for this server (#19). */
-  private apiKeyFor(baseURL: string): string {
+  public apiKeyFor(baseURL: string): string {
     const key = this.settings.openRouterApiKey.trim();
     if (!key) return "";
     const identity = assistantEndpointIdentity(baseURL);
