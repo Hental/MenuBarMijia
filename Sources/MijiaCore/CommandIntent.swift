@@ -395,6 +395,7 @@ public struct IntentCatalog: Sendable {
         var allDeviceIds: [String] = []
         var roomOrder: [String] = []
         var roomLights: [String: [String]] = [:]
+        var aliasById: [String: String] = [:]
         var deviceRows: [String] = []
         for device in devices {
             let category = IntentDeviceCategory(device)
@@ -402,6 +403,7 @@ public struct IntentCatalog: Sendable {
             let alias = "d\(aliasDevices.count + 1)"
             aliasDevices.append((alias, device))
             map[alias] = [device.id]
+            aliasById[device.id] = alias
             if map[device.id] == nil { map[device.id] = [device.id] }
             let state = PromptText.sanitize(Self.stateSummary(device), limit: PromptText.stateLimit)
             allDeviceIds.append(device.id)
@@ -424,6 +426,7 @@ public struct IntentCatalog: Sendable {
             deviceRows.append(CatalogJSON.object(fields))
         }
         var groupIndex = 0
+        var groupRows: [String] = []
         for room in roomOrder {
             let ids = roomLights[room] ?? []
             guard ids.count >= 2 else { continue }
@@ -431,6 +434,12 @@ public struct IntentCatalog: Sendable {
             let alias = "room_lights:\(groupIndex)"
             map[alias] = ids
             criteria[alias] = Self.roomGroupCriterion(lightCount: ids.count)
+            let members = ids.compactMap { aliasById[$0] }.map { CatalogJSON.quote($0) }
+            groupRows.append(CatalogJSON.object([
+                ("id", CatalogJSON.quote(alias)),
+                ("room", CatalogJSON.quote(PromptText.sanitize(room, limit: PromptText.nameLimit))),
+                ("members", "[\(members.joined(separator: ","))]"),
+            ]))
         }
         if allLightIds.count >= 2 {
             map["all_lights"] = allLightIds
@@ -454,7 +463,7 @@ public struct IntentCatalog: Sendable {
         self.aliasDevices = aliasDevices
         self.criteriaByAlias = criteria
         self.realIdsByAlias = map
-        self.catalogText = PromptText.dataNotice + "\n" + "{\"devices\":[\(deviceRows.joined(separator: ","))],\"scenes\":[\(sceneRows.joined(separator: ","))]}"
+        self.catalogText = PromptText.dataNotice + "\n" + "{\"devices\":[\(deviceRows.joined(separator: ","))],\"groups\":[\(groupRows.joined(separator: ","))],\"scenes\":[\(sceneRows.joined(separator: ","))]}"
     }
 
     static func choiceCriterion(category: IntentDeviceCategory, state: String) -> String {

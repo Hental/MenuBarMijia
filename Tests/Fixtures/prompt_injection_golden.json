@@ -1103,6 +1103,119 @@
           "confirm"
         ]
       }
+    },
+    {
+      "id": "room-groups-carry-room-and-members",
+      "devices": [
+        {
+          "id": "light.g1",
+          "name": "客厅灯1",
+          "roomName": "客厅",
+          "model": "yeelink.light.lamp1",
+          "kind": "light"
+        },
+        {
+          "id": "light.g2",
+          "name": "客厅灯2",
+          "roomName": "客厅",
+          "model": "yeelink.light.lamp1",
+          "kind": "light"
+        },
+        {
+          "id": "light.g3",
+          "name": "卧室灯1",
+          "roomName": "卧室",
+          "model": "yeelink.light.lamp1",
+          "kind": "light"
+        },
+        {
+          "id": "light.g4",
+          "name": "卧室灯2",
+          "roomName": "卧室",
+          "model": "yeelink.light.lamp1",
+          "kind": "light"
+        }
+      ],
+      "scenes": [],
+      "payload": {
+        "actions": []
+      },
+      "expect": {
+        "runTargetIds": [],
+        "confirmTargetIds": [],
+        "suggestionIds": []
+      },
+      "catalog": {
+        "alias": "d1",
+        "name": "客厅灯1",
+        "room": "客厅",
+        "shared": false,
+        "category": "light",
+        "groups": [
+          {
+            "id": "room_lights:1",
+            "room": "客厅",
+            "members": ["d1", "d2"]
+          },
+          {
+            "id": "room_lights:2",
+            "room": "卧室",
+            "members": ["d3", "d4"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "scene-name-at-limit",
+      "devices": [],
+      "scenes": [
+        {
+          "id": "scene.limit",
+          "name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "entityId": "scene.limit"
+        }
+      ],
+      "payload": {
+        "actions": [
+          {
+            "targetId": "scene.limit",
+            "op": "scene",
+            "value": null,
+            "confidence": 1
+          }
+        ]
+      },
+      "expect": {
+        "runTargetIds": ["scene.limit"],
+        "confirmTargetIds": [],
+        "suggestionIds": []
+      }
+    },
+    {
+      "id": "scene-name-truncated",
+      "devices": [],
+      "scenes": [
+        {
+          "id": "scene.over",
+          "name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "entityId": "scene.over"
+        }
+      ],
+      "payload": {
+        "actions": [
+          {
+            "targetId": "scene.over",
+            "op": "scene",
+            "value": null,
+            "confidence": 1
+          }
+        ]
+      },
+      "expect": {
+        "runTargetIds": [],
+        "confirmTargetIds": ["scene.over"],
+        "suggestionIds": ["confirm:scene.over"]
+      }
     }
   ]
 }

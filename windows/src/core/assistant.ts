@@ -1198,6 +1198,14 @@ export const ModelActionPolicy = {
           categoryNeedsConfirmation(action.intent, device);
         return { action, confirms };
       }
+      const scene = scenes.find((item) => item.id === action.intent.targetId);
+      if (scene) {
+        const lowConfidence = action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD;
+        return {
+          action,
+          confirms: sanitizePromptText(scene.name, PROMPT_NAME_LIMIT) !== scene.name || lowConfidence,
+        };
+      }
       return {
         action,
         confirms: action.confidence !== null && action.confidence < this.AUTO_RUN_THRESHOLD,
@@ -2319,6 +2327,7 @@ export function buildIntentCatalog(
   const allLightIds: string[] = [];
   const allDeviceIds: string[] = [];
   const roomLights = new Map<string, string[]>();
+  const aliasById = new Map<string, string>();
   const deviceRows: Array<Record<string, unknown>> = [];
 
   for (const device of devices) {
@@ -2328,6 +2337,7 @@ export function buildIntentCatalog(
     const state = sanitizePromptText(catalogStateSummary(device), PROMPT_STATE_LIMIT);
     aliasDevices.push({ alias, device });
     aliasToIds.set(alias, [device.id]);
+    aliasById.set(device.id, alias);
     if (!aliasToIds.has(device.id)) aliasToIds.set(device.id, [device.id]);
     allDeviceIds.push(device.id);
     if (category === "light" && device.roomName) {
@@ -2351,12 +2361,18 @@ export function buildIntentCatalog(
   }
 
   let groupIndex = 0;
-  for (const ids of roomLights.values()) {
+  const groupRows: Array<{ id: string; room: string; members: string[] }> = [];
+  for (const [room, ids] of roomLights) {
     if (ids.length < 2) continue;
     groupIndex += 1;
     const alias = `room_lights:${groupIndex}`;
     aliasToIds.set(alias, ids);
     criteriaByAlias[alias] = `灯组 ${ids.length}盏`;
+    groupRows.push({
+      id: alias,
+      room: sanitizePromptText(room, PROMPT_NAME_LIMIT),
+      members: ids.map((id) => aliasById.get(id) ?? id),
+    });
   }
   if (allLightIds.length >= 2) {
     aliasToIds.set("all_lights", allLightIds);
@@ -2375,7 +2391,7 @@ export function buildIntentCatalog(
     return { id: alias, name: sanitizePromptText(scene.name, PROMPT_NAME_LIMIT) };
   });
 
-  const text = `${PROMPT_DATA_NOTICE}\n${JSON.stringify({ devices: deviceRows, scenes: sceneRows })}`;
+  const text = `${PROMPT_DATA_NOTICE}\n${JSON.stringify({ devices: deviceRows, groups: groupRows, scenes: sceneRows })}`;
   return { text, aliasDevices, criteriaByAlias, aliasToIds };
 }
 

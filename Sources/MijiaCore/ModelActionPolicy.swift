@@ -118,6 +118,11 @@ public enum ModelActionPolicy {
                     || categoryNeedsConfirmation(action.intent, device: device)
                 return (action, confirms)
             }
+            if let scene = scenes.first(where: { $0.id == action.intent.targetId }) {
+                let lowConfidence = action.confidence.map { $0 < autoRunThreshold } ?? false
+                let confirms = PromptText.sanitize(scene.name, limit: PromptText.nameLimit) != scene.name || lowConfidence
+                return (action, confirms)
+            }
             let confirms = action.confidence.map { $0 < autoRunThreshold } ?? false
             return (action, confirms)
         }

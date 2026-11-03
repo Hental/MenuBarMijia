@@ -1197,6 +1197,12 @@ struct GoldenCorpusTests {
         let catalog: PromptInjectionCatalogExpect?
     }
 
+    private struct PromptInjectionGroupExpect: Decodable, Equatable {
+        let id: String
+        let room: String
+        let members: [String]
+    }
+
     private struct PromptInjectionCatalogExpect: Decodable {
         let alias: String
         let name: String
@@ -1206,6 +1212,7 @@ struct GoldenCorpusTests {
         let instructionOmits: [String]?
         let absentScalars: [String]?
         let deviceCount: Int?
+        let groups: [PromptInjectionGroupExpect]?
     }
 
     private struct PromptInjectionDevice: Decodable {
@@ -1337,6 +1344,17 @@ struct GoldenCorpusTests {
         for scalar in expected.absentScalars ?? [] {
             #expect(!jsonName.contains(scalar), "\(id)")
         }
+        if let expectedGroups = expected.groups {
+            let groups = try #require(object["groups"] as? [[String: Any]], "\(id) groups")
+            let actual = groups.map { group in
+                PromptInjectionGroupExpect(
+                    id: group["id"] as? String ?? "",
+                    room: group["room"] as? String ?? "",
+                    members: group["members"] as? [String] ?? []
+                )
+            }
+            #expect(actual == expectedGroups, "\(id) groups")
+        }
         let resolver = ModelIntentResolver(
             config: AssistantConfig(baseURL: "https://openrouter.ai/api/v1", model: "~typesafe/jev-latest", apiKey: "test-token")
         )
@@ -1368,6 +1386,11 @@ struct GoldenCorpusTests {
                 let cleaned = PromptText.sanitize(device.roomName, limit: PromptText.nameLimit)
                 #expect(!alias.contains(cleaned), "\(id)")
             }
+        }
+        for group in expected.groups ?? [] {
+            let label = targetCriteria[group.id] as? String ?? ""
+            #expect(label == "灯组 \(group.members.count)盏", "\(id) \(group.id)")
+            #expect(!label.contains(group.room), "\(id) \(group.id)")
         }
     }
 }

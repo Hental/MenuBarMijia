@@ -1439,6 +1439,7 @@ describe("Prompt injection golden corpus", () => {
         instructionOmits?: string[];
         absentScalars?: string[];
         deviceCount?: number;
+        groups?: Array<{ id: string; room: string; members: string[] }>;
       };
     }>;
   };
@@ -1552,6 +1553,7 @@ describe("Prompt injection golden corpus", () => {
       assert.ok(catalogText.startsWith(notice), row.id);
       const parsed = JSON.parse(catalogText.slice(notice.length)) as {
         devices: Array<{ id: string; name: string; room: string; category: string; shared?: boolean }>;
+        groups?: Array<{ id: string; room: string; members: string[] }>;
       };
       assert.equal(parsed.devices.length, row.catalog.deviceCount ?? devices.length, row.id);
       const match = parsed.devices.find((item) => item.id === row.catalog?.alias);
@@ -1562,6 +1564,9 @@ describe("Prompt injection golden corpus", () => {
       assert.equal(match?.shared === true, row.catalog.shared, row.id);
       for (const scalar of row.catalog.absentScalars ?? []) {
         assert.equal(match?.name.includes(scalar), false, row.id);
+      }
+      if (row.catalog.groups) {
+        assert.deepEqual(parsed.groups, row.catalog.groups, row.id);
       }
       const forbidden = [
         ...devices.flatMap((device) => [device.name, device.roomName]),
@@ -1583,6 +1588,11 @@ describe("Prompt injection golden corpus", () => {
         }
       }
       const targetCriteria = heads["target"]?.criteria ?? {};
+      for (const group of row.catalog.groups ?? []) {
+        const label = targetCriteria[group.id] ?? "";
+        assert.equal(label, `灯组 ${group.members.length}盏`, row.id);
+        assert.equal(label.includes(group.room), false, row.id);
+      }
       for (const alias of Object.keys(targetCriteria)) {
         if (!alias.startsWith("room_lights:")) continue;
         for (const device of devices) {
