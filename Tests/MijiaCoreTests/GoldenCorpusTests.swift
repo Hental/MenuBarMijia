@@ -1184,4 +1184,244 @@ struct GoldenCorpusTests {
             #expect(actual == item.expectedEmotionId, "\(item.name)")
         }
     }
+
+    private struct ConfirmationCorpus: Decodable {
+        let rows: [ConfirmationRow]
+    }
+
+    private struct ConfirmationRow: Decodable {
+        let id: String
+        let device: ConfirmationDevice?
+        let operation: ConfirmationOperation
+        let confirm: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case id, role, device, operation, confirm
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            let role = try container.decode(String.self, forKey: .role)
+            guard role == "pin" || role == "new" else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .role,
+                    in: container,
+                    debugDescription: "\(id) role must be pin or new"
+                )
+            }
+            guard container.contains(.device) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .device,
+                    in: container,
+                    debugDescription: "\(id) needs a device or null"
+                )
+            }
+            device = try container.decodeIfPresent(ConfirmationDevice.self, forKey: .device)
+            operation = try container.decode(ConfirmationOperation.self, forKey: .operation)
+            confirm = try container.decode(Bool.self, forKey: .confirm)
+        }
+    }
+
+    private struct ConfirmationDevice: Decodable {
+        enum Kind {
+            case light
+            case climate(Double)
+            case fan
+            case plug
+            case vacuum
+            case camera
+            case sensor
+        }
+
+        let id: String
+        let name: String
+        let model: String
+        let kind: Kind
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, model, kind, targetTemperature
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            model = try container.decode(String.self, forKey: .model)
+            let kindName = try container.decode(String.self, forKey: .kind)
+            let hasSetpoint = container.contains(.targetTemperature)
+            switch kindName {
+            case "climate":
+                guard hasSetpoint else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .kind,
+                        in: container,
+                        debugDescription: "climate device \(id) must include targetTemperature"
+                    )
+                }
+                kind = .climate(try container.decode(Double.self, forKey: .targetTemperature))
+            case "light", "fan", "plug", "vacuum", "camera", "sensor":
+                guard !hasSetpoint else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .targetTemperature,
+                        in: container,
+                        debugDescription: "\(kindName) device \(id) must omit targetTemperature"
+                    )
+                }
+                switch kindName {
+                case "light": kind = .light
+                case "fan": kind = .fan
+                case "plug": kind = .plug
+                case "vacuum": kind = .vacuum
+                case "camera": kind = .camera
+                case "sensor": kind = .sensor
+                default:
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .kind,
+                        in: container,
+                        debugDescription: "Unknown confirmation device kind \(kindName)"
+                    )
+                }
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .kind,
+                    in: container,
+                    debugDescription: "Unknown confirmation device kind \(kindName)"
+                )
+            }
+        }
+
+        func toSmartDevice() -> SmartDevice {
+            let deviceKind: DeviceKind
+            switch kind {
+            case .light:
+                deviceKind = .light(LightSpec(
+                    entityId: "e",
+                    isOn: false,
+                    brightnessPercent: nil,
+                    colorTempKelvin: nil,
+                    minKelvin: 2700,
+                    maxKelvin: 6500,
+                    currentEffect: nil,
+                    availableEffects: []
+                ))
+            case .climate(let setpoint):
+                deviceKind = .climate(ClimateSpec(
+                    entityId: "e",
+                    isOn: false,
+                    hvacMode: "off",
+                    availableModes: ["off", "heat", "cool", "auto"],
+                    targetTemperature: setpoint,
+                    currentTemperature: nil,
+                    minTemp: 16,
+                    maxTemp: 80,
+                    step: 1,
+                    fanMode: nil,
+                    availableFanModes: [],
+                    swingMode: nil,
+                    availableSwingModes: []
+                ))
+            case .fan:
+                deviceKind = .fan(FanSpec(
+                    entityId: "e",
+                    isOn: false,
+                    percentage: nil,
+                    presetMode: nil,
+                    availablePresetModes: [],
+                    isOscillating: nil,
+                    pm25Density: nil,
+                    airQuality: nil,
+                    temperature: nil,
+                    humidity: nil,
+                    filterLifePercent: nil
+                ))
+            case .plug:
+                deviceKind = .plug(PlugSpec(switchEntityId: "e", isOn: false))
+            case .vacuum:
+                deviceKind = .vacuum(VacuumSpec(entityId: "e", status: "idle"))
+            case .camera:
+                deviceKind = .camera(CameraSpec(entityId: "e", isOn: false))
+            case .sensor:
+                deviceKind = .sensor(SensorSpec())
+            }
+            return SmartDevice(
+                id: id,
+                name: name,
+                roomId: "room",
+                roomName: "房间",
+                model: model,
+                isOnline: true,
+                kind: deviceKind
+            )
+        }
+    }
+
+    private enum ConfirmationOperation: Decodable {
+        case power(Bool)
+        case hvacMode(String)
+        case targetTemperature(Double)
+        case brightness(Int)
+        case fanSpeed(String)
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, isOn, mode, celsius, percent, speed
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let kind = try container.decode(String.self, forKey: .kind)
+            switch kind {
+            case "power":
+                self = .power(try container.decode(Bool.self, forKey: .isOn))
+            case "hvacMode":
+                self = .hvacMode(try container.decode(String.self, forKey: .mode))
+            case "targetTemperature":
+                self = .targetTemperature(try container.decode(Double.self, forKey: .celsius))
+            case "brightness":
+                self = .brightness(try container.decode(Int.self, forKey: .percent))
+            case "fanSpeed":
+                self = .fanSpeed(try container.decode(String.self, forKey: .speed))
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .kind,
+                    in: container,
+                    debugDescription: "Unknown confirmation operation \(kind)"
+                )
+            }
+        }
+
+        var intentOperation: IntentOperation {
+            switch self {
+            case .power(let isOn):
+                return .power(isOn)
+            case .hvacMode(let mode):
+                return .hvacMode(mode)
+            case .targetTemperature(let celsius):
+                return .targetTemperature(celsius)
+            case .brightness(let percent):
+                return .brightness(percent)
+            case .fanSpeed(let speed):
+                return .fanSpeed(speed)
+            }
+        }
+    }
+
+    @Test("Shared confirmation table matches ModelActionPolicy.needsConfirmation")
+    func confirmationGoldenCorpus() throws {
+        let fixtureURL = try Self.locateGoldenFixture("Tests/Fixtures/confirmation_golden.json")
+        let corpus = try JSONDecoder().decode(ConfirmationCorpus.self, from: Data(contentsOf: fixtureURL))
+        #expect(corpus.rows.count == 50)
+        #expect(Set(corpus.rows.map(\.id)).count == corpus.rows.count)
+        for row in corpus.rows {
+            if let device = row.device {
+                #expect(device.id == row.id, "\(row.id)")
+            }
+            let devices = row.device.map { [$0.toSmartDevice()] } ?? []
+            let intent = DeviceIntent(targetId: row.device?.id ?? "missing", operation: row.operation.intentOperation)
+            #expect(ModelActionPolicy.needsConfirmation(intent, devices: devices) == row.confirm, "\(row.id)")
+            if let device = row.device, case .sensor = device.kind {
+                #expect(IntentValidator.sanitize([intent], devices: devices, scenes: []).isEmpty, "\(row.id)")
+            }
+        }
+    }
 }
