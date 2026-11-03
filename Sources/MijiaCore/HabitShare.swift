@@ -215,9 +215,25 @@ private func nonOverlappingOccurrences(
         if haystack[index..<(index + needle.count)].elementsEqual(needle) {
             let end = index + needle.count
             let overlaps = accepted.contains { span in index < span.end && span.start < end }
-            if !overlaps { starts.append(index) }
+            if !overlaps && hasAsciiWordBoundary(haystack, needle: needle, start: index) {
+                starts.append(index)
+            }
         }
         index += 1
     }
     return starts
+}
+
+/// English names are matched as whole words so a room named "Den" does not match inside
+/// "garden". Chinese names keep substring matching because they have no word separators.
+private func hasAsciiWordBoundary(_ haystack: [UInt16], needle: [UInt16], start: Int) -> Bool {
+    guard let first = needle.first, let lastUnit = needle.last else { return false }
+    let end = start + needle.count
+    let leftOk = !isAsciiWordUnit(first) || start == 0 || !isAsciiWordUnit(haystack[start - 1])
+    let rightOk = !isAsciiWordUnit(lastUnit) || end == haystack.count || !isAsciiWordUnit(haystack[end])
+    return leftOk && rightOk
+}
+
+private func isAsciiWordUnit(_ unit: UInt16) -> Bool {
+    (48...57).contains(unit) || (65...90).contains(unit) || (97...122).contains(unit)
 }
