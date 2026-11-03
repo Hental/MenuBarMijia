@@ -99,10 +99,13 @@ import {
   type AppAppearance,
   type AppSkin,
   type LayoutPrefs,
+  type PanelAnchor,
   type PanelHeight,
+  type PanelPlacement,
   type TileSize,
   APPEARANCES,
   DEFAULT_GLOBAL_SHORTCUT,
+  PANEL_ANCHORS,
   PANEL_HEIGHTS,
   SKINS,
   TILE_SIZES,
@@ -120,6 +123,7 @@ import {
   nextSize,
   normalizeGlobalShortcut,
   pageSections,
+  parsePanelPlacement,
   recordShortcutFromKeyEvent,
   resolveAppearance,
   resolvedSize,
@@ -889,6 +893,8 @@ export class MenuMijiaWindowsApp {
   private grokBallPointerUntil = 0;
   private grokBallOnLeft = false;
   private panelGeometryUpdates: Promise<void> = Promise.resolve();
+  /** Panel anchor the backend persists (#204); the window position itself is owned by Rust. */
+  private panelAnchor: PanelAnchor = "auto";
   /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
   private proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
@@ -994,11 +1000,13 @@ export class MenuMijiaWindowsApp {
       this.syncGrokBallEmotion();
     });
     this.bindLayoutGestures();
+    this.bindPanelDrag();
     this.bindOpenAnimation();
     window.addEventListener("menumijia:open-update", () => {
       this.openSettingsSheet();
     });
     this.applyPanelHeight();
+    this.syncPanelPlacement();
     void this.applyGlobalHotkey();
     this.startTimerLoop();
     this.restoreUpdateState();
@@ -1197,6 +1205,7 @@ export class MenuMijiaWindowsApp {
   private openSettingsSheet(): void {
     this.activeSheet = "settings";
     invokeTauriVoid("set_pin_popover", { pin: true });
+    this.syncPanelPlacement();
     this.render();
     void this.checkForAppUpdate(false);
   }
@@ -5036,6 +5045,14 @@ export class MenuMijiaWindowsApp {
             </div>
           </div>
 
+          <div class="cc-field">
+            <label>${t("面板位置")}</label>
+            <div class="cc-segmented-pills">
+              ${PANEL_ANCHORS.map((a) => `<button class="cc-seg-pill ${this.panelAnchor === a.id ? "is-active" : ""}" data-panel-anchor="${a.id}" aria-pressed="${this.panelAnchor === a.id}">${this.escapeHtml(a.title)}</button>`).join("")}
+            </div>
+            <p class="cc-field-hint">${t("拖动面板顶部即可移动，松开后吸附到最近的角落。")}</p>
+          </div>
+
           <div class="cc-field cc-field-row">
             <label for="settings-climate-panel">${t("空调使用整行控制条")}</label>
             <input id="settings-climate-panel" type="checkbox" ${this.settings.climatePanel ? "checked" : ""} />
@@ -5560,6 +5577,15 @@ export class MenuMijiaWindowsApp {
         this.settings.panelHeight = btn.dataset.panelHeight as PanelHeight;
         this.saveSettings();
         this.applyPanelHeight();
+        this.render();
+      });
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-panel-anchor]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const known = PANEL_ANCHORS.find((item) => item.id === btn.dataset.panelAnchor);
+        if (!known) return;
+        this.panelAnchor = known.id;
+        invokeTauriVoid("set_panel_placement", { anchor: known.id });
         this.render();
       });
     });
@@ -6735,6 +6761,22 @@ export class MenuMijiaWindowsApp {
     });
   }
 
+  /**
+   * The panel has no title bar, so empty header space doubles as the move handle: the press goes to
+   * the OS move loop and the backend snaps the window to the nearest work-area corner (#204). Buttons
+   * and fields keep their own clicks.
+   */
+  private bindPanelDrag(): void {
+    this.root.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !window.__TAURI_INTERNALS__?.invoke) return;
+      const target = event.target;
+      if (!(target instanceof window.HTMLElement)) return;
+      if (!target.closest(".cc-header-top")) return;
+      if (target.closest("button, input, textarea, select, a")) return;
+      invokeTauriVoid("start_panel_drag");
+    });
+  }
+
   /** Drop-in animation each time the tray popover is shown. */
   private bindOpenAnimation(): void {
     const play = () => {
@@ -6766,6 +6808,23 @@ export class MenuMijiaWindowsApp {
       });
     }
     play();
+  }
+
+  /** Pulls the placement the backend persists so a drag shows up in the settings sheet (#204). */
+  private syncPanelPlacement(): void {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    const requested = this.panelAnchor;
+    void invoke<PanelPlacement>("panel_placement")
+      .then((value) => {
+        // A choice made while this request was in flight wins; the next open re-reads the backend.
+        if (this.panelAnchor !== requested) return;
+        const { anchor } = parsePanelPlacement(value);
+        if (anchor === this.panelAnchor) return;
+        this.panelAnchor = anchor;
+        if (this.activeSheet === "settings") this.render();
+      })
+      .catch(() => undefined);
   }
 
   private applyPanelHeight(): void {
