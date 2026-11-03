@@ -91,37 +91,151 @@ extension HomeStore {
 
         guard let cmd = command else { return nil }
         let isMomentaryButton = device.isMomentaryButton
-        if !isMomentaryButton {
-            devices[idx] = updated
-            if case .light = updated.kind, updated.isActiveOn {
-                recordManualLightUse(device.id)
-            }
-            lockOptimistic(device.id, duration: .seconds(2.2))
-        }
-
-        return Task {
-            do {
-                try await executeDeviceCommand(cmd)
-                if isMomentaryButton {
+        if isMomentaryButton {
+            return Task {
+                do {
+                    try await self.executeDeviceCommand(cmd)
                     self.celebrateGrokBall()
                     self.showToast(L10n.tr("已触发 \(device.name)", "Triggered \(device.name)"), isError: false)
-                } else {
-                    // Only a confirmed command counts as a habit; a failed toggle rolls back (#113).
-                    self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
-                }
-                return true
-            } catch {
-                if !isMomentaryButton {
-                    if let revertIdx = self.devices.firstIndex(where: { $0.id == device.id }) {
-                        self.devices[revertIdx] = previous
-                    }
-                    self.optimisticLockUntil.removeValue(forKey: device.id)
-                    self.showToast(L10n.tr("\(device.name) 响应失败，已回滚", "\(device.name) failed to respond; rolled back"), isError: true)
-                } else {
+                    return true
+                } catch {
                     self.showToast(L10n.tr("\(device.name) 触发失败", "Failed to trigger \(device.name)"), isError: true)
+                    return false
                 }
+            }
+        }
+
+        guard let ticket = self.claimReadBack(device.id) else { return nil }
+
+        return Task {
+            defer { self.finishReadBack(device.id, ticket: ticket) }
+            do {
+                try await self.executeDeviceCommand(cmd)
+                switch await self.confirmToggleReadBack(deviceId: device.id, requested: updated, ticket: ticket) {
+                case .matched:
+                    let shown = self.devices.first(where: { $0.id == device.id }) ?? updated
+                    self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
+                    if case .light = shown.kind, shown.isActiveOn {
+                        self.recordManualLightUse(device.id)
+                    }
+                    return true
+                case .unmatched:
+                    self.showToast(
+                        L10n.tr("\(device.name) 未能读回状态", "\(device.name) state was not read back"),
+                        isError: true
+                    )
+                    return false
+                case .superseded:
+                    return true
+                }
+            } catch {
+                self.showToast(L10n.tr("\(device.name) 响应失败", "\(device.name) failed to respond"), isError: true)
                 return false
             }
+        }
+    }
+
+    private enum ReadBackConfirm {
+        case matched
+        case unmatched
+        case superseded
+    }
+
+    private func claimReadBack(_ deviceId: String) -> UInt64? {
+        guard readBackOwner[deviceId] == nil else { return nil }
+        nextReadBackTicket &+= 1
+        let ticket = nextReadBackTicket
+        readBackOwner[deviceId] = ticket
+        latestReadBackTicket[deviceId] = ticket
+        readBackInFlightTicket[deviceId] = ticket
+        waitingDeviceIds.insert(deviceId)
+        return ticket
+    }
+
+    /// Releases the tap and the waiting label before the echo retry, while the read-back stays
+    /// in flight so its snapshots still bypass an older optimistic lock.
+    private func releaseReadBackOwner(_ deviceId: String, ticket: UInt64) {
+        guard readBackOwner[deviceId] == ticket else { return }
+        readBackOwner[deviceId] = nil
+        waitingDeviceIds.remove(deviceId)
+    }
+
+    private func finishReadBack(_ deviceId: String, ticket: UInt64) {
+        if readBackOwner[deviceId] == ticket {
+            readBackOwner[deviceId] = nil
+            waitingDeviceIds.remove(deviceId)
+        }
+        // The echo release may already have cleared the owner; only the latest task clears
+        // the lock exemption, so a newer toggle keeps it alive.
+        if readBackInFlightTicket[deviceId] == ticket {
+            readBackInFlightTicket[deviceId] = nil
+        }
+    }
+
+    /// Applies a provider snapshot when one was published. Providers with no property read
+    /// keep the accepted power and leave every other field on the current row. A published
+    /// read that still shows the old power is polled once more, because a device often
+    /// reports the previous value immediately after a write. That second wait releases the
+    /// tap so a newer toggle, such as the next keyboard press, is not discarded.
+    private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64) async -> ReadBackConfirm {
+        if case .tv(let spec) = requested.kind, LGWebOSProtocol.isLGEntity(spec.mediaEntityId) {
+            // The LAN client confirms TV writes; the cloud has no row for this device, and a
+            // stale provider snapshot must not revert the accepted power.
+            applyConfirmedPower(from: requested, deviceId: deviceId)
+            lockOptimistic(deviceId, duration: .seconds(2.0))
+            return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
+        }
+        let before = snapshotGeneration
+        let read = await provider.readBack(deviceId: deviceId)
+        await settleSnapshot(after: before)
+        switch read {
+        case .failed:
+            return .unmatched
+        case .unavailable:
+            applyConfirmedPower(from: requested, deviceId: deviceId)
+            // HA rebuilds the whole home on every state_changed event, so an unrelated sensor
+            // update could restore the old power before the device's own update arrives.
+            lockOptimistic(deviceId, duration: .seconds(2.0))
+            return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
+        case .published:
+            guard snapshotGeneration != before else { return .unmatched }
+            if powerMatches(deviceId, requested: requested) { return .matched }
+            releaseReadBackOwner(deviceId, ticket: ticket)
+            let again = snapshotGeneration
+            if holdReadBackEcho {
+                isHoldingReadBackEcho = true
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    self.readBackEchoHold = cont
+                }
+            } else {
+                try? await Task.sleep(for: readBackEchoDelay)
+            }
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
+            let second = await provider.readBack(deviceId: deviceId)
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
+            if case .failed = second { return .unmatched }
+            await settleSnapshot(after: again)
+            // A newer toggle may have started and even finished during the second read.
+            if latestReadBackTicket[deviceId] != ticket { return .superseded }
+            return powerMatches(deviceId, requested: requested) ? .matched : .unmatched
+        }
+    }
+
+    private func powerMatches(_ deviceId: String, requested: SmartDevice) -> Bool {
+        devices.first(where: { $0.id == deviceId })?.isActiveOn == requested.isActiveOn
+    }
+
+    private func applyConfirmedPower(from requested: SmartDevice, deviceId: String) {
+        guard let idx = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        devices[idx] = devices[idx].applyingConfirmedPower(from: requested)
+    }
+
+    private func settleSnapshot(after generation: UInt64) async {
+        guard snapshotGeneration == generation else { return }
+        for _ in 0..<20 where snapshotGeneration == generation {
+            await Task.yield()
+            if snapshotGeneration != generation { return }
+            try? await Task.sleep(for: .milliseconds(5))
         }
     }
 

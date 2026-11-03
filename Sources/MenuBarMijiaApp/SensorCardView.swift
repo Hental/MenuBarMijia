@@ -21,6 +21,21 @@ struct SensorCardView: View {
     @State private var selectedMetric: SensorMetricKind = .temperature
     @State private var hoveredSlotIndex: Int? = nil
 
+    private var staleSensor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(device.name)
+                .font(.system(size: DesignTokens.TypeSize.caption, weight: .semibold))
+                .lineLimit(1)
+            Text(L10n.tr("可能过期", "Possibly stale"))
+                .font(.system(size: DesignTokens.TypeSize.body, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 72 : 120, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(L10n.tr("\(device.name)，可能过期", "\(device.name), possibly stale")))
+    }
+
     private var isExpanded: Bool {
         if forceExpanded { return true }
         return store?.expandedDeviceId == device.id
@@ -32,7 +47,9 @@ struct SensorCardView: View {
 
     var body: some View {
         Group {
-            if isExpanded {
+            if store?.deviceValuesAreStale == true {
+                staleSensor
+            } else if isExpanded {
                 expandedContainer
             } else if isCompact {
                 compact

@@ -840,7 +840,8 @@ body {
   grid-column: 1 / -1;
 }
 
-.cc-tile.is-offline {
+.cc-tile.is-offline,
+.cc-tile.is-stale {
   opacity: 0.48;
 }
 

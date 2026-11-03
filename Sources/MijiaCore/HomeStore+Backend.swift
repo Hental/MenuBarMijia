@@ -157,6 +157,7 @@ extension HomeStore {
             if connectionStatus != status { connectionStatus = status }
 
         case .snapshotUpdated(let snapshot):
+            snapshotGeneration &+= 1
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
             var nextRooms = snapshot.rooms
             if let lgDev = latestLGDevice, lgConfig.isEnabled,
@@ -182,8 +183,12 @@ extension HomeStore {
 
             for incoming in snapshot.devices {
                 rawDeviceNames[incoming.id] = incoming.name
+                // A primary toggle is waiting for this read-back, so the lock from an older
+                // command must not hide the device's own property snapshot.
                 if let lockTime = optimisticLockUntil[incoming.id], now < lockTime,
-                   let local = existingById[incoming.id] {
+                   let local = existingById[incoming.id],
+                   !waitingDeviceIds.contains(incoming.id),
+                   readBackInFlightTicket[incoming.id] == nil {
                     merged.append(local)
                 } else {
                     merged.append(incoming)

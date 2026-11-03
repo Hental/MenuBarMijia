@@ -45,7 +45,9 @@ public struct UndoBanner: Equatable, Sendable {
 public final class HomeStore {
     public static let shared = HomeStore()
 
-    public internal(set) var connectionStatus: ConnectionStatus = .connecting
+    public internal(set) var connectionStatus: ConnectionStatus = .connecting {
+        didSet { updateValueFreshness() }
+    }
     public internal(set) var rooms: [RoomArea] = []
     /// Mi Home 家庭 list from the cloud backend; empty elsewhere.
     public internal(set) var homes: [HomeOption] = []
@@ -54,6 +56,32 @@ public final class HomeStore {
     public internal(set) var environmentReadings: [EnvironmentReading] = []
     public internal(set) var scenes: [HomeScene] = []
     public internal(set) var hasReceivedInitialSnapshot = false
+    public internal(set) var waitingDeviceIds: Set<String> = []
+    /// True after the cloud drops once a snapshot has been shown. Cleared only by a later connect.
+    /// A retry that is still `.connecting` leaves this set, so the last reading stays unmarked as current.
+    public internal(set) var deviceValuesAreStale = false
+    /// Bumped on every snapshot so a toggle can tell a read-back from the row it already had.
+    var snapshotGeneration: UInt64 = 0
+    /// How long to wait before a second property poll when the first read still shows the old power.
+    var readBackEchoDelay: Duration = .milliseconds(800)
+    /// Test latch: the echo retry waits until `releaseReadBackEcho` instead of sleeping.
+    var holdReadBackEcho = false
+    var isHoldingReadBackEcho = false
+    var readBackEchoHold: CheckedContinuation<Void, Never>?
+    var readBackOwner: [String: UInt64] = [:]
+    /// Ticket of the read-back task still running, including the echo retry after the UI
+    /// waiting state is released. Snapshots for these ids bypass an older optimistic lock.
+    var readBackInFlightTicket: [String: UInt64] = [:]
+    /// Latest ticket per device. Unlike `readBackOwner`, this survives a completed newer toggle,
+    /// so an older echo retry can still tell that it has been superseded (#201 review).
+    var latestReadBackTicket: [String: UInt64] = [:]
+    var nextReadBackTicket: UInt64 = 0
+
+    func releaseReadBackEcho() {
+        isHoldingReadBackEcho = false
+        readBackEchoHold?.resume()
+        readBackEchoHold = nil
+    }
 
     public internal(set) var listCut: DeviceListCut = .all
     public var expandedDeviceId: String? = nil
@@ -203,6 +231,7 @@ public final class HomeStore {
         didSet {
             userDefaults.set(homeBackend.rawValue, forKey: "home_backend")
             syncSensorHistoryScope()
+            if homeBackend == .demo { deviceValuesAreStale = false }
         }
     }
 
@@ -457,6 +486,17 @@ public final class HomeStore {
     }
 
     // MARK: - Command Execution & Optimistic Locks
+
+    func updateValueFreshness() {
+        switch connectionStatus {
+        case .disconnected where hasReceivedInitialSnapshot && homeBackend != .demo:
+            deviceValuesAreStale = true
+        case .connected:
+            deviceValuesAreStale = false
+        case .connecting, .disconnected:
+            break
+        }
+    }
 
     func executeDeviceCommand(_ command: DeviceCommand) async throws {
         if LGWebOSProtocol.isLGEntity(command.targetEntityId), let lgClient = lgWebOSClient {

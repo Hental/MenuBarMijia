@@ -873,8 +873,13 @@ actor StubMiCloudAPI: MiCloudAPI {
         return (devices + didOnlyDevices).filter { dids.contains($0.did) }
     }
 
+    private var getPropsFailure: MiCloudError?
+
+    func setGetPropsFailure(_ failure: MiCloudError?) { getPropsFailure = failure }
+
     func getProps(_ keys: [MiotPropKey]) async throws -> [MiotPropKey: JSONValue] {
         getPropsCalls.append(keys)
+        if let getPropsFailure { throw getPropsFailure }
         return values.filter { keys.contains($0.key) }
     }
 

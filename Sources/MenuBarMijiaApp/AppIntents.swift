@@ -179,7 +179,7 @@ struct RoomEntityQuery: EntityStringQuery {
 struct ToggleDeviceIntent: AppIntent {
     static let title: LocalizedStringResource = "切换设备"
     static let description: IntentDescription? = IntentDescription(
-        "打开或关闭一台可控设备，与菜单栏面板共用乐观更新、失败回滚和撤销逻辑。"
+        "打开或关闭一台可控设备，与菜单栏面板共用开关、失败提示和撤销逻辑。"
     )
 
     @Parameter(title: "设备")
@@ -203,15 +203,15 @@ struct ToggleDeviceIntent: AppIntent {
         }
         let isMomentary = current.isMomentaryButton
         let task = store.togglePrimary(current)
-        let isOn = store.devices.first(where: { $0.id == device.id })?.isActiveOn ?? false
         guard await task?.value == true else {
             return isMomentary
                 ? L10n.format("%@ 触发失败", "Failed to trigger %@", current.name)
-                : L10n.format("%@ 响应失败，已回滚", "%@ failed to respond; rolled back", current.name)
+                : L10n.format("%@ 响应失败", "%@ failed to respond", current.name)
         }
         if isMomentary {
             return L10n.format("已触发 %@", "Triggered %@", current.name)
         }
+        let isOn = store.devices.first(where: { $0.id == device.id })?.isActiveOn ?? false
         return isOn
             ? L10n.format("已打开 %@", "Turned on %@", current.name)
             : L10n.format("已关闭 %@", "Turned off %@", current.name)

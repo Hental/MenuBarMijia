@@ -108,9 +108,12 @@ struct MijiaCoreTests {
         #expect(store.devices.count == 1)
         #expect(store.activeDeviceCount == 0)
 
-        // 1. Optimistic toggle ON
         let current = try #require(store.devices.first)
-        store.togglePrimary(current)
+        let toggle = store.togglePrimary(current)
+        #expect(store.waitingDeviceIds.contains("dev_1"))
+        #expect(store.activeDeviceCount == 0)
+        #expect(await toggle?.value == true)
+        #expect(store.waitingDeviceIds.isEmpty)
         #expect(store.activeDeviceCount == 1)
 
         for _ in 0..<200 {
@@ -274,14 +277,23 @@ struct MijiaCoreTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        // 1. Quick index 1 toggles 1st device (dev_1) off
         store.selectQuickIndex(1)
+        for _ in 0..<50 where store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn != false {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // A tap during the older read-back sends nothing; wait for the owner to clear first.
+        for _ in 0..<50 where !store.waitingDeviceIds.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn == false)
 
         // 2. Focus movement & Space/Enter toggle
         store.moveFocus(delta: 1) // focuses first device (dev_1)
         #expect(store.focusedDeviceId == "dev_1")
         store.toggleFocusedDevice() // turns dev_1 back on
+        for _ in 0..<50 where store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(store.devices.first(where: { $0.id == "dev_1" })?.isActiveOn == true)
 
         // 3. Right arrow on unexpanded focused device expands its drawer; second right arrow steps brightness +10%

@@ -51,11 +51,14 @@ enum MenuBarStatusSummary {
     static func text(for store: HomeStore) -> String {
         let _ = store.effectiveLanguage
         var parts: [String] = ["MenuBarMijia"]
-        parts.append(L10n.tr("\(store.activeDeviceCount) 台开启", "\(store.activeDeviceCount) on"))
-
-        if let reading = store.preferredEnvironmentReading,
-           let temperature = reading.temperature {
-            parts.append("\(L10n.displayRoomName(reading.label)) \(L10n.temperature(temperature, fractionDigits: 1))")
+        if store.deviceValuesAreStale {
+            parts.append(L10n.tr("可能过期", "Possibly stale"))
+        } else {
+            parts.append(L10n.tr("\(store.activeDeviceCount) 台开启", "\(store.activeDeviceCount) on"))
+            if let reading = store.preferredEnvironmentReading,
+               let temperature = reading.temperature {
+                parts.append("\(L10n.displayRoomName(reading.label)) \(L10n.temperature(temperature, fractionDigits: 1))")
+            }
         }
 
         switch store.connectionStatus {

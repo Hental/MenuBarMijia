@@ -17,7 +17,11 @@ struct ClimatePanelModule: View {
     let showRoomBadge: Bool
     var forceExpanded = false
 
-    private var isRunning: Bool { device.isOnline && spec.isOn && spec.hvacMode != "off" }
+    private var isWaiting: Bool { store.waitingDeviceIds.contains(device.id) }
+    private var valuesAreStale: Bool { store.deviceValuesAreStale }
+    private var isRunning: Bool {
+        !valuesAreStale && device.isOnline && spec.isOn && spec.hvacMode != "off"
+    }
 
     private var accent: Color { DevicePalette.accentColor(for: device) }
 
@@ -154,6 +158,8 @@ struct ClimatePanelModule: View {
     }
 
     private var statusLine: String {
+        if isWaiting { return L10n.tr("等待中", "Waiting") }
+        if valuesAreStale { return L10n.tr("可能过期", "Possibly stale") }
         guard isRunning else { return L10n.tr("已关闭", "Off") }
         var parts = [SmartDevice.localizeHVACMode(spec.hvacMode)]
         if let cur = spec.currentTemperature {

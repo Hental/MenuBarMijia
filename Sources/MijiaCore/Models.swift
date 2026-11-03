@@ -610,6 +610,39 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         }
     }
 
+    /// Power from a confirmed command, keeping brightness and other fields already on `self`.
+    func applyingConfirmedPower(from requested: SmartDevice) -> SmartDevice {
+        var next = self
+        switch (next.kind, requested.kind) {
+        case (.light(var spec), .light(let want)):
+            spec.isOn = want.isOn
+            next.kind = .light(spec)
+        case (.climate(var spec), .climate(let want)):
+            spec.isOn = want.isOn
+            spec.hvacMode = want.hvacMode
+            next.kind = .climate(spec)
+        case (.fan(var spec), .fan(let want)):
+            spec.isOn = want.isOn
+            next.kind = .fan(spec)
+        case (.plug(var spec), .plug(let want)):
+            spec.isOn = want.isOn
+            next.kind = .plug(spec)
+        case (.camera(var spec), .camera(let want)):
+            spec.isOn = want.isOn
+            next.kind = .camera(spec)
+        case (.vacuum(var spec), .vacuum(let want)):
+            spec.status = want.status
+            next.kind = .vacuum(spec)
+        case (.tv(var spec), .tv(let want)):
+            spec.state = want.state
+            spec.isScreenOff = want.isScreenOff
+            next.kind = .tv(spec)
+        default:
+            return requested
+        }
+        return next
+    }
+
     /// Whether this device has an expandable secondary control drawer
     public var hasDetailDrawer: Bool {
         switch kind {
