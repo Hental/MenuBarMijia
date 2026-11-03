@@ -199,6 +199,103 @@ struct SensorSafetyAlertTests {
         #expect(store.evaluateSafetyAlerts(now: start.addingTimeInterval(180)).isEmpty)
     }
 
+    @Test("A contact, leak, or motion sensor with temperature or humidity still yields an observation")
+    func safetyObservationSurvivesTemperatureAndHumidity() throws {
+        let leak = synthesizeMiot(
+            did: "wet",
+            name: "水浸传感器",
+            service: "submersion-sensor",
+            properties: [
+                boolProperty("submersion-state", iid: 1),
+                floatProperty("temperature", iid: 2),
+                floatProperty("relative-humidity", iid: 3)
+            ],
+            values: [1: .bool(true), 2: .number(26), 3: .number(61)]
+        )
+        let leakSpec = try #require(sensorSpec(leak))
+        #expect(leakSpec.temperature == 26)
+        #expect(leakSpec.humidity == 61)
+        #expect(leakSpec.statusText == nil)
+        #expect(leakSpec.observations == [
+            SensorObservation(sourceId: "wet#miot:2", kind: .leak, alarming: true)
+        ])
+
+        let contact = synthesizeWithEnvironment(
+            did: "mag",
+            name: "门磁",
+            service: "magnet-sensor",
+            alarm: boolProperty("contact-state", iid: 1),
+            alarmValue: .bool(false)
+        )
+        let contactSpec = try #require(sensorSpec(contact))
+        #expect(contactSpec.temperature == 21)
+        #expect(contactSpec.humidity == 40)
+        #expect(contactSpec.statusText == nil)
+        #expect(contactSpec.observations == [
+            SensorObservation(sourceId: "mag#miot:2", kind: .contact, alarming: true)
+        ])
+        let contactKeys = MiotSynthesizer.requiredProps(
+            for: MiDeviceRecord(did: "mag", name: "门磁", model: "test.magnet-sensor", isOnline: true),
+            spec: contactSpecForProps()
+        )
+        #expect(contactKeys.contains(MiotPropKey(did: "mag", siid: 2, piid: 1)))
+        #expect(contactKeys.contains(MiotPropKey(did: "mag", siid: 4, piid: 1)))
+
+        let motion = synthesizeWithEnvironment(
+            did: "move",
+            name: "人体传感器",
+            service: "motion-sensor",
+            alarm: boolProperty("motion-state", iid: 1),
+            alarmValue: .bool(true)
+        )
+        let motionSpec = try #require(sensorSpec(motion))
+        #expect(motionSpec.humidity == 40)
+        #expect(motionSpec.observations == [
+            SensorObservation(sourceId: "move#miot:2", kind: .motion, alarming: true)
+        ])
+    }
+
+    @Test("A cached refresh snapshot leaves the away gap open until refreshed sensor data arrives")
+    func cachedRefreshSnapshotDoesNotCloseTheAwayGap() async throws {
+        let name = "test.sensor.alerts.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [door(false)]))
+        let store = HomeStore(provider: mock, defaultsSuiteName: name)
+        for _ in 0..<100 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        store.setSensorAlertEnabled(.contact, true)
+        store.sensorAlertsOnlyWhenAway = true
+        #expect(store.evaluateSafetyAlerts(now: start).isEmpty)
+        #expect(storedBit(store, "door#miot:2") == false)
+
+        store.setSystemActive(false)
+        store.setSystemActive(true)
+        #expect(store.awayGap.includesAway)
+
+        var received: [SafetyAlert] = []
+        store.onSafetyAlert = { received.append($0) }
+
+        var cached = SynthesizedHome(devices: [
+            sensor(id: "door", name: "门磁缓存", kind: .contact, alarming: false, sourceId: "door#miot:2")
+        ])
+        cached.closesAwayGap = false
+        await mock.updateSnapshot(cached)
+        for _ in 0..<100 where store.devices.first?.name != "门磁缓存" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.devices.first?.name == "门磁缓存")
+        #expect(store.awayGap.includesAway)
+        #expect(received.isEmpty)
+
+        await mock.updateSnapshot(SynthesizedHome(devices: [door(true)]))
+        for _ in 0..<100 where received.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(received.count == 1)
+        #expect(store.awayGap.includesAway == false)
+    }
+
     @Test("Mi Cloud magnet true is closed, false is alarming, nil adds nothing, and smoke is not invented")
     func miCloudContactLeakAndMotionObservations() throws {
         let closed = synthesizeMiot(
@@ -579,6 +676,54 @@ struct SensorSafetyAlertTests {
             values: keyed
         )
         return home.devices.first { $0.id == did }
+    }
+
+    /// Primary alarm service plus an environment service that carries temperature and humidity.
+    private func synthesizeWithEnvironment(
+        did: String,
+        name: String,
+        service: String,
+        alarm: MiotProperty,
+        alarmValue: JSONValue
+    ) -> SmartDevice? {
+        let model = "test.\(service)"
+        let spec = environmentSpec(service: service, alarm: alarm)
+        let home = MiotSynthesizer.synthesize(
+            devices: [MiDeviceRecord(did: did, name: name, model: model, isOnline: true)],
+            rooms: [MiRoom(id: "r", name: "客厅", dids: [did])],
+            specs: [model: spec],
+            values: [
+                MiotPropKey(did: did, siid: 2, piid: alarm.iid): alarmValue,
+                MiotPropKey(did: did, siid: 4, piid: 1): .number(21),
+                MiotPropKey(did: did, siid: 4, piid: 2): .number(40)
+            ]
+        )
+        return home.devices.first { $0.id == did }
+    }
+
+    private func contactSpecForProps() -> MiotDeviceSpec {
+        environmentSpec(service: "magnet-sensor", alarm: boolProperty("contact-state", iid: 1))
+    }
+
+    private func environmentSpec(service: String, alarm: MiotProperty) -> MiotDeviceSpec {
+        MiotDeviceSpec(
+            type: "urn:miot-spec-v2:device:\(service):0000A000:test:1",
+            services: [
+                MiotService(
+                    iid: 2,
+                    type: "urn:miot-spec-v2:service:\(service):00007800:test:1",
+                    properties: [alarm]
+                ),
+                MiotService(
+                    iid: 4,
+                    type: "urn:miot-spec-v2:service:environment:00007802:test:1",
+                    properties: [
+                        floatProperty("temperature", iid: 1),
+                        floatProperty("relative-humidity", iid: 2)
+                    ]
+                )
+            ]
+        )
     }
 
     private func binaryEntity(

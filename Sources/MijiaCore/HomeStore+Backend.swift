@@ -212,7 +212,9 @@ extension HomeStore {
                     handler(alert)
                 }
             }
-            finishPresenceSnapshot()
+            if snapshot.closesAwayGap {
+                finishPresenceSnapshot()
+            }
             notifyMissedScheduledCommandsIfNeeded()
         }
     }
