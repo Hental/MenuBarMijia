@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "mi-home-qr",
+      "en": "Mi Home Direct QR Connect",
+      "zh": "米家云端扫码直连",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "home-assistant",
+      "en": "Home Assistant Integration",
+      "zh": "Home Assistant 接入",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "keyboard-search",
+      "en": "Keyboard Search & Control",
+      "zh": "键盘搜索与设备控制",
+      "macos": "supported",
+      "windows": "unsupported"
+    },
+    {
+      "id": "global-hotkey",
+      "en": "Global Activation Hotkey",
+      "zh": "全局快捷键呼出",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "voice",
+      "en": "Voice Interaction",
+      "zh": "语音控制方式",
+      "macos": "supported",
+      "windows": "partial"
+    },
+    {
+      "id": "local-command",
+      "en": "Local Command Parsing",
+      "zh": "本地口令解析",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "optional-ai",
+      "en": "Optional AI Assistant",
+      "zh": "自选 AI 决策助手",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "proactive-suggestions",
+      "en": "Proactive \"For You\" Suggestions",
+      "zh": "「猜你想控」主动推荐",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "grokball",
+      "en": "GrokBall & Side Suggestions",
+      "zh": "GrokBall 情绪球与侧边推荐",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "quick-actions",
+      "en": "Quick Actions & Scenes Strip",
+      "zh": "顶部快捷动作与场景栏",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "all-off-undo",
+      "en": "All-Off & Instant Undo",
+      "zh": "批量全关与即刻撤销",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "mac-event-automation",
+      "en": "Mac Event Automation",
+      "zh": "Mac 状态自动化",
+      "macos": "supported",
+      "windows": "unsupported"
+    },
+    {
+      "id": "app-intents",
+      "en": "Apple Shortcuts (App Intents)",
+      "zh": "系统快捷指令集成",
+      "macos": "supported",
+      "windows": "unsupported"
+    },
+    {
+      "id": "url-scheme",
+      "en": "URL Scheme Control",
+      "zh": "URL Scheme 控制",
+      "macos": "supported",
+      "windows": "unsupported"
+    },
+    {
+      "id": "sensor-history",
+      "en": "Sensor Trend Line Charts",
+      "zh": "传感器历史折线图",
+      "macos": "supported",
+      "windows": "partial"
+    },
+    {
+      "id": "plug-energy",
+      "en": "Smart Plug Energy Logs",
+      "zh": "插座电量统计",
+      "macos": "supported",
+      "windows": "unsupported"
+    },
+    {
+      "id": "air-purifiers",
+      "en": "Mi Air Purifiers, Air Fresheners & Humidifiers",
+      "zh": "米家空净 / 新风机 / 加湿器",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "fridges-kitchen",
+      "en": "Fridges & Kitchen Appliances",
+      "zh": "冰箱与厨房家电",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "dehumidifiers-blankets-diffusers-speakers",
+      "en": "Dehumidifiers, Blankets, Diffusers & Speakers",
+      "zh": "除湿机 / 水暖毯 / 香氛机 / 音箱",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "locks-sensors",
+      "en": "Locks & Presence Sensors",
+      "zh": "门锁与人体、环境传感器",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "camera-live",
+      "en": "Camera Live View",
+      "zh": "摄像机实时画面",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "layout-resize",
+      "en": "Layout Editing Resize",
+      "zh": "布局编辑调大小",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "visual-look",
+      "en": "Visual Look",
+      "zh": "界面外观",
+      "macos": "supported",
+      "windows": "supported"
+    },
+    {
+      "id": "code-signing",
+      "en": "Code Signing & Integrity",
+      "zh": "安装签名与更新机制",
+      "macos": "partial",
+      "windows": "partial"
+    }
+  ]
+}
