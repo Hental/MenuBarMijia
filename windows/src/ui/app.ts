@@ -772,6 +772,19 @@ function inputKeepsDraft(input: HTMLInputElement | HTMLTextAreaElement): boolean
   );
 }
 
+export function waitForCameraFrameGap(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, ms);
+    signal.addEventListener("abort", finish);
+  });
+}
+
 export class MenuMijiaWindowsApp {
   private readonly loadedSettings: LoadedSettings = loadSettings();
   private settings: PersistedSettings = this.loadedSettings.settings;
@@ -848,6 +861,8 @@ export class MenuMijiaWindowsApp {
   /** The live picture arrives as MJPEG frames in a persistent `<img>`, which never restarts on re-render. */
   private liveCameraMode: "mjpeg" | null = null;
   private liveCameraImgEl: HTMLImageElement | null = null;
+  private liveCameraAbort: AbortController | null = null;
+  private ownedStreamOrigin: string | null = null;
   private liveCameraToken = 0;
   private readonly pendingCameraReleases = new Map<string, Promise<void>>();
   private updateState: UpdateState = { lastCheckedAtMs: null, release: null };
@@ -4026,12 +4041,13 @@ export class MenuMijiaWindowsApp {
       : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraLoading = false;
     invokeTauriVoid("set_pin_popover", { pin: true });
-    if (dev.kind.isOn) {
-      if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
-        void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
-      } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
-        void this.resolveCloudCameraStream(dev);
-      }
+    if (dev.kind.isOn && this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      this.liveCameraLoading = true;
+      void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
+    } else if (dev.kind.isOn && this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+      void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
+    } else if (dev.kind.isOn && !this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
+      void this.resolveCloudCameraStream(dev);
     }
     this.render();
   }
@@ -4135,6 +4151,8 @@ export class MenuMijiaWindowsApp {
   /** Drops the MJPEG image and any pending negotiation. */
   private stopLiveTransport(): void {
     this.liveCameraToken += 1;
+    this.liveCameraAbort?.abort();
+    this.liveCameraAbort = null;
     this.liveCameraImgEl?.remove();
     this.liveCameraImgEl = null;
     this.liveCameraMode = null;
@@ -4152,6 +4170,7 @@ export class MenuMijiaWindowsApp {
   }
 
   private startMjpegTransport(name: string): void {
+    this.liveCameraAbort?.abort();
     const img = document.createElement("img");
     img.id = "cc-camera-live-img";
     img.alt = "";
@@ -4162,9 +4181,53 @@ export class MenuMijiaWindowsApp {
       retried = true;
       window.setTimeout(() => this.reconnectCameraLiveView(), 1200);
     });
-    img.src = `http://127.0.0.1:1984/api/stream.mjpeg?src=${encodeURIComponent(name)}`;
+    const abort = new AbortController();
+    this.liveCameraAbort = abort;
     this.liveCameraImgEl = img;
     this.liveCameraMode = "mjpeg";
+    void this.pumpAuthenticatedMjpeg(name, img, this.liveCameraToken, abort.signal);
+  }
+
+  private ownedGo2rtcOrigin(origin: string): boolean {
+    const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(origin);
+    if (!match) return false;
+    const port = Number(match[1]);
+    return port > 0 && port !== 1984 && port !== 8554 && port !== 8555;
+  }
+
+  private async refreshOwnedGo2rtcOrigin(): Promise<void> {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    try {
+      const endpoint = await invoke<{ origin: string }>("go2rtc_endpoint");
+      this.ownedStreamOrigin = this.ownedGo2rtcOrigin(endpoint.origin) ? endpoint.origin : null;
+    } catch {
+      this.ownedStreamOrigin = null;
+    }
+  }
+
+  private async pumpAuthenticatedMjpeg(
+    name: string,
+    img: HTMLImageElement,
+    token: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return;
+    while (token === this.liveCameraToken && !signal.aborted) {
+      try {
+        const jpeg = await invoke<string>("go2rtc_jpeg_frame", { src: name });
+        if (token !== this.liveCameraToken || signal.aborted) return;
+        if (!jpeg) throw new Error("empty frame");
+        img.src = `data:image/jpeg;base64,${jpeg}`;
+      } catch {
+        if (token === this.liveCameraToken && !signal.aborted) {
+          img.dispatchEvent(new Event("error"));
+        }
+        return;
+      }
+      await waitForCameraFrameGap(signal, 200);
+    }
   }
 
   /**
@@ -4173,18 +4236,61 @@ export class MenuMijiaWindowsApp {
    * remote `.m3u8` playlists are transcoded to MJPEG through `bridge_hls_camera_stream`.
    */
   private normalizeWindowsCameraStreamUrl(rawUrl: string): string {
-    return rawUrl
-      .trim()
-      .replace(/^https?:\/\/localhost:1984(\/|$)/i, "http://127.0.0.1:1984$1")
-      .replace(
-        /^(https?:\/\/127\.0\.0\.1:1984\/api\/)stream\.m3u8(\?|$)/i,
-        "$1stream.mjpeg$2",
-      );
+    return rawUrl.trim().replace(/^(https?):\/\/localhost:(\d+)(\/|$)/i, "$1://127.0.0.1:$2$3");
+  }
+
+  private async playCustomCameraUrl(devId: string, playable: string): Promise<void> {
+    const token = this.liveCameraToken;
+    await this.refreshOwnedGo2rtcOrigin();
+    if (this.liveCameraToken !== token || this.activeLiveCameraId !== devId) return;
+    const normalized = this.normalizeWindowsCameraStreamUrl(playable);
+    const ownedSrc = this.ownedGo2rtcStreamName(normalized);
+    if (ownedSrc) {
+      this.liveCameraStreamURL = ownedSrc;
+      this.liveCameraError = null;
+      this.liveCameraLoading = false;
+      this.startMjpegTransport(ownedSrc);
+      this.render();
+      this.attachLiveMedia();
+      return;
+    }
+    this.liveCameraLoading = false;
+    this.liveCameraStreamURL = normalized;
+    if (this.needsHlsTranscodeBridge(normalized)) {
+      void this.bridgeHlsStreamToMjpeg(devId, normalized);
+    } else {
+      this.render();
+    }
+  }
+
+  private isOwnedGo2rtcApiUrl(url: string): boolean {
+    const origin = this.ownedStreamOrigin;
+    if (!origin) return false;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return false;
+    }
+    if (`${parsed.protocol}//${parsed.host}`.toLowerCase() !== origin.toLowerCase()) return false;
+    return parsed.pathname === "/api" || parsed.pathname.startsWith("/api/");
+  }
+
+  private ownedGo2rtcStreamName(url: string): string | null {
+    if (!this.isOwnedGo2rtcApiUrl(url)) return null;
+    let src: string | null;
+    try {
+      src = new URL(url).searchParams.get("src");
+    } catch {
+      return null;
+    }
+    if (!src || !/^[A-Za-z0-9_]+$/.test(src)) return null;
+    return src;
   }
 
   private needsHlsTranscodeBridge(url: string): boolean {
     if (!window.__TAURI_INTERNALS__?.invoke) return false;
-    if (/^http:\/\/127\.0\.0\.1:1984(\/|$)/i.test(url)) return false;
+    if (this.isOwnedGo2rtcApiUrl(url)) return false;
     if (/\.m3u8(\?|$|#)/i.test(url)) {
       const probe = document.createElement("video");
       const canPlayNative =
@@ -4243,7 +4349,10 @@ export class MenuMijiaWindowsApp {
       : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraError = null;
     this.liveCameraLoading = false;
-    if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+    if (this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      this.liveCameraLoading = true;
+      void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
+    } else if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
       void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
     } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
       void this.resolveCloudCameraStream(dev);
@@ -4500,6 +4609,12 @@ export class MenuMijiaWindowsApp {
           <strong>${t("正在握手并连接摄像机实时画面…")}</strong>
         </div>
       `;
+    } else if (this.liveCameraStreamURL && this.isOwnedGo2rtcApiUrl(this.liveCameraStreamURL)) {
+      viewportHtml = `
+        <div class="cc-camera-stage" style="padding:28px 16px;text-align:center;">
+          <strong>${t("正在握手并连接摄像机实时画面…")}</strong>
+        </div>
+      `;
     } else if (this.liveCameraStreamURL && /^https?:/i.test(this.liveCameraStreamURL)) {
       const safeURL = this.escapeHtml(this.liveCameraStreamURL);
       const isImg = /\.(jpg|jpeg|png)|snapshot|camera_proxy|frame\.jpeg|mjpeg/i.test(this.liveCameraStreamURL);
@@ -4548,7 +4663,7 @@ export class MenuMijiaWindowsApp {
           ${
             this.liveCameraShowingURLInput
               ? `<div class="cc-field" style="margin-bottom:10px;">
-                  <input id="camera-stream-url-input" class="cc-input" type="text" value="${this.escapeHtml(customURL)}" placeholder="http://127.0.0.1:1984/api/stream.m3u8?src=camera" />
+                  <input id="camera-stream-url-input" class="cc-input" type="text" value="${this.escapeHtml(customURL)}" placeholder="http://127.0.0.1:<port>/api/stream.m3u8?src=camera" />
                   <div style="display:flex;gap:6px;margin-top:6px;">
                     <button class="cc-btn-primary" id="btn-save-camera-url">${t("连接流地址")}</button>
                   </div>
@@ -5715,37 +5830,7 @@ export class MenuMijiaWindowsApp {
     });
 
     this.root.querySelector("#btn-save-camera-url")?.addEventListener("click", () => {
-      const id = this.activeLiveCameraId;
-      if (!id) return;
-      const input = this.root.querySelector<HTMLInputElement>("#camera-stream-url-input");
-      const val = input?.value.trim() ?? "";
-      this.stopLiveTransport();
-      if (val) {
-        const playable = this.normalizeWindowsCameraStreamUrl(val);
-        this.cameraStreamURLs[id] = val;
-        this.liveCameraStreamURL = playable;
-        this.liveCameraError = null;
-        this.liveCameraLoading = false;
-        const dev = this.devices.find((d) => d.id === id);
-        if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
-          void this.bridgeHlsStreamToMjpeg(id, playable);
-        }
-      } else {
-        delete this.cameraStreamURLs[id];
-        const dev = this.devices.find((d) => d.id === id);
-        this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
-        if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
-          if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
-            void this.bridgeHlsStreamToMjpeg(id, this.liveCameraStreamURL);
-          } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
-            void this.resolveCloudCameraStream(dev);
-          }
-        }
-      }
-      this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
-      this.saveSettings();
-      this.liveCameraShowingURLInput = false;
-      this.render();
+      void this.commitCameraStreamUrl();
     });
 
     this.root.querySelector("#btn-cloud-allow")?.addEventListener("click", () => {
@@ -5974,6 +6059,49 @@ export class MenuMijiaWindowsApp {
       invokeTauriVoid("set_pin_popover", { pin: false });
       this.render();
     });
+  }
+
+  private async commitCameraStreamUrl(): Promise<void> {
+    const id = this.activeLiveCameraId;
+    if (!id) return;
+    const input = this.root.querySelector<HTMLInputElement>("#camera-stream-url-input");
+    const val = input?.value.trim() ?? "";
+    this.stopLiveTransport();
+    const token = this.liveCameraToken;
+    await this.refreshOwnedGo2rtcOrigin();
+    const stillViewing = this.liveCameraToken === token && this.activeLiveCameraId === id;
+    if (val) this.cameraStreamURLs[id] = val;
+    else delete this.cameraStreamURLs[id];
+    this.settings.cameraStreamURLs = { ...this.cameraStreamURLs };
+    this.saveSettings();
+    if (!stillViewing) return;
+    if (val) {
+      const playable = this.normalizeWindowsCameraStreamUrl(val);
+      this.liveCameraStreamURL = playable;
+      this.liveCameraError = null;
+      this.liveCameraLoading = false;
+      const dev = this.devices.find((d) => d.id === id);
+      const ownedSrc = this.ownedGo2rtcStreamName(playable);
+      if (dev && dev.kind.kind === "camera" && dev.kind.isOn && ownedSrc) {
+        this.liveCameraStreamURL = ownedSrc;
+        this.startMjpegTransport(ownedSrc);
+      } else if (dev && dev.kind.kind === "camera" && dev.kind.isOn && this.needsHlsTranscodeBridge(playable)) {
+        void this.bridgeHlsStreamToMjpeg(id, playable);
+      }
+    } else {
+      const dev = this.devices.find((d) => d.id === id);
+      this.liveCameraStreamURL = dev ? this.resolveHaCameraStreamUrl(dev) : null;
+      if (dev && dev.kind.kind === "camera" && dev.kind.isOn) {
+        if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+          void this.bridgeHlsStreamToMjpeg(id, this.liveCameraStreamURL);
+        } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
+          void this.resolveCloudCameraStream(dev);
+        }
+      }
+    }
+    this.liveCameraShowingURLInput = false;
+    this.render();
+    if (this.liveCameraMode === "mjpeg") this.attachLiveMedia();
   }
 
   // MARK: Layout editing

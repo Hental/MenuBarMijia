@@ -396,46 +396,64 @@ public enum IntentReply {
 /// Serializes controllable devices and scenes with short aliases (d1, s1) so the prompt stays small
 /// and the model cannot echo back long HA registry ids with typos.
 public struct IntentCatalog: Sendable {
-    public let lines: [String]
-    public let sceneLines: [String]
     public let criteriaByAlias: [String: String]
+    let aliasDevices: [(alias: String, device: SmartDevice)]
+    private let catalogText: String
     private let realIdsByAlias: [String: [String]]
-    private let fallbackIdsByIdentity: [String: [String]]
 
     public init(devices: [SmartDevice], scenes: [HomeScene]) {
-        var lines: [String] = []
+        var aliasDevices: [(alias: String, device: SmartDevice)] = []
         var map: [String: [String]] = [:]
-        var fallback: [String: [String]] = [:]
         var criteria: [String: String] = [:]
         var allLightIds: [String] = []
         var allDeviceIds: [String] = []
+        var roomOrder: [String] = []
         var roomLights: [String: [String]] = [:]
-        var index = 0
+        var aliasById: [String: String] = [:]
+        var deviceRows: [String] = []
         for device in devices {
             let category = IntentDeviceCategory(device)
             guard category.isAssistantControllable, device.kind.acceptsControlWrites else { continue }
-            index += 1
-            let alias = "d\(index)"
-            let summary = Self.stateSummary(device)
+            let alias = "d\(aliasDevices.count + 1)"
+            aliasDevices.append((alias, device))
             map[alias] = [device.id]
-            fallback[device.id] = [device.id]
-            if fallback[device.name] == nil {
-                fallback[device.name] = [device.id]
-            }
+            aliasById[device.id] = alias
+            if map[device.id] == nil { map[device.id] = [device.id] }
+            let state = PromptText.sanitize(Self.stateSummary(device), limit: PromptText.stateLimit)
             allDeviceIds.append(device.id)
             if category == .light {
                 allLightIds.append(device.id)
                 if !device.roomName.isEmpty {
+                    if roomLights[device.roomName] == nil { roomOrder.append(device.roomName) }
                     roomLights[device.roomName, default: []].append(device.id)
                 }
             }
-            criteria[alias] = "\(device.name) (\(device.roomName), \(category.rawValue), \(summary))"
-            lines.append([alias, device.name, device.roomName, category.rawValue, summary].joined(separator: "|"))
+            criteria[alias] = Self.choiceCriterion(category: category, state: state)
+            var fields = [
+                ("id", CatalogJSON.quote(alias)),
+                ("name", CatalogJSON.quote(PromptText.sanitize(device.name, limit: PromptText.nameLimit))),
+                ("room", CatalogJSON.quote(PromptText.sanitize(device.roomName, limit: PromptText.nameLimit))),
+                ("category", CatalogJSON.quote(category.rawValue)),
+                ("state", CatalogJSON.quote(state)),
+            ]
+            if device.isSharedHome { fields.append(("shared", "true")) }
+            deviceRows.append(CatalogJSON.object(fields))
         }
-        for (room, ids) in roomLights where ids.count >= 2 {
-            let alias = "room_lights:\(room)"
+        var groupIndex = 0
+        var groupRows: [String] = []
+        for room in roomOrder {
+            let ids = roomLights[room] ?? []
+            guard ids.count >= 2 else { continue }
+            groupIndex += 1
+            let alias = "room_lights:\(groupIndex)"
             map[alias] = ids
-            criteria[alias] = "\(room)所有灯具 (\(ids.count)盏)"
+            criteria[alias] = Self.roomGroupCriterion(lightCount: ids.count)
+            let members = ids.compactMap { aliasById[$0] }.map { CatalogJSON.quote($0) }
+            groupRows.append(CatalogJSON.object([
+                ("id", CatalogJSON.quote(alias)),
+                ("room", CatalogJSON.quote(PromptText.sanitize(room, limit: PromptText.nameLimit))),
+                ("members", "[\(members.joined(separator: ","))]"),
+            ]))
         }
         if allLightIds.count >= 2 {
             map["all_lights"] = allLightIds
@@ -445,22 +463,33 @@ public struct IntentCatalog: Sendable {
             map["all_devices"] = allDeviceIds
             criteria["all_devices"] = "全屋所有可控设备 (\(allDeviceIds.count)台)"
         }
-        var sceneLines: [String] = []
+        var sceneRows: [String] = []
         for (offset, scene) in scenes.enumerated() {
             let alias = "s\(offset + 1)"
             map[alias] = [scene.id]
-            fallback[scene.id] = [scene.id]
-            if fallback[scene.name] == nil {
-                fallback[scene.name] = [scene.id]
-            }
-            criteria[alias] = "场景：\(scene.name)"
-            sceneLines.append("\(alias)|\(scene.name)")
+            if map[scene.id] == nil { map[scene.id] = [scene.id] }
+            criteria[alias] = Self.sceneCriterion()
+            sceneRows.append(CatalogJSON.object([
+                ("id", CatalogJSON.quote(alias)),
+                ("name", CatalogJSON.quote(PromptText.sanitize(scene.name, limit: PromptText.nameLimit))),
+            ]))
         }
-        self.lines = lines
-        self.sceneLines = sceneLines
+        self.aliasDevices = aliasDevices
         self.criteriaByAlias = criteria
         self.realIdsByAlias = map
-        self.fallbackIdsByIdentity = fallback
+        self.catalogText = PromptText.dataNotice + "\n" + "{\"devices\":[\(deviceRows.joined(separator: ","))],\"groups\":[\(groupRows.joined(separator: ","))],\"scenes\":[\(sceneRows.joined(separator: ","))]}"
+    }
+
+    static func choiceCriterion(category: IntentDeviceCategory, state: String) -> String {
+        "\(category.rawValue); \(state)"
+    }
+
+    static func roomGroupCriterion(lightCount: Int) -> String {
+        "灯组 \(lightCount)盏"
+    }
+
+    static func sceneCriterion() -> String {
+        "场景"
     }
 
     public func realId(forAlias alias: String) -> String? {
@@ -468,17 +497,10 @@ public struct IntentCatalog: Sendable {
     }
 
     public func realIds(forTargetChoice choice: String) -> [String] {
-        let trimmed = choice.trimmingCharacters(in: .whitespacesAndNewlines)
-        return realIdsByAlias[trimmed] ?? fallbackIdsByIdentity[trimmed] ?? []
+        realIdsByAlias[choice.trimmingCharacters(in: .whitespacesAndNewlines)] ?? []
     }
 
-    public var text: String {
-        var out = "设备(id|名称|房间|类型|当前状态):\n" + lines.joined(separator: "\n")
-        if !sceneLines.isEmpty {
-            out += "\n场景(id|名称):\n" + sceneLines.joined(separator: "\n")
-        }
-        return out
-    }
+    public var text: String { catalogText }
 
     static func stateSummary(_ device: SmartDevice) -> String {
         guard device.isOnline else { return "离线" }
@@ -513,6 +535,25 @@ public struct IntentCatalog: Sendable {
             return s.isOn ? "开" : "关"
         case .speaker, .fridge, .sensor: return ""
         }
+    }
+}
+
+private enum CatalogJSON {
+    static func quote(_ raw: String) -> String {
+        var out = "\""
+        for scalar in raw.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        out += "\""
+        return out
+    }
+
+    static func object(_ fields: [(String, String)]) -> String {
+        "{" + fields.map { "\(quote($0.0)):\($0.1)" }.joined(separator: ",") + "}"
     }
 }
 

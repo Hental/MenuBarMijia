@@ -561,6 +561,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     public var model: String
     public var isOnline: Bool
     public var kind: DeviceKind
+    public var isSharedHome: Bool
 
     public init(
         id: String,
@@ -569,7 +570,8 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         roomName: String,
         model: String,
         isOnline: Bool,
-        kind: DeviceKind
+        kind: DeviceKind,
+        isSharedHome: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -578,6 +580,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         self.model = model
         self.isOnline = isOnline
         self.kind = kind
+        self.isSharedHome = isSharedHome
     }
 
     /// Whether this device can be toggled on/off with a single primary click

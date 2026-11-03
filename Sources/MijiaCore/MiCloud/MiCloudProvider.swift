@@ -612,7 +612,7 @@ public actor MiCloudProvider: HomeProvider {
         }
 
         try Task.checkCancellation()
-        if let localURL = await Self.probeLocalGo2RTC(for: device) {
+        if let localURL = await probeLocalGo2RTC(for: device) {
             try Task.checkCancellation()
             return .hls(localURL)
         }
@@ -684,33 +684,7 @@ public actor MiCloudProvider: HomeProvider {
         }
     }
 
-    private static func probeLocalGo2RTC(for device: SmartDevice) async -> URL? {
-        guard let streamsURL = URL(string: "http://127.0.0.1:1984/api/streams") else { return nil }
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.connectionProxyDictionary = [:]
-        cfg.timeoutIntervalForRequest = 1.2
-        cfg.timeoutIntervalForResource = 1.5
-        cfg.waitsForConnectivity = false
-        let session = URLSession(configuration: cfg)
-        defer { session.invalidateAndCancel() }
-
-        guard let (data, response) = try? await session.data(from: streamsURL),
-              let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              !json.isEmpty else {
-            return nil
-        }
-        let candidates = [device.id.lowercased(), device.name.lowercased(), device.model.lowercased()]
-        let matchedKey = json.keys.first { key in
-            let lower = key.lowercased()
-            return candidates.contains { !$0.isEmpty && (lower == $0 || lower.contains($0) || $0.contains(lower)) }
-        } ?? (json.keys.count == 1 ? json.keys.first : nil)
-        guard let src = matchedKey,
-              var comps = URLComponents(string: "http://127.0.0.1:1984/api/stream.m3u8") else {
-            return nil
-        }
-        comps.queryItems = [URLQueryItem(name: "src", value: src)]
-        return comps.url
+    private func probeLocalGo2RTC(for device: SmartDevice) async -> URL? {
+        await cameraBridge.probeRegisteredStream(candidates: [device.id, device.name, device.model])
     }
 }
