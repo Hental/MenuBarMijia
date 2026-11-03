@@ -165,6 +165,10 @@ public final class HomeStore {
     /// alert; tests inject a closure so no window is needed.
     @ObservationIgnored public var manualControlConfirmationHandler: ((ManualControlConfirmation) -> Bool)?
 
+    /// Test seam for revocation failures: when set, deleting credentials targets this vault even for
+    /// a custom defaults suite. Production leaves it nil and uses the Keychain/suite store.
+    @ObservationIgnored var credentialVault: CredentialVault?
+
     public var sensorAlertsOnlyWhenAway: Bool {
         didSet { userDefaults.set(sensorAlertsOnlyWhenAway, forKey: Self.sensorAlertsOnlyWhenAwayKey) }
     }

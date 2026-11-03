@@ -551,8 +551,11 @@ extension HomeStore {
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
 
-    public func logoutMiAccount() {
-        MiSessionStore.clear(defaults: userDefaults)
+    /// Returns false when the Keychain/vault refused to delete the stored Mi session; the in-memory
+    /// account is still signed out so the UI does not keep showing it.
+    @discardableResult
+    public func logoutMiAccount() -> Bool {
+        let cleared = MiSessionStore.clear(defaults: userDefaults, vault: credentialVault)
         miAccounts = []
         miAccountStatuses = [:]
         self.miSessionMaskedUserId = nil
@@ -573,31 +576,53 @@ extension HomeStore {
             rebuildLiveProvider()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
+        return cleared
     }
 
     /// The single destructive entry point behind Settings → 隐私 → 退出并吊销令牌 (#143): signs out
     /// every Mi account, deletes the Home Assistant token and drops that connection, forgets saved AI
     /// keys and cloud-consent records. Local preferences, aliases and history stay untouched.
-    public func signOutAndRevokeAll() {
+    /// Returns false and shows an error when any credential survived the deletion.
+    @discardableResult
+    public func signOutAndRevokeAll() -> Bool {
         invalidateUndoContext()
-        logoutMiAccount()
-        disconnectHomeAssistant()
-        AssistantConfig.removeAllStoredAPIKeys(defaults: userDefaults)
+        var complete = true
+        if !logoutMiAccount() { complete = false }
+        if !disconnectHomeAssistant() { complete = false }
+        if !AssistantConfig.removeAllStoredAPIKeys(defaults: userDefaults, vault: credentialVault) {
+            complete = false
+        }
         revokeCloudConsent()
-        showToast(L10n.tr("已退出并吊销本地保存的令牌", "Signed out and removed saved tokens"))
+        if complete {
+            showToast(L10n.tr("已退出并吊销本地保存的令牌", "Signed out and removed saved tokens"))
+        } else {
+            showToast(
+                L10n.tr(
+                    "部分凭据未能删除，请在钥匙串授权后重试",
+                    "Some credentials could not be removed. Allow Keychain access and try again."
+                ),
+                isError: true
+            )
+        }
+        return complete
     }
 
     /// Deletes the Home Assistant long-lived token and closes the live connection, keeping the saved
     /// instance URL so the user can reconnect by entering only a new token. A remaining Mi source
-    /// keeps serving the panel after the composite provider is rebuilt.
-    public func disconnectHomeAssistant() {
-        KeychainHelper.saveToken("", defaults: userDefaults)
+    /// keeps serving the panel after the composite provider is rebuilt. Returns false when the token
+    /// could not be deleted, leaving the current connection untouched.
+    @discardableResult
+    public func disconnectHomeAssistant() -> Bool {
+        guard KeychainHelper.saveToken("", defaults: userDefaults, vault: credentialVault) else {
+            return false
+        }
         hasHASource = false
         pendingHAAddressSuggestion = nil
         guard homeBackend != .demo,
-              (provider is DualSourceHomeProvider || provider is HAWebSocketProvider) else { return }
+              (provider is DualSourceHomeProvider || provider is HAWebSocketProvider) else { return true }
         invalidateUndoContext()
         rebuildLiveProvider()
+        return true
     }
 
     /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel

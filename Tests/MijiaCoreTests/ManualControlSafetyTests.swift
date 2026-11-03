@@ -88,6 +88,29 @@ struct ManualControlSafetyTests {
         #expect(!ManualControlPolicy.isScreenLockBlocked(isLocked: false, blockWhileLocked: true))
     }
 
+    @Test("A launch-time session fails closed and recognizes locked or unlocked logins")
+    func initialSessionLockState() {
+        #expect(ScreenLockPolicy.isLocked(session: nil), "No session information must block control")
+        #expect(ScreenLockPolicy.isLocked(session: [
+            "CGSSessionScreenIsLocked": 1,
+            "kCGSSessionOnConsoleKey": 1,
+            "kCGSessionLoginDoneKey": 1
+        ]))
+        #expect(!ScreenLockPolicy.isLocked(session: [
+            "kCGSSessionOnConsoleKey": 1,
+            "kCGSessionLoginDoneKey": 1
+        ]))
+        #expect(ScreenLockPolicy.isLocked(session: [
+            "kCGSSessionOnConsoleKey": 0,
+            "kCGSessionLoginDoneKey": 1
+        ]), "Another user's off-console session must not pass the guard")
+        #expect(!ScreenLockPolicy.isLocked(session: [
+            "CGSSessionScreenIsLocked": 0,
+            "kCGSSessionOnConsoleKey": 1,
+            "kCGSessionLoginDoneKey": 1
+        ]))
+    }
+
     // MARK: - Store behavior
 
     @MainActor
@@ -225,12 +248,36 @@ struct ManualControlSafetyTests {
         let store = HomeStore(provider: mock, defaultsSuiteName: suite)
         #expect(store.miAccounts.count == 1)
 
-        store.signOutAndRevokeAll()
+        #expect(store.signOutAndRevokeAll())
 
         #expect(store.miAccounts.isEmpty)
         #expect(KeychainHelper.loadToken(defaults: defaults).isEmpty)
         #expect(AssistantConfig.load(from: defaults).apiKey.isEmpty)
         #expect(AssistantConfig.userStoredAPIKey(forBaseURL: AssistantConfig.defaultBaseURL, defaults: defaults).isEmpty)
         #expect(store.toastNotice != nil)
+    }
+
+    @Test("A refused keychain delete reports an incomplete revocation")
+    @MainActor
+    func revokeAllReportsFailure() async throws {
+        let suite = "test.manualcontrol.revoke.failure.\(UUID().uuidString)"
+        let seededAccounts = [MiSessionStore.keychainAccount, "ha_access_token"]
+            + KeychainHelper.assistantSecretAccounts
+        let seeded = try #require(CredentialVault.encode(Dictionary(
+            uniqueKeysWithValues: seededAccounts.map { ($0, Data("stored".utf8)) }
+        )))
+        let storage = MemoryVaultStorage(blob: seeded)
+        storage.writeSucceeds = false
+        let vault = CredentialVault(storage: storage.storage)
+        let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.light]))
+        let store = HomeStore(provider: mock, defaultsSuiteName: suite)
+        store.credentialVault = vault
+
+        #expect(!store.signOutAndRevokeAll(), "A refused delete must not report success")
+        #expect(store.toastNotice?.isError == true)
+        #expect(store.toastNotice?.message == L10n.tr(
+            "部分凭据未能删除，请在钥匙串授权后重试",
+            "Some credentials could not be removed. Allow Keychain access and try again."
+        ))
     }
 }

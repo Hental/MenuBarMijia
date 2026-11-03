@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import MijiaCore
 
 /// Pauses Mi cloud polling while the Mac or its display sleeps, the screen is locked, or another
@@ -21,6 +22,9 @@ final class SystemActivityMonitor {
     func start(with store: HomeStore) {
         guard tokens.isEmpty else { return }
         self.store = store
+        // The app can launch from a login item while the screen is already locked; notifications
+        // only report later changes, so read the authoritative session state once up front.
+        locked = ScreenLockPolicy.isLocked(session: CGSessionCopyCurrentDictionary() as? [String: Any])
         let workspace = NSWorkspace.shared.notificationCenter
         observe(workspace, NSWorkspace.willSleepNotification, .asleep(true))
         observe(workspace, NSWorkspace.didWakeNotification, .asleep(false))
