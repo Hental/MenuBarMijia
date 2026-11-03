@@ -166,6 +166,16 @@ extension HomeStore {
         case .statusChanged(let status):
             if connectionStatus != status { connectionStatus = status }
 
+        case .sessionExpired(let rejected):
+            if let updated = MiSessionStore.markRejected(rejected, defaults: userDefaults) {
+                if let idx = miAccounts.firstIndex(where: {
+                    $0.session.userId == updated.userId && $0.session.serviceToken == updated.serviceToken
+                }) {
+                    miAccounts[idx].session = updated
+                }
+                miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+            }
+
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
@@ -448,6 +458,8 @@ extension HomeStore {
         // second account must not relabel the panel with the newcomer.
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
         self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
+        self.isShowingMiReauth = false
         self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
@@ -466,6 +478,8 @@ extension HomeStore {
         miAccounts = []
         miAccountStatuses = [:]
         self.miSessionMaskedUserId = nil
+        self.miSessionExpiresAt = nil
+        self.isShowingMiReauth = false
         self.miSessionScopeIdentifier = nil
         self.homes = []
         self.selectedMiHomeId = nil
@@ -499,6 +513,7 @@ extension HomeStore {
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
         miAccountStatuses.removeValue(forKey: id)
         self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionExpiresAt = miAccounts.compactMap(\.session.expiresAt).min()
         self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if selectedMiHomeId?.hasPrefix(id + "/") == true {
             selectedMiHomeId = nil
@@ -719,5 +734,62 @@ extension HomeStore {
                 await lgClient.start()
             }
         }
+    }
+}
+
+// MARK: - Mi Session Expiry (#181)
+
+extension HomeStore {
+    public var miSessionExpiryState: MiSessionExpiryState {
+        let _ = miSessionExpiryRevision
+        return MiSessionExpiryPolicy.state(expiresAt: miSessionExpiresAt, now: Date())
+    }
+
+    /// Schedules a one-shot wake at the next boundary (`expiresAt - warningLeadTime` or `expiresAt`)
+    /// so `@Observable` views update when a live session crosses into `.expiringSoon` or `.expired`.
+    func scheduleMiSessionExpiryTransition(now: Date = Date()) {
+        miSessionExpiryTimerTask?.cancel()
+        miSessionExpiryTimerTask = nil
+        guard let expiresAt = miSessionExpiresAt else { return }
+        let warnAt = expiresAt.addingTimeInterval(-MiSessionExpiryPolicy.warningLeadTime)
+        let nextBoundary: Date? = if now < warnAt {
+            warnAt
+        } else if now < expiresAt {
+            expiresAt
+        } else {
+            nil
+        }
+        guard let nextBoundary else { return }
+        let delay = max(0.05, nextBoundary.timeIntervalSince(now) + 0.05)
+        miSessionExpiryTimerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.miSessionExpiryRevision &+= 1
+            self.scheduleMiSessionExpiryTransition()
+        }
+    }
+
+    /// Only the cloud backend can name a session end; HA and demo never show this warning.
+    public var miSessionShowsExpired: Bool {
+        homeBackend == .xiaomiCloud && miSessionExpiryState == .expired
+    }
+
+    public var miSessionExpiringSoonDate: Date? {
+        guard homeBackend == .xiaomiCloud,
+              case .expiringSoon(let expiresAt) = miSessionExpiryState else { return nil }
+        return expiresAt
+    }
+
+    public func presentMiReauth() {
+        guard homeBackend == .xiaomiCloud,
+              miSessionMaskedUserId != nil || !miAccounts.isEmpty else { return }
+        if let target = miAccounts.first(where: { $0.session.expiresAt == miSessionExpiresAt }) ?? miAccounts.first {
+            miCloudRegion = target.region
+        }
+        isShowingMiReauth = true
+    }
+
+    public func dismissMiReauth() {
+        isShowingMiReauth = false
     }
 }

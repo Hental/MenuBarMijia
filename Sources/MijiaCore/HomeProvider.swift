@@ -43,6 +43,8 @@ public enum ControlReadBack: Sendable {
 public enum HomeProviderEvent: Sendable {
     case statusChanged(ConnectionStatus)
     case snapshotUpdated(SynthesizedHome)
+    /// The cloud rejected the session; the store persists it as the session's end (#181).
+    case sessionExpired(MiSession)
 }
 
 public enum HomeProviderError: LocalizedError, Equatable, Sendable {

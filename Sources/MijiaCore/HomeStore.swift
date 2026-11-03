@@ -88,6 +88,8 @@ public final class HomeStore {
     public var focusedDeviceId: String? = nil
     public var isOptionKeyPressed: Bool = false
     public var isShowingSettings: Bool = false
+    /// Transient flag for the QR re-auth overlay (#181).
+    public var isShowingMiReauth: Bool = false
 
     let userDefaults: UserDefaults
 
@@ -242,6 +244,16 @@ public final class HomeStore {
     /// Per-account connection state reported by `MiAccountsProvider` so Settings can flag an
     /// expired/disconnected account even while another account keeps `connectionStatus == .connected`.
     public internal(set) var miAccountStatuses: [String: ConnectionStatus] = [:]
+    /// The session's one absolute end: carried by the login response, or the last rejection time (#181).
+    public internal(set) var miSessionExpiresAt: Date? {
+        didSet {
+            if miSessionExpiresAt != oldValue {
+                scheduleMiSessionExpiryTransition()
+            }
+        }
+    }
+    var miSessionExpiryRevision: UInt64 = 0
+    var miSessionExpiryTimerTask: Task<Void, Never>?
     var miSessionScopeIdentifier: String? {
         didSet { syncSensorHistoryScope() }
     }
@@ -367,6 +379,7 @@ public final class HomeStore {
         let initialBackend = ud.string(forKey: "home_backend").flatMap(HomeBackend.init(rawValue:)) ?? .homeAssistant
         self.homeBackend = initialBackend
         self.miSessionMaskedUserId = initialMiSession?.maskedUserId
+        self.miSessionExpiresAt = initialAccounts.compactMap(\.session.expiresAt).min()
         self.miSessionScopeIdentifier = initialMiSession?.historyScopeIdentifier
         // A home id saved before multi-account has no account prefix. The only account owns it; with
         // zero or several accounts a bare id is ambiguous, so it is dropped rather than guessed.
@@ -463,6 +476,7 @@ public final class HomeStore {
             self.provider = makeHAProvider(baseURLString: savedURL, token: initialHAToken)
         }
         syncSensorHistoryScope()
+        scheduleMiSessionExpiryTransition()
         startListening()
         restoreScheduledCommands()
         // Demo mode is strictly offline: no LAN discovery, no LG connection (#47).

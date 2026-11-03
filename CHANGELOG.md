@@ -3,6 +3,7 @@
 ## 1.1.6
 
 ### 修复与设备支持
+- **米家登录态到期预警与菜单栏一键重扫（[#181](https://github.com/jryang1997/MenuBarMijia/issues/181)）**：macOS 与 Windows 双端记录扫码响应声明的 `serviceToken` 到期时刻与服务端实锤失效时间（未携带到期属性的会话保持无期限，遵循 [ADR-0004](docs/adr/0004-mi-cloud-session-longevity.md) 不猜测寿命）；距到期不足 3 天时在面板顶部显示提前重扫横幅，已过期时将菜单栏图标切换为 `house.slash` 并在面板内直接弹出二维码重扫浮层，扫码完成后原地恢复控制。
 - **多小米账号同时登录与跨区合并（[#140](https://github.com/jryang1997/MenuBarMijia/issues/140), [ADR-0010](docs/adr/0010-multi-account-xiaomi-sessions.md)）**：macOS 支持在设置中添加多个米家账号（包括中国大陆与海外不同云端地区），在单个面板中合并展示各账号的家庭、房间与设备，并支持按账号分区查看、切换家庭及单独移除账号（Windows 端暂保持单账号登录）。
 - **同一账号下多个家庭与共享家庭（[#134](https://github.com/jryang1997/MenuBarMijia/issues/134)）**：现在会加载账号被分享的家庭，家庭成员扫码后不再一直停在「同步设备中」。
 - **智能插座功率显示异常（[#129](https://github.com/jryang1997/MenuBarMijia/issues/129)）**：按设备上报的比例换算功率，不再出现巨大的数值；同时支持云端上报但此前未识别的设备。

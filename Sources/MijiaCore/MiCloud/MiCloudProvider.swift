@@ -27,6 +27,9 @@ public actor MiCloudProvider: HomeProvider {
     private var lastReportedConnected = false
     private var loopTask: Task<Void, Never>?
     private var api: (any MiCloudAPI)?
+    private var session: MiSession?
+    /// A rejection is reported once; later failures must not re-open the re-auth prompt.
+    private var didReportSessionExpired = false
     private var pendingCameraReleases: [String: Task<Void, Never>] = [:]
 
     private var devices: [MiDeviceRecord] = []
@@ -116,6 +119,13 @@ public actor MiCloudProvider: HomeProvider {
         guard let session = account?.session ?? sessionLoader() else {
             api = nil
             continuation?.yield(.statusChanged(.disconnected(MiCloudError.notLoggedIn.localizedDescription)))
+            return
+        }
+        self.session = session
+        // The declaration is already stored, so a relaunch only reports it; no cloud call, no event.
+        if session.expiryState(at: Date()) == .expired {
+            api = nil
+            continuation?.yield(.statusChanged(.disconnected(MiCloudError.sessionExpired.localizedDescription)))
             return
         }
         let api = apiFactory(session)
@@ -225,6 +235,10 @@ public actor MiCloudProvider: HomeProvider {
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         logger.error("Mi cloud error: \(message, privacy: .public)")
         lastReportedConnected = false
+        if (error as? MiCloudError) == .sessionExpired, let session, !didReportSessionExpired {
+            didReportSessionExpired = true
+            continuation?.yield(.sessionExpired(session))
+        }
         continuation?.yield(.statusChanged(.disconnected(message)))
     }
 

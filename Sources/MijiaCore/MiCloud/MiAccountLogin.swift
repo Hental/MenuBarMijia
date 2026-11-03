@@ -22,13 +22,23 @@ public struct MiSession: Codable, Equatable, Sendable {
     public var ssecurity: String
     public var serviceToken: String
     public var region: String
+    /// The absolute end the login response carried (or the last server rejection time); nil means undated.
+    public var expiresAt: Date?
 
-    public init(userId: String, cUserId: String, ssecurity: String, serviceToken: String, region: String = "cn") {
+    public init(
+        userId: String,
+        cUserId: String,
+        ssecurity: String,
+        serviceToken: String,
+        region: String = "cn",
+        expiresAt: Date? = nil
+    ) {
         self.userId = userId
         self.cUserId = cUserId
         self.ssecurity = ssecurity
         self.serviceToken = serviceToken
         self.region = region
+        self.expiresAt = expiresAt
     }
 
     /// `12****89` style mask so the UI can show which account is signed in without exposing the full id.
@@ -141,13 +151,14 @@ public struct MiAccountLogin: Sendable {
                 continue
             }
         }
-        let token = try await fetchServiceToken(location: scanned!.location)
+        let serviceToken = try await fetchServiceToken(location: scanned!.location)
         return MiSession(
             userId: scanned!.userId,
             cUserId: scanned!.cUserId,
             ssecurity: scanned!.ssecurity,
-            serviceToken: token,
-            region: region
+            serviceToken: serviceToken.token,
+            region: region,
+            expiresAt: serviceToken.expiresAt
         )
     }
 
@@ -174,13 +185,13 @@ public struct MiAccountLogin: Sendable {
         )
     }
 
-    private func fetchServiceToken(location: URL) async throws -> String {
+    private func fetchServiceToken(location: URL) async throws -> (token: String, expiresAt: Date?) {
         var url = location
         for _ in 0..<5 {
             var req = URLRequest(url: url)
             req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             let (_, http) = try await redirectlessTransport.send(req)
-            if let token = Self.cookie(named: "serviceToken", in: http, url: url) {
+            if let token = Self.serviceTokenCookie(in: http, url: url) {
                 return token
             }
             guard (300...399).contains(http.statusCode),
@@ -192,13 +203,83 @@ public struct MiAccountLogin: Sendable {
         throw MiLoginError.missingServiceToken
     }
 
-    static func cookie(named name: String, in response: HTTPURLResponse, url: URL) -> String? {
+    static func cookie(named name: String, in response: HTTPURLResponse, url: URL) -> HTTPCookie? {
         var fields: [String: String] = [:]
         for (k, v) in response.allHeaderFields {
             if let ks = k as? String, let vs = v as? String { fields[ks] = vs }
         }
         return HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
-            .first { $0.name == name && !$0.value.isEmpty }?.value
+            .first { $0.name == name && !$0.value.isEmpty }
+    }
+
+    /// Extracts `serviceToken` and its declared expiry from `Set-Cookie`.
+    /// Foundation's `HTTPCookie` ignores `Max-Age` unless `Version=1` is present; RFC 6265 §4.1.2.2
+    /// specifies `Max-Age` (in seconds) takes precedence over `Expires` on all modern cookies.
+    static func serviceTokenCookie(
+        in response: HTTPURLResponse,
+        url: URL,
+        now: Date = Date()
+    ) -> (token: String, expiresAt: Date?)? {
+        guard let cookie = cookie(named: "serviceToken", in: response, url: url) else {
+            return nil
+        }
+        let explicitExpiry = parseSetCookieExpiry(named: "serviceToken", in: response, now: now)
+        return (cookie.value, explicitExpiry ?? cookie.expiresDate)
+    }
+
+    static func parseSetCookieExpiry(named name: String, in response: HTTPURLResponse, now: Date = Date()) -> Date? {
+        var rawHeaders: [String] = []
+        for (k, v) in response.allHeaderFields {
+            guard let ks = k as? String, ks.caseInsensitiveCompare("Set-Cookie") == .orderedSame,
+                  let vs = v as? String else { continue }
+            rawHeaders.append(vs)
+        }
+        for header in rawHeaders {
+            let parts = header.split(separator: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard let first = parts.first,
+                  let eq = first.firstIndex(of: "="),
+                  first[..<eq].trimmingCharacters(in: .whitespaces) == name else {
+                continue
+            }
+            var maxAgeSeconds: Int?
+            var expiresDate: Date?
+            for attr in parts.dropFirst() {
+                guard let attrEq = attr.firstIndex(of: "=") else { continue }
+                let attrName = attr[..<attrEq].trimmingCharacters(in: .whitespaces).lowercased()
+                let attrVal = attr[attr.index(after: attrEq)...].trimmingCharacters(in: .whitespaces)
+                if attrName == "max-age", let secs = Int(attrVal) {
+                    maxAgeSeconds = secs
+                } else if attrName == "expires", let parsed = parseHTTPDate(String(attrVal)) {
+                    expiresDate = parsed
+                }
+            }
+            if let secs = maxAgeSeconds {
+                return secs <= 0 ? now : now.addingTimeInterval(TimeInterval(secs))
+            }
+            if let expiresDate {
+                return expiresDate
+            }
+        }
+        return nil
+    }
+
+    private static func parseHTTPDate(_ raw: String) -> Date? {
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "EEE MMM d HH:mm:ss yyyy",
+            "EEE, dd-MMM-yyyy HH:mm:ss zzz"
+        ]
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in formats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) {
+                return date
+            }
+        }
+        return nil
     }
 }
 
@@ -268,6 +349,22 @@ public enum MiSessionStore {
     }
 
     @discardableResult
+    public static func save(
+        _ session: MiSession,
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> Bool {
+        upsert(session, defaults: defaults, vault: vault)
+    }
+
+    public static func load(
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> MiSession? {
+        loadAccounts(defaults: defaults, vault: vault).first?.session
+    }
+
+    @discardableResult
     public static func upsert(
         _ session: MiSession,
         defaults: UserDefaults = .standard,
@@ -295,6 +392,25 @@ public enum MiSessionStore {
             return false
         }
         return saveAccounts(accounts.filter { $0.id != accountID }, defaults: defaults, vault: vault)
+    }
+
+    /// Records a server-classified rejection as the stored session's end. Compare before write: when the
+    /// stored credential is no longer the rejected one (`userId` or `serviceToken` changed), a late
+    /// failure must not condemn a newer scan. The updated session is returned even if the store refuses
+    /// the write, so the running UI still reflects the rejection.
+    public static func markRejected(
+        _ rejected: MiSession,
+        at date: Date = Date(),
+        defaults: UserDefaults = .standard,
+        vault: CredentialVault = .shared
+    ) -> MiSession? {
+        var accounts = loadAccounts(defaults: defaults, vault: vault)
+        guard let index = accounts.firstIndex(where: {
+            $0.session.userId == rejected.userId && $0.session.serviceToken == rejected.serviceToken
+        }) else { return nil }
+        accounts[index].session.expiresAt = date
+        saveAccounts(accounts, defaults: defaults, vault: vault)
+        return accounts[index].session
     }
 
     @discardableResult

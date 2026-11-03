@@ -61,20 +61,27 @@ enum MenuBarStatusSummary {
             }
         }
 
-        switch store.connectionStatus {
-        case .connected:
-            switch store.homeBackend {
-            case .xiaomiCloud:
-                parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
-            case .homeAssistant:
-                parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
-            case .demo:
-                parts.append(L10n.tr("演示模式", "Demo mode"))
+        if store.miSessionShowsExpired {
+            parts.append(L10n.tr("米家登录已过期，点击扫码重新登录", "Xiaomi Home session expired; click to scan again"))
+        } else if let expiresAt = store.miSessionExpiringSoonDate {
+            let dateText = expiresAt.formatted(date: .abbreviated, time: .omitted)
+            parts.append(L10n.tr("米家登录将在 \(dateText) 到期", "Xiaomi Home sign-in expires \(dateText)"))
+        } else {
+            switch store.connectionStatus {
+            case .connected:
+                switch store.homeBackend {
+                case .xiaomiCloud:
+                    parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
+                case .homeAssistant:
+                    parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
+                case .demo:
+                    parts.append(L10n.tr("演示模式", "Demo mode"))
+                }
+            case .connecting:
+                parts.append(L10n.tr("正在连接…", "Connecting…"))
+            case .disconnected(let reason):
+                parts.append(L10n.tr("未连接：\(reason)", "Disconnected: \(reason)"))
             }
-        case .connecting:
-            parts.append(L10n.tr("正在连接…", "Connecting…"))
-        case .disconnected(let reason):
-            parts.append(L10n.tr("未连接：\(reason)", "Disconnected: \(reason)"))
         }
 
         return parts.joined(separator: " · ")
