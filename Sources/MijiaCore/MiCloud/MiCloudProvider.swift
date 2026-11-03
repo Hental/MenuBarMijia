@@ -43,7 +43,7 @@ public actor MiCloudProvider: HomeProvider {
     private var pollRequested = false
 
     public init(
-        sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.load() },
+        sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.loadAccounts().first?.session },
         apiFactory: @escaping APIFactory = { MiCloudClient(session: $0) },
         specSource: any MiotSpecSource = MiotSpecStore(),
         cameraBridge: any XiaomiCameraBridging = XiaomiCameraBridge.shared,

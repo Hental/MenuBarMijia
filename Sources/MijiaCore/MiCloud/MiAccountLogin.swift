@@ -202,31 +202,72 @@ public struct MiAccountLogin: Sendable {
     }
 }
 
-/// Keychain persistence for `MiSession` (service `com.jryang1997.MenuBarMijia`, account `mi_session`).
-/// `.standard` stores the session only in the Keychain (#16); any other suite keeps a test-only copy in
-/// `UserDefaults` so store tests never touch the real Keychain.
+/// One signed-in Xiaomi account. The same user in the same region stays one account across re-login.
+public struct MiAccount: Equatable, Sendable, Identifiable {
+    public var session: MiSession
+
+    public init(session: MiSession) { self.session = session }
+
+    /// Stable across re-login: the same user in the same region is one account.
+    public var id: String { session.historyScopeIdentifier }
+    public var maskedUserId: String { session.maskedUserId }
+    public var region: MiCloudRegion { MiCloudRegion(rawValue: session.region.lowercased()) ?? .cn }
+    public var displayName: String { "\(maskedUserId) · \(region.label)" }
+}
+
+/// Keychain persistence for the signed-in `MiAccount`s (service `com.jryang1997.MenuBarMijia`, account
+/// `mi_session`). `.standard` stores them only in the Keychain (#16); any other suite keeps a test-only
+/// copy in `UserDefaults` so store tests never touch the real Keychain.
 public enum MiSessionStore {
     static let keychainAccount = "mi_session"
     /// Test seam for non-`.standard` suites. ≤1.0.6 also wrote this key for `.standard`; startup migration moves
     /// that plaintext copy into the Keychain and deletes it (#16).
     public static let fallbackDefaultsKey = "mi_session_fallback_v1"
-    /// The field name `JSONEncoder` writes for the account-level token that must not be persisted (#27).
-    private static let passTokenField = Data("\"passToken\"".utf8)
+    /// v2 payload: a versioned list in the slot that used to hold one bare `MiSession`.
+    private struct Envelope: Codable {
+        var version: Int
+        var accounts: [MiSession]
+    }
+    private static let envelopeVersion = 2
 
-    public static func load(defaults: UserDefaults = .standard) -> MiSession? {
+    public static func loadAccounts(defaults: UserDefaults = .standard) -> [MiAccount] {
         guard let data = storedData(defaults: defaults),
-              let session = try? JSONDecoder().decode(MiSession.self, from: data) else { return nil }
-        // A session saved by ≤1.0.6 still carries `passToken`; rewrite it without (#27, ADR-0004).
-        if data.range(of: passTokenField) != nil, let stripped = try? JSONEncoder().encode(session) {
-            store(stripped, defaults: defaults)
+              let sessions = decodeSessions(from: data) else { return [] }
+        let accounts = deduped(sessions).map { MiAccount(session: $0) }
+        // Every earlier build wrote one bare session here; rewrite the slot in the canonical form once
+        // (#27, ADR-0004).
+        if let canonical = encode(accounts.map(\.session)), canonical != data {
+            store(canonical, defaults: defaults)
         }
-        return session
+        return accounts
     }
 
     @discardableResult
-    public static func save(_ session: MiSession, defaults: UserDefaults = .standard) -> Bool {
-        guard let data = try? JSONEncoder().encode(session) else { return false }
+    public static func saveAccounts(_ accounts: [MiAccount], defaults: UserDefaults = .standard) -> Bool {
+        let sessions = deduped(accounts.map(\.session))
+        guard !sessions.isEmpty else {
+            clear(defaults: defaults)
+            return true
+        }
+        guard let data = encode(sessions) else { return false }
         return store(data, defaults: defaults)
+    }
+
+    @discardableResult
+    public static func upsert(_ session: MiSession, defaults: UserDefaults = .standard) -> Bool {
+        var accounts = loadAccounts(defaults: defaults)
+        let updated = MiAccount(session: session)
+        if let index = accounts.firstIndex(where: { $0.id == updated.id }) {
+            accounts[index] = updated
+        } else {
+            accounts.append(updated)
+        }
+        return saveAccounts(accounts, defaults: defaults)
+    }
+
+    @discardableResult
+    public static func remove(accountID: String, defaults: UserDefaults = .standard) -> Bool {
+        saveAccounts(loadAccounts(defaults: defaults).filter { $0.id != accountID }, defaults: defaults)
     }
 
     public static func clear(defaults: UserDefaults = .standard) {
@@ -235,11 +276,31 @@ public enum MiSessionStore {
         KeychainHelper.deleteKeychainItem(account: keychainAccount)
     }
 
-    /// Re-encodes a ≤1.0.6 `UserDefaults` session for the Keychain, dropping the `passToken` it carried
-    /// (#27). Returns nil when the legacy data cannot be decoded.
+    /// Re-encodes a ≤1.0.6 `UserDefaults` session for the Keychain as a v2 envelope, dropping the
+    /// `passToken` it carried (#27). Returns nil when the legacy data cannot be decoded.
     static func migratedData(fromLegacyDefaults data: Data) -> Data? {
-        guard let session = try? JSONDecoder().decode(MiSession.self, from: data) else { return nil }
-        return try? JSONEncoder().encode(session)
+        guard let sessions = decodeSessions(from: data) else { return nil }
+        return encode(deduped(sessions))
+    }
+
+    /// Accepts the v2 envelope or the bare `MiSession` that every earlier build wrote.
+    private static func decodeSessions(from data: Data) -> [MiSession]? {
+        if let envelope = try? JSONDecoder().decode(Envelope.self, from: data), envelope.version == envelopeVersion {
+            return envelope.accounts
+        }
+        if let session = try? JSONDecoder().decode(MiSession.self, from: data) {
+            return [session]
+        }
+        return nil
+    }
+
+    private static func encode(_ sessions: [MiSession]) -> Data? {
+        try? JSONEncoder().encode(Envelope(version: envelopeVersion, accounts: sessions))
+    }
+
+    private static func deduped(_ sessions: [MiSession]) -> [MiSession] {
+        var seen = Set<String>()
+        return sessions.filter { seen.insert(MiAccount(session: $0).id).inserted }
     }
 
     private static func storedData(defaults: UserDefaults) -> Data? {
@@ -249,7 +310,7 @@ public enum MiSessionStore {
         return KeychainHelper.readKeychainData(account: keychainAccount)
     }
 
-    /// `data` is already re-encoded through `MiSession`, so no `passToken` reaches the store.
+    /// `data` is already re-encoded through `MiSession` in a v2 envelope, so no `passToken` reaches the store.
     @discardableResult
     private static func store(_ data: Data, defaults: UserDefaults) -> Bool {
         guard defaults === UserDefaults.standard else {

@@ -395,7 +395,7 @@ extension HomeStore {
             self.provider = makeHAProvider(baseURLString: serverURLString, token: KeychainHelper.loadToken(defaults: userDefaults))
         case .xiaomiCloud:
             nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
         case .demo:
             // Strictly offline: stop any LAN TV and update work started by the previous backend (#47).
             if let lgClient = lgWebOSClient {
@@ -421,7 +421,7 @@ extension HomeStore {
 
     public func completeMiLogin(_ session: MiSession) {
         invalidateUndoContext()
-        MiSessionStore.save(session, defaults: userDefaults)
+        MiSessionStore.upsert(session, defaults: userDefaults)
         self.miSessionMaskedUserId = session.maskedUserId
         self.miSessionScopeIdentifier = session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
@@ -432,7 +432,7 @@ extension HomeStore {
         eventTask?.cancel()
         shutdownCurrentProvider()
         nonisolated(unsafe) let ud = userDefaults
-        self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+        self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
         startListening()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
@@ -450,7 +450,7 @@ extension HomeStore {
             eventTask?.cancel()
             shutdownCurrentProvider()
             nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
             startListening()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))

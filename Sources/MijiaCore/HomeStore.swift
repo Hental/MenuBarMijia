@@ -348,7 +348,7 @@ public final class HomeStore {
             L10n.currentLanguage = initialEffective
         }
 
-        let initialMiSession = MiSessionStore.load(defaults: ud)
+        let initialMiSession = MiSessionStore.loadAccounts(defaults: ud).first?.session
         let savedRegion = ud.string(forKey: "mi_cloud_region").flatMap(MiCloudRegion.init(rawValue:))
             ?? initialMiSession.flatMap { MiCloudRegion(rawValue: $0.region.lowercased()) }
             ?? .cn
@@ -433,7 +433,7 @@ public final class HomeStore {
             self.provider = provider
         } else if initialBackend == .xiaomiCloud {
             nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
         } else if initialBackend == .demo {
             self.provider = DemoHomeProvider()
         } else {
