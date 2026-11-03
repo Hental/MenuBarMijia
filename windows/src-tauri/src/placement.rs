@@ -264,6 +264,27 @@ pub fn drag_settle_finished(now_ms: u64, quiet_until_ms: u64, drag_held: bool) -
     now_ms >= quiet_until_ms && !drag_held
 }
 
+/// `VK_LBUTTON`: the physical button that acts as primary on a normal mouse.
+pub const PRIMARY_BUTTON_KEY: i32 = 0x01;
+
+/// `VK_RBUTTON`: the physical button that acts as primary after "swap primary and secondary buttons".
+pub const SWAPPED_PRIMARY_BUTTON_KEY: i32 = 0x02;
+
+/// Physical button to watch for the logical-primary press the header receives. Windows swaps the two
+/// buttons when `SM_SWAPBUTTON` is set, so the release then arrives on the right button (#204 review).
+pub fn primary_button_virtual_key(swapped: bool) -> i32 {
+    if swapped {
+        SWAPPED_PRIMARY_BUTTON_KEY
+    } else {
+        PRIMARY_BUTTON_KEY
+    }
+}
+
+/// Decodes the high-order "currently down" bit of `GetAsyncKeyState`.
+pub fn key_state_is_down(state: i16) -> bool {
+    (state as u16 & 0x8000) != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +456,19 @@ mod tests {
         assert!(!drag_settle_finished(1_300, 1_350, false));
         // Pressed mid-move is never finished either.
         assert!(!drag_settle_finished(1_300, 1_350, true));
+    }
+
+    #[test]
+    fn a_swapped_mouse_watches_the_right_button_for_the_drag_release() {
+        // Normal mouse: the logical-primary press the header receives is the left button.
+        assert_eq!(primary_button_virtual_key(false), 0x01);
+        // "Swap primary and secondary buttons" makes the same press arrive as the right button.
+        assert_eq!(primary_button_virtual_key(true), 0x02);
+        // Only the high bit of GetAsyncKeyState means "currently down"; the low bit is "pressed since".
+        assert!(key_state_is_down(0x8000u16 as i16));
+        assert!(key_state_is_down(0x8001u16 as i16));
+        assert!(!key_state_is_down(0));
+        assert!(!key_state_is_down(0x0001));
     }
 
     #[test]

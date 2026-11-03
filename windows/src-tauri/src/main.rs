@@ -5,8 +5,9 @@ mod placement;
 mod update_manifest;
 use home_assistant::{ha_execute, ha_snapshot};
 use placement::{
-    drag_settle_finished, move_is_user_driven, move_suppression_deadline, place, resized_top,
-    taskbar_edge, PanelAnchor, PanelPlacement, PlacementInput, Rect, DRAG_SETTLE_MS,
+    drag_settle_finished, key_state_is_down, move_is_user_driven, move_suppression_deadline, place,
+    primary_button_virtual_key, resized_top, taskbar_edge, PanelAnchor, PanelPlacement,
+    PlacementInput, Rect, DRAG_SETTLE_MS,
 };
 
 #[cfg(test)]
@@ -2376,10 +2377,13 @@ fn primary_button_down() -> bool {
     #[link(name = "user32")]
     extern "system" {
         fn GetAsyncKeyState(vkey: i32) -> i16;
+        fn GetSystemMetrics(index: i32) -> i32;
     }
-    const VK_LBUTTON: i32 = 0x01;
-    // The high-order bit reports whether the key is currently down.
-    unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 }
+    // "Swap primary and secondary buttons" makes the header's logical-primary press arrive on the right
+    // button, so ask which physical button is primary before sampling it.
+    const SM_SWAPBUTTON: i32 = 23;
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) != 0 };
+    key_state_is_down(unsafe { GetAsyncKeyState(primary_button_virtual_key(swapped)) })
 }
 
 #[cfg(any(not(windows), test))]
