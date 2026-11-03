@@ -142,11 +142,17 @@ jobs:
       - name: Install & Test & Build Frontend
         run: npm ci && npm test && npm run build
 
-  windows-installer:
+  windows-camera-bin:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true' && inputs.record_only != true
-    # 与 linux-core / windows-core 没有产物传递，并行启动。
-    # 前端测试仍由 windows-core 覆盖；这里保留 cargo test 与 Tauri 安装包构建。
+    # 构建安装包内置的 go2rtc 与最小 LGPL ffmpeg；结果由 windows-installer 消费。
+    uses: ./.github/workflows/camera-bin.yml
+
+  windows-installer:
+    needs: [changes, windows-camera-bin]
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true' && inputs.record_only != true
+    # 安装包依赖 windows-camera-bin 的内置组件；前端测试仍由 windows-core 覆盖，
+    # 这里保留 cargo test 与 Tauri 安装包构建。
     runs-on: windows-latest
     defaults:
       run:
@@ -164,6 +170,10 @@ jobs:
           workspaces: "windows/src-tauri -> target"
       - name: Install frontend & Tauri CLI dependencies
         run: npm ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: camera-bin
+          path: windows/src-tauri/camera-bin
       - name: Test native URL and credential policies
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build Windows Tauri installer (.exe & .msi)
@@ -344,7 +354,7 @@ jobs:
   ci:
     # 始终运行的汇总检查。文档-only、record-only 或未受影响的平台任务被跳过时，这里成功；
     # 任何一个实际失败（不是预期跳过）则失败。适合作为唯一的 required check。
-    needs: [changes, nas-safety, linux-core, windows-core, windows-installer, macos-test, macos-release, macos-appintents]
+    needs: [changes, nas-safety, linux-core, windows-core, windows-camera-bin, windows-installer, macos-test, macos-release, macos-appintents]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -361,6 +371,7 @@ jobs:
           NAS: ${{ needs.nas-safety.result }}
           LINUX: ${{ needs.linux-core.result }}
           WINDOWS_CORE: ${{ needs.windows-core.result }}
+          WINDOWS_CAMERA: ${{ needs.windows-camera-bin.result }}
           WINDOWS_INSTALLER: ${{ needs.windows-installer.result }}
           MACOS_TEST: ${{ needs.macos-test.result }}
           MACOS_RELEASE: ${{ needs.macos-release.result }}
@@ -370,6 +381,7 @@ jobs:
           "nas-safety:$NAS:always"
           "linux-core:$LINUX:$CORE"
           "windows-core:$WINDOWS_CORE:$WINDOWS"
+          "windows-camera-bin:$WINDOWS_CAMERA:$WINDOWS"
           "windows-installer:$WINDOWS_INSTALLER:$WINDOWS"
           "macos-test:$MACOS_TEST:$MACOS"
           "macos-release:$MACOS_RELEASE:$MACOS"

@@ -70,6 +70,13 @@ import {
   sessionWithoutPassToken,
 } from "../core/secureStore.js";
 import {
+  type CameraStreamQuality,
+  CAMERA_STREAM_QUALITIES,
+  DEFAULT_CAMERA_STREAM_QUALITY,
+  normalizeCameraStreamQuality,
+  normalizeCameraStreamQualityMap,
+} from "../core/cameraQuality.js";
+import {
   type AssistantSuggestion,
   type DeviceCommand,
   type DeviceIntent,
@@ -253,6 +260,8 @@ interface PersistedSettings {
   globalHotkey: string;
   /** Per-camera custom stream URLs (e.g. local go2rtc / HLS), persisted across restarts. */
   cameraStreamURLs?: Record<string, string>;
+  /** Per-camera Xiaomi stream quality (#97); missing or unknown values mean `hd`. */
+  cameraStreamQualities?: Record<string, CameraStreamQuality>;
 }
 
 interface UndoStep {
@@ -280,6 +289,14 @@ const STORAGE_KEY = "menumijia.windows.settings.v2";
 const LEGACY_STORAGE_KEY = "menumijia.windows.settings.v1";
 // Bump when a cached device shape needs a one-time migration on load (#148).
 const CACHED_DEVICES_VERSION = 1;
+
+/** UI labels for the Xiaomi quality pills; the values match the macOS menu (#193). */
+const CAMERA_QUALITY_TITLES: Record<CameraStreamQuality, string> = {
+  auto: "自动",
+  sd: "流畅",
+  hd: "高清",
+  max: "超清",
+};
 
 // Injected at build time by vite.config.ts from the repository's VERSION file (#39).
 const APP_VERSION =
@@ -667,6 +684,7 @@ function loadSettings(): LoadedSettings {
                   ),
                 )
               : {},
+          cameraStreamQualities: normalizeCameraStreamQualityMap(parsed.cameraStreamQualities),
           layout: { ...emptyLayoutPrefs(), ...(parsed.layout ?? {}) },
           selectedHomeId: parsed.selectedHomeId ?? null,
         },
@@ -715,6 +733,7 @@ function loadSettings(): LoadedSettings {
       enableGlobalHotkey: true,
       globalHotkey: DEFAULT_GLOBAL_SHORTCUT,
       cameraStreamURLs: {},
+      cameraStreamQualities: {},
     },
     hasLegacyCredentials: false,
   };
@@ -931,8 +950,13 @@ export class MenuMijiaWindowsApp {
   private liveCameraError: string | null = null;
   private liveCameraShowingURLInput = false;
   private cameraStreamURLs: Record<string, string> = { ...(this.settings.cameraStreamURLs ?? {}) };
+  /** Per-camera Xiaomi stream quality; `hd` matches the macOS default (#193). */
+  private cameraStreamQualities: Record<string, CameraStreamQuality> = {
+    ...(this.settings.cameraStreamQualities ?? {}),
+  };
   /** The live picture arrives as MJPEG frames in a persistent `<img>`, which never restarts on re-render. */
   private liveCameraMode: "mjpeg" | null = null;
+  private liveCameraQualityApplies = true;
   private liveCameraImgEl: HTMLImageElement | null = null;
   private liveCameraAbort: AbortController | null = null;
   private ownedStreamOrigin: string | null = null;
@@ -4259,6 +4283,7 @@ export class MenuMijiaWindowsApp {
       this.closeCameraLiveView();
     }
     this.activeLiveCameraId = dev.id;
+    this.liveCameraQualityApplies = true;
     this.liveCameraHidden = false;
     this.clearCameraKeepAlive();
     this.liveCameraError = null;
@@ -4319,6 +4344,7 @@ export class MenuMijiaWindowsApp {
     this.liveCameraHidden = false;
     this.stopLiveTransport();
     this.activeLiveCameraId = null;
+    this.liveCameraQualityApplies = true;
     this.liveCameraStreamURL = null;
     this.liveCameraLoading = false;
     this.liveCameraError = null;
@@ -4567,10 +4593,17 @@ export class MenuMijiaWindowsApp {
     return false;
   }
 
+  private setCameraStreamQuality(deviceId: string, quality: CameraStreamQuality): void {
+    this.cameraStreamQualities = { ...this.cameraStreamQualities, [deviceId]: quality };
+    this.settings.cameraStreamQualities = { ...this.cameraStreamQualities };
+    this.saveSettings();
+  }
+
   private reconnectCameraLiveView(): void {
     const dev = this.devices.find((d) => d.id === this.activeLiveCameraId);
     if (!dev || dev.kind.kind !== "camera") return;
     this.stopLiveTransport();
+    this.liveCameraQualityApplies = true;
     this.liveCameraStreamURL = this.cameraStreamURLs[dev.id]
       ? this.normalizeWindowsCameraStreamUrl(this.cameraStreamURLs[dev.id]!)
       : this.resolveHaCameraStreamUrl(dev);
@@ -4647,12 +4680,14 @@ export class MenuMijiaWindowsApp {
               const playable = this.normalizeWindowsCameraStreamUrl(urlMatch[0]);
               if (this.needsHlsTranscodeBridge(playable)) {
                 if (await this.bridgeHlsStreamToMjpeg(dev.id, playable)) {
+                  this.liveCameraQualityApplies = false;
                   return;
                 }
                 // Bridging failed: fall through to P2P below instead of assigning an unplayable .m3u8.
                 break;
               }
               if (!/\.m3u8(\?|$|#)/i.test(playable) || !window.__TAURI_INTERNALS__?.invoke) {
+                this.liveCameraQualityApplies = false;
                 this.liveCameraStreamURL = playable;
                 this.liveCameraError = null;
                 this.liveCameraLoading = false;
@@ -4741,6 +4776,7 @@ export class MenuMijiaWindowsApp {
               if (this.activeLiveCameraId !== dev.id) releaseIfStarted();
               return;
             }
+            this.liveCameraQualityApplies = true;
             const bridge = await window.__TAURI_INTERNALS__.invoke<string>("start_xiaomi_camera_bridge", {
               did: dev.id,
               model: dev.model,
@@ -4751,6 +4787,7 @@ export class MenuMijiaWindowsApp {
               sign,
               vendor: vendorName,
               uid: p2pUid,
+              quality: this.cameraStreamQualities[dev.id] ?? DEFAULT_CAMERA_STREAM_QUALITY,
             });
             if (stale()) {
               // The close path already tore down once; this late start re-created a
@@ -4774,6 +4811,7 @@ export class MenuMijiaWindowsApp {
               return;
             }
             if (h264Name) {
+              this.liveCameraQualityApplies = false;
               releaseIfStarted();
               this.liveCameraStreamURL = h264Name;
               this.liveCameraError = t("实时画面连接失败，请点右上角重新连接");
@@ -4791,9 +4829,11 @@ export class MenuMijiaWindowsApp {
       }
 
       releaseIfStarted();
+      this.liveCameraQualityApplies = false;
       this.liveCameraError = failureReason ?? t("米家云直连摄像头采用私有 P2P 加密流；可在下方填写本地 go2rtc / HLS 流地址观看实时画面");
     } catch (err) {
       releaseIfStarted();
+      this.liveCameraQualityApplies = false;
       if (!stale()) {
         this.liveCameraError = err instanceof Error ? err.message : String(err);
       }
@@ -4898,6 +4938,19 @@ export class MenuMijiaWindowsApp {
               : ""
           }
           ${viewportHtml}
+          ${
+            this.settings.connectionMode === "xiaomiCloud" && !customURL && this.liveCameraQualityApplies && !this.liveCameraLoading
+              ? `<div class="cc-segmented-pills" style="margin-top:10px;">
+                  <span class="cc-pill-label">${t("画质")}</span>
+                  ${CAMERA_STREAM_QUALITIES.map((quality) => {
+                    const selected = (this.cameraStreamQualities[dev.id] ?? DEFAULT_CAMERA_STREAM_QUALITY) === quality;
+                    return `<button class="cc-seg-pill ${selected ? "is-active" : ""}" data-cameraquality="${id}" data-cameraquality-value="${quality}" aria-pressed="${selected}">
+                      ${t(CAMERA_QUALITY_TITLES[quality])}
+                    </button>`;
+                  }).join("")}
+                </div>`
+              : ""
+          }
           <div class="cc-segmented-pills" style="margin-top:12px;">
             ${k.powerWritable === false ? "" : `<button class="cc-seg-pill ${!k.isOn ? "is-active" : ""}" data-toggle-device="${id}" aria-pressed="${!k.isOn}">
               ${k.isOn ? t("镜头休眠") : t("唤醒镜头")}
@@ -6062,6 +6115,18 @@ export class MenuMijiaWindowsApp {
 
     this.root.querySelector("#btn-reload-camera-live")?.addEventListener("click", () => {
       this.reconnectCameraLiveView();
+    });
+
+    this.root.querySelectorAll<HTMLElement>("[data-cameraquality]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const deviceId = btn.dataset.cameraquality ?? "";
+        const dev = this.devices.find((d) => d.id === deviceId);
+        if (!dev || dev.kind.kind !== "camera") return;
+        const quality = normalizeCameraStreamQuality(btn.dataset.cameraqualityValue);
+        if (quality === (this.cameraStreamQualities[deviceId] ?? DEFAULT_CAMERA_STREAM_QUALITY)) return;
+        this.setCameraStreamQuality(deviceId, quality);
+        this.reconnectCameraLiveView();
+      });
     });
 
     this.attachLiveMedia();

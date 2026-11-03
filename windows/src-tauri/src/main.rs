@@ -1100,6 +1100,7 @@ fn set_panel_height(
 
 #[tauri::command]
 async fn start_xiaomi_camera_bridge(
+    app: AppHandle,
     did: String,
     model: String,
     local_ip: String,
@@ -1109,6 +1110,7 @@ async fn start_xiaomi_camera_bridge(
     sign: String,
     vendor: String,
     uid: Option<String>,
+    quality: Option<String>,
 ) -> Result<String, String> {
     let _bridge_order = CAMERA_BRIDGE_LOCK.lock().await;
     let cam_ip: std::net::Ipv4Addr = local_ip
@@ -1118,8 +1120,9 @@ async fn start_xiaomi_camera_bridge(
     if !cam_ip.is_private() && !cam_ip.is_loopback() {
         return Err("仅允许局域网私有 IP 地址直连摄像机".to_string());
     }
+    let subtype = xiaomi_camera_subtype(quality.as_deref())?;
 
-    ensure_go2rtc_running().await?;
+    ensure_go2rtc_running(&app).await?;
     let session = current_go2rtc_session()?;
 
     let clean_did: String = did
@@ -1143,12 +1146,13 @@ async fn start_xiaomi_camera_bridge(
     let relay_port = camera_relay_port(&clean_did, cam_ip)?;
 
     let mut query = format!(
-        "client_public={}&client_private={}&device_public={}&sign={}&vendor={}&transport=udp&subtype=sd&audio=0&model={}",
+        "client_public={}&client_private={}&device_public={}&sign={}&vendor={}&transport=udp&subtype={}&audio=0&model={}",
         urlencoding_simple(&client_public),
         urlencoding_simple(&client_private),
         urlencoding_simple(&device_public),
         urlencoding_simple(&sign),
         urlencoding_simple(&vendor),
+        subtype,
         urlencoding_simple(&model)
     );
     if let Some(u) = uid.as_deref().filter(|s| !s.is_empty()) {
@@ -1172,14 +1176,18 @@ async fn start_xiaomi_camera_bridge(
 }
 
 #[tauri::command]
-async fn bridge_hls_camera_stream(did: String, hls_url: String) -> Result<String, String> {
+async fn bridge_hls_camera_stream(
+    app: AppHandle,
+    did: String,
+    hls_url: String,
+) -> Result<String, String> {
     let _bridge_order = CAMERA_BRIDGE_LOCK.lock().await;
-    let parsed = reqwest::Url::parse(hls_url.trim())
-        .map_err(|_| "无效的 HLS 流地址".to_string())?;
+    let parsed =
+        reqwest::Url::parse(hls_url.trim()).map_err(|_| "无效的 HLS 流地址".to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("HLS 流地址必须使用 http 或 https 协议".to_string());
     }
-    ensure_go2rtc_running().await?;
+    ensure_go2rtc_running(&app).await?;
     let session = current_go2rtc_session()?;
     let clean_did: String = did
         .chars()
@@ -1455,48 +1463,138 @@ fn urlencoding_simple(s: &str) -> String {
     out
 }
 
-fn resolve_ffmpeg_bin(bin_dir: &std::path::Path) -> String {
+const GO2RTC_DOWNLOAD_URL: &str =
+    "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/go2rtc_win64.zip";
+const GO2RTC_DOWNLOAD_SHA256: &str =
+    "5b448fc90f15c925406d8da0984301985e385050222c1c2bbdf0a76fe4b1e9cb";
+/// Tauri resource directory subfolder populated by `bundle.resources` (see tauri.conf.json).
+const CAMERA_COMPONENT_DIR: &str = "camera-bin";
+const CAMERA_MANUAL_BIN_HINT: &str =
+    "或手动下载 go2rtc_win64.zip，解压后把 go2rtc.exe 放到 %LOCALAPPDATA%\\MenuBarMijia\\bin\\";
+
+/// go2rtc `subtype` for a Xiaomi MISS stream (#97). `max` is numeric subtype 3, which
+/// several 4K models require; `None` keeps the historical `hd` default.
+fn xiaomi_camera_subtype(quality: Option<&str>) -> Result<&'static str, String> {
+    match quality.unwrap_or("hd") {
+        "auto" => Ok("auto"),
+        "sd" => Ok("sd"),
+        "hd" => Ok("hd"),
+        "max" => Ok("3"),
+        other => Err(format!("不支持的摄像机画质：{other}")),
+    }
+}
+
+fn bundled_component_source(
+    resource_dir: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    let path = resource_dir.join(CAMERA_COMPONENT_DIR).join(name);
+    path.is_file().then_some(path)
+}
+
+/// Copies a bundled helper into the writable component directory. MSI installs may keep
+/// the install directory read-only, while go2rtc also writes its config and owner record
+/// next to the executable, so both binaries and state live under LOCALAPPDATA.
+fn copy_bundled_component(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    if dest.is_file() {
+        return Ok(());
+    }
+    let parent = dest.parent().ok_or_else(|| "组件目录不可用".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("创建组件目录失败：{e}"))?;
+    let name = dest
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("component");
+    let staging = dest.with_file_name(format!("{name}.staging-{}", std::process::id()));
+    let _ = std::fs::remove_file(&staging);
+    std::fs::copy(src, &staging)
+        .map_err(|e| format!("复制内置组件 {} 失败：{e}", src.display()))?;
+    std::fs::rename(&staging, dest)
+        .map_err(|e| format!("安装内置组件 {} 失败：{e}", dest.display()))?;
+    Ok(())
+}
+
+fn ensure_component(
+    app: &AppHandle,
+    bin_dir: &std::path::Path,
+    name: &str,
+) -> Result<bool, String> {
+    if bin_dir.join(name).is_file() {
+        return Ok(true);
+    }
+    let Ok(resource_dir) = app.path().resource_dir() else {
+        return Ok(false);
+    };
+    let Some(src) = bundled_component_source(&resource_dir, name) else {
+        return Ok(false);
+    };
+    copy_bundled_component(&src, &bin_dir.join(name))?;
+    Ok(true)
+}
+
+fn resolve_ffmpeg_bin(app: &AppHandle, bin_dir: &std::path::Path) -> Result<String, String> {
     for candidate in ["ffmpeg-silent.exe", "ffmpeg.exe"] {
-        let p = bin_dir.join(candidate);
-        if p.exists() {
-            return p.to_string_lossy().replace('\\', "/");
+        if bin_dir.join(candidate).is_file() {
+            return Ok(bin_dir.join(candidate).to_string_lossy().replace('\\', "/"));
         }
     }
-    "ffmpeg".to_string()
+    for candidate in ["ffmpeg-silent.exe", "ffmpeg.exe"] {
+        if ensure_component(app, bin_dir, candidate)? {
+            return Ok(bin_dir.join(candidate).to_string_lossy().replace('\\', "/"));
+        }
+    }
+    // A user-installed ffmpeg on PATH is the last resort; the bundled helper is preferred
+    // because it is silent and version-pinned.
+    Ok("ffmpeg".to_string())
 }
 
 async fn download_go2rtc_win64(
     bin_dir: &std::path::Path,
     exe_path: &std::path::Path,
 ) -> Result<(), String> {
-    const DOWNLOAD_URL: &str =
-        "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.15/go2rtc_win64.zip";
-    const EXPECTED_SHA256: &str =
-        "5b448fc90f15c925406d8da0984301985e385050222c1c2bbdf0a76fe4b1e9cb";
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        match download_go2rtc_once(bin_dir, exe_path).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = error;
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_millis(700 * attempt)).await;
+                }
+            }
+        }
+    }
+    Err(format!(
+        "首次打开摄像机需自动下载流媒体组件 go2rtc，但下载失败（{last_error}）。请检查网络后重试，{CAMERA_MANUAL_BIN_HINT}"
+    ))
+}
 
+async fn download_go2rtc_once(
+    bin_dir: &std::path::Path,
+    exe_path: &std::path::Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir).map_err(|e| format!("创建组件目录失败：{e}"))?;
+    // GitHub release assets redirect to release-assets.githubusercontent.com; 45 s was too
+    // short for a slow link and surfaced as an opaque body-decode error (#200).
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(45))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(DOWNLOAD_URL).send().await.map_err(|e| {
-        format!(
-            "首次打开摄像机需自动下载流媒体组件 go2rtc，但网络连接失败（{e}）。请检查网络后重试，或手动放入 %LOCALAPPDATA%\\MenuBarMijia\\bin\\go2rtc.exe"
-        )
-    })?;
+    let resp = client
+        .get(GO2RTC_DOWNLOAD_URL)
+        .send()
+        .await
+        .map_err(|e| format!("网络连接失败（{e}）"))?;
     if !resp.status().is_success() {
-        return Err(format!(
-            "下载流媒体组件 go2rtc 失败 (HTTP {})，请稍后点击重试",
-            resp.status().as_u16()
-        ));
+        return Err(format!("HTTP {}", resp.status().as_u16()));
     }
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("读取 go2rtc 组件数据失败：{e}"))?;
+        .map_err(|e| format!("读取组件数据失败（{e}）"))?;
     let actual_sha256 = compute_sha256_hex(&bytes);
-    if actual_sha256 != EXPECTED_SHA256 {
-        return Err("go2rtc 组件 SHA-256 校验未通过，已拒绝加载".to_string());
+    if actual_sha256 != GO2RTC_DOWNLOAD_SHA256 {
+        return Err("SHA-256 校验未通过，已拒绝加载".to_string());
     }
 
     let staging_dir = bin_dir.join(format!("staging-{}", std::process::id()));
@@ -1964,12 +2062,13 @@ async fn wait_for_owned_api(http: &reqwest::Client, session: &Go2RtcSession) -> 
 }
 
 async fn spawn_fresh_go2rtc(
+    app: &AppHandle,
     http: &reqwest::Client,
     bin_dir: &std::path::Path,
     ffmpeg_bin: &str,
 ) -> Result<(), String> {
     let exe_path = bin_dir.join("go2rtc.exe");
-    if !exe_path.exists() {
+    if !ensure_component(app, bin_dir, "go2rtc.exe")? {
         download_go2rtc_win64(bin_dir, &exe_path).await?;
     }
     let cfg_path = bin_dir.join("go2rtc.yaml");
@@ -2008,7 +2107,7 @@ async fn spawn_fresh_go2rtc(
     Err("本地流媒体服务启动超时".to_string())
 }
 
-async fn ensure_go2rtc_running() -> Result<(), String> {
+async fn ensure_go2rtc_running(app: &AppHandle) -> Result<(), String> {
     let bin_dir = bin_directory()?;
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("创建组件目录失败：{e}"))?;
     let http = reqwest::Client::builder()
@@ -2016,7 +2115,7 @@ async fn ensure_go2rtc_running() -> Result<(), String> {
         .timeout(Duration::from_millis(800))
         .build()
         .map_err(|e| e.to_string())?;
-    let ffmpeg_bin = resolve_ffmpeg_bin(&bin_dir);
+    let ffmpeg_bin = resolve_ffmpeg_bin(app, &bin_dir)?;
 
     if let Some(record) = existing_owned_record() {
         let probe = probe_owned(&http, &record.session).await;
@@ -2055,7 +2154,7 @@ async fn ensure_go2rtc_running() -> Result<(), String> {
         }
     }
 
-    spawn_fresh_go2rtc(&http, &bin_dir, &ffmpeg_bin).await
+    spawn_fresh_go2rtc(app, &http, &bin_dir, &ffmpeg_bin).await
 }
 
 #[derive(Serialize)]
@@ -2065,9 +2164,9 @@ struct Go2RtcEndpoint {
 }
 
 #[tauri::command]
-async fn go2rtc_endpoint() -> Result<Go2RtcEndpoint, String> {
+async fn go2rtc_endpoint(app: AppHandle) -> Result<Go2RtcEndpoint, String> {
     let _bridge_order = CAMERA_BRIDGE_LOCK.lock().await;
-    ensure_go2rtc_running().await?;
+    ensure_go2rtc_running(&app).await?;
     let session = current_go2rtc_session()?;
     let origin = format!("http://{}", session.api_listen);
     if !origin.starts_with("http://127.0.0.1:") || !is_acceptable_go2rtc_listen(&session.api_listen) {
@@ -2954,5 +3053,64 @@ mod tests {
         for port in ports {
             assert!(!FORBIDDEN_GO2RTC_PORTS.contains(&port));
         }
+    }
+
+    #[test]
+    fn xiaomi_quality_maps_to_go2rtc_subtype() {
+        assert_eq!(xiaomi_camera_subtype(None), Ok("hd"));
+        assert_eq!(xiaomi_camera_subtype(Some("auto")), Ok("auto"));
+        assert_eq!(xiaomi_camera_subtype(Some("sd")), Ok("sd"));
+        assert_eq!(xiaomi_camera_subtype(Some("hd")), Ok("hd"));
+        assert_eq!(xiaomi_camera_subtype(Some("max")), Ok("3"));
+        assert!(xiaomi_camera_subtype(Some("4k")).is_err());
+    }
+
+    #[test]
+    fn bundled_component_copy_fills_a_missing_file_and_keeps_an_existing_one() {
+        let root = std::env::temp_dir().join(format!("mbm-camera-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&root).expect("temp dir");
+        let src = root.join("go2rtc.exe");
+        std::fs::write(&src, b"bundled").expect("write source");
+        let dest = bin.join("go2rtc.exe");
+
+        copy_bundled_component(&src, &dest).expect("copy missing component");
+        assert_eq!(std::fs::read(&dest).expect("read copied file"), b"bundled");
+
+        std::fs::write(&dest, b"updated").expect("write destination");
+        copy_bundled_component(&src, &dest).expect("keep existing component");
+        assert_eq!(std::fs::read(&dest).expect("read existing file"), b"updated");
+
+        let leftovers = std::fs::read_dir(&bin)
+            .expect("read bin dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".staging-"))
+            .count();
+        assert_eq!(leftovers, 0, "staging files must not survive a copy");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bundled_component_lookup_uses_the_camera_bin_resource_folder() {
+        let root = std::env::temp_dir().join(format!("mbm-resource-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let camera_bin = root.join(CAMERA_COMPONENT_DIR);
+        std::fs::create_dir_all(&camera_bin).expect("resource dir");
+        let component = camera_bin.join("go2rtc.exe");
+        std::fs::write(&component, b"exe").expect("write component");
+
+        assert_eq!(
+            bundled_component_source(&root, "go2rtc.exe"),
+            Some(component)
+        );
+        assert_eq!(bundled_component_source(&root, "missing.exe"), None);
+        std::fs::create_dir(camera_bin.join("ffmpeg-silent.exe")).expect("directory placeholder");
+        assert_eq!(
+            bundled_component_source(&root, "ffmpeg-silent.exe"),
+            None,
+            "a directory must not be copied as a helper binary"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
