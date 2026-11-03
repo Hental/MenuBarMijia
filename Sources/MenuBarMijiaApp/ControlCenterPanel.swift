@@ -1705,6 +1705,23 @@ public struct ControlCenterPanel: View {
         roomPill(title: roomDisplayTitle(room), roomId: room.id)
             .id(room.id)
             .offset(x: roomDragOffset(for: room.id))
+            // Measured outside the drag offset and the jiggle, like device cards: those transforms
+            // would otherwise feed back into `roomDragOffset` (the reported frame would already
+            // include the offset) and the pill would jump.
+            .background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named(RoomSpace.name))
+                    Color.clear.preference(
+                        key: RoomFramesKey.self,
+                        value: [room.id: CGRect(
+                            x: frame.minX.rounded(),
+                            y: frame.minY.rounded(),
+                            width: frame.width.rounded(),
+                            height: frame.height.rounded()
+                        )]
+                    )
+                }
+            }
             .zIndex(draggingRoomId == room.id ? 2 : 0)
     }
 
@@ -2015,22 +2032,6 @@ public struct ControlCenterPanel: View {
             }
         }
         .animation(AppleMotion.snappySpring, value: isSelected)
-        .background {
-            GeometryReader { geo in
-                let frame = geo.frame(in: .named(RoomSpace.name))
-                Color.clear.preference(
-                    key: RoomFramesKey.self,
-                    value: roomId.map {
-                        [$0: CGRect(
-                            x: frame.minX.rounded(),
-                            y: frame.minY.rounded(),
-                            width: frame.width.rounded(),
-                            height: frame.height.rounded()
-                        )]
-                    } ?? [:]
-                )
-            }
-        }
         .contextMenu {
             if let roomId {
                 Button {
