@@ -176,6 +176,8 @@ if overlap:
         sys.exit("❌ Ed25519 过渡公开钥不能与当前签名公钥相同")
 PY
     python3 scripts/update_manifest.py self-test
+    # 发布附件集合（含两端 SBOM）是发版硬门槛，用 fixture 验证严格清单不会悄悄放宽。
+    bash scripts/test_check_release.sh
 fi
 
 if [ "$LINT_ONLY" = "1" ]; then

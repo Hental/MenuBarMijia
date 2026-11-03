@@ -68,6 +68,37 @@ A fix, when one ships, ships only as a newer GitHub Release marked Latest.
 
 Ask in the private report before you publish any details.
 
+## Verifying release artifacts
+
+The `Release` workflow attaches build provenance attestations and a software bill of materials (SBOM) to every release.
+
+The attestations cover the three installers:
+
+- `MenuBarMijia-<version>.dmg`
+- `MenuBarMijia-<version>-windows-x64-setup.exe`
+- `MenuBarMijia-<version>-windows-x64.msi`
+
+Verify a downloaded installer with [GitHub CLI](https://cli.github.com) 2.49 or newer:
+
+```bash
+gh attestation verify MenuBarMijia-<version>.dmg --repo jryang1997/MenuBarMijia
+```
+
+The command exits non-zero when the file is not the byte-for-byte artifact built by this repository.
+
+Add `--signer-workflow jryang1997/MenuBarMijia/.github/workflows/release.yml` to also require the `Release` workflow as the signer.
+
+The SBOMs are SPDX 2.3 JSON files:
+
+- `MenuBarMijia-<version>-macos.spdx.json` describes the `.app` bundle inside the DMG, including the bundled `go2rtc`.
+- `MenuBarMijia-<version>-windows-x64.spdx.json` describes the npm and Cargo dependency graph of the Windows build together with the EXE and MSI it produced.
+
+Both are generated in the release build with [syft](https://github.com/anchore/syft) and attached next to the installers.
+
+These artifacts do not replace the checks under [Update chain](#update-chain).
+
+The `.sha256` files and the Ed25519 manifest signature remain the checks the app itself enforces before installing an update.
+
 ## In scope
 
 A vulnerability is in scope when it is in one of the four areas below.

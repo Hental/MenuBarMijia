@@ -225,6 +225,8 @@ To help prevent mistakes, low-confidence AI suggestions and actions such as turn
 
 The macOS app is not yet notarized by Apple, so you may need to allow it in System Settings the first time. Windows may show a SmartScreen prompt. macOS updates are verified with an Ed25519 public key; the signing key stays offline. See [ADR-0007](docs/adr/0007-lan-direct-deferred.md) for more on connection options.
 
+Each release also publishes GitHub build provenance attestations for the installers and SPDX SBOMs for both platforms. `gh attestation verify <installer> --repo jryang1997/MenuBarMijia` checks that the file was built by this repository's release workflow. See [verifying release artifacts](SECURITY.md#verifying-release-artifacts).
+
 To report a vulnerability in private, follow [Security policy](SECURITY.md).
 
 ---
