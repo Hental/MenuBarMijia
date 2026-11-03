@@ -538,6 +538,7 @@ final class CameraPictureInPicture: NSObject {
                 if changed { self.onStateChange?() }
                 if possible, self.wantsStart, let controller = self.controller, !controller.isPictureInPictureActive {
                     self.wantsStart = false
+                    self.setHostSuspended(true)
                     controller.startPictureInPicture()
                 }
             }
@@ -547,9 +548,9 @@ final class CameraPictureInPicture: NSObject {
     func start() {
         wantsStart = true
         playbackPause.setRestoreRequested(false)
-        setHostSuspended(true)
         guard let controller, controller.isPictureInPicturePossible, !controller.isPictureInPictureActive else { return }
         wantsStart = false
+        setHostSuspended(true)
         controller.startPictureInPicture()
     }
 
