@@ -177,7 +177,8 @@ extension HomeStore {
                 // command must not hide the device's own property snapshot.
                 if let lockTime = optimisticLockUntil[incoming.id], now < lockTime,
                    let local = existingById[incoming.id],
-                   !waitingDeviceIds.contains(incoming.id) {
+                   !waitingDeviceIds.contains(incoming.id),
+                   readBackInFlightTicket[incoming.id] == nil {
                     merged.append(local)
                 } else {
                     merged.append(incoming)

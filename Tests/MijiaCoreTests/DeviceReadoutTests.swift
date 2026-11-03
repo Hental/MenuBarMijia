@@ -179,6 +179,35 @@ struct DeviceReadoutTests {
         #expect(store.toastNotice == nil, "The older retry must not report failure after a newer toggle confirmed")
     }
 
+    @Test("An echo retry still applies the device snapshot under an older optimistic lock")
+    func echoRetryBypassesOlderOptimisticLock() async throws {
+        let lamp = light(on: true)
+        let provider = EchoHomeProvider(snapshot: SynthesizedHome(
+            rooms: [RoomArea(id: "room", name: "书房", sortOrder: 0)],
+            devices: [lamp]
+        ))
+        let suite = "test.readout.echo-lock.\(UUID().uuidString)"
+        let store = HomeStore(provider: provider, defaultsSuiteName: suite)
+        store.holdReadBackEcho = true
+        for _ in 0..<50 where store.devices.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        _ = store.lockOptimistic("lamp", duration: .seconds(5))
+        let toggle = store.togglePrimary(store.devices[0])
+        for _ in 0..<50 where !store.isHoldingReadBackEcho {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await provider.publishCommand()
+        for _ in 0..<50 where store.devices[0].isActiveOn {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.devices[0].isActiveOn == false)
+        store.releaseReadBackEcho()
+        #expect(await toggle?.value == true)
+        #expect(store.devices[0].isActiveOn == false)
+        #expect(store.toastNotice == nil)
+    }
+
     @Test("An accepted power survives a stale snapshot during the read-back fallback lock")
     func unavailableReadBackLocksAcceptedPower() async throws {
         let lamp = light(on: false)

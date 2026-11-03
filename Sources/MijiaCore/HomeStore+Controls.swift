@@ -147,14 +147,29 @@ extension HomeStore {
         let ticket = nextReadBackTicket
         readBackOwner[deviceId] = ticket
         latestReadBackTicket[deviceId] = ticket
+        readBackInFlightTicket[deviceId] = ticket
         waitingDeviceIds.insert(deviceId)
         return ticket
     }
 
-    private func finishReadBack(_ deviceId: String, ticket: UInt64) {
+    /// Releases the tap and the waiting label before the echo retry, while the read-back stays
+    /// in flight so its snapshots still bypass an older optimistic lock.
+    private func releaseReadBackOwner(_ deviceId: String, ticket: UInt64) {
         guard readBackOwner[deviceId] == ticket else { return }
         readBackOwner[deviceId] = nil
         waitingDeviceIds.remove(deviceId)
+    }
+
+    private func finishReadBack(_ deviceId: String, ticket: UInt64) {
+        if readBackOwner[deviceId] == ticket {
+            readBackOwner[deviceId] = nil
+            waitingDeviceIds.remove(deviceId)
+        }
+        // The echo release may already have cleared the owner; only the latest task clears
+        // the lock exemption, so a newer toggle keeps it alive.
+        if readBackInFlightTicket[deviceId] == ticket {
+            readBackInFlightTicket[deviceId] = nil
+        }
     }
 
     /// Applies a provider snapshot when one was published. Providers with no property read
@@ -178,7 +193,7 @@ extension HomeStore {
         case .published:
             guard snapshotGeneration != before else { return .unmatched }
             if powerMatches(deviceId, requested: requested) { return .matched }
-            finishReadBack(deviceId, ticket: ticket)
+            releaseReadBackOwner(deviceId, ticket: ticket)
             let again = snapshotGeneration
             if holdReadBackEcho {
                 isHoldingReadBackEcho = true

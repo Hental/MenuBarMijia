@@ -69,6 +69,9 @@ public final class HomeStore {
     var isHoldingReadBackEcho = false
     var readBackEchoHold: CheckedContinuation<Void, Never>?
     var readBackOwner: [String: UInt64] = [:]
+    /// Ticket of the read-back task still running, including the echo retry after the UI
+    /// waiting state is released. Snapshots for these ids bypass an older optimistic lock.
+    var readBackInFlightTicket: [String: UInt64] = [:]
     /// Latest ticket per device. Unlike `readBackOwner`, this survives a completed newer toggle,
     /// so an older echo retry can still tell that it has been superseded (#201 review).
     var latestReadBackTicket: [String: UInt64] = [:]
