@@ -64,14 +64,16 @@ final class UnsupportedDeviceScanner {
 
         if scanMi {
             do {
-                results += try await Self.scanMiCloud()
+                let scanned = try await Self.scanMiCloud()
+                results.append(contentsOf: scanned)
             } catch {
                 errors.append((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
         }
         if scanHA {
             do {
-                results += try await Self.scanHomeAssistant(baseURL: store.serverURLString)
+                let scanned = try await Self.scanHomeAssistant(baseURL: store.serverURLString)
+                results.append(contentsOf: scanned)
             } catch {
                 errors.append((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
