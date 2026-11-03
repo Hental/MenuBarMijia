@@ -925,7 +925,7 @@ struct MenuBarPanelControllerTests {
         let roomScrollView = try #require(findRoomScrollView(in: hosting))
         #expect(roomScrollView.contentView.bounds.origin.x < 1)
 
-        store.selectedRoomId = "r8"
+        store.selectRoom("r8")
         try await Task.sleep(for: .milliseconds(80))
         Self.pumpMainRunLoop()
         hosting.layoutSubtreeIfNeeded()
@@ -933,7 +933,7 @@ struct MenuBarPanelControllerTests {
         window.displayIfNeeded()
         #expect(roomScrollView.contentView.bounds.origin.x > 40)
 
-        store.selectedRoomId = nil
+        store.selectRoom(nil)
         try await Task.sleep(for: .milliseconds(80))
         Self.pumpMainRunLoop()
         hosting.layoutSubtreeIfNeeded()

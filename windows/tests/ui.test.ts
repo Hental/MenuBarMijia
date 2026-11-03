@@ -3013,3 +3013,39 @@ describe("只显示在线设备 (#158)", () => {
     assert.deepEqual(tileIds(), ["offline-living", "offline-study", "online-living"]);
   });
 });
+
+describe("device kind filter", () => {
+  function tileIds(): string[] {
+    return Array.from(document.querySelectorAll<HTMLElement>("[data-tile-id]"), (node) => node.dataset.tileId ?? "");
+  }
+
+  it("shows only lights across rooms, then a room pill clears the kind", async () => {
+    startDemo();
+    await setImmediate();
+    const before = Object.keys(JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}")).sort();
+
+    await click('[data-kind="light"]');
+    assert.deepEqual(tileIds().sort(), ["light.living_ceiling", "light.study_desk"]);
+    assert.match(element('[data-tile-id="light.living_ceiling"] .cc-tile-status').textContent ?? "", /客厅/);
+    assert.equal(element('[data-room="全部"]').getAttribute("aria-pressed"), "false");
+    assert.equal(element('[data-room="全部"]').classList.contains("is-active"), false);
+
+    await click('[data-room="全部"]');
+    assert.ok(tileIds().includes("climate.living_ac"));
+    assert.ok(tileIds().includes("fan.bedroom_standing"));
+    assert.equal(element('[data-kind="light"]').getAttribute("aria-pressed"), "false");
+
+    await click('[data-kind="light"]');
+    await click('[data-room="客厅"]');
+    assert.ok(tileIds().includes("climate.living_ac"));
+    assert.ok(tileIds().includes("light.living_ceiling"));
+    assert.ok(!tileIds().includes("light.study_desk"));
+    assert.equal(element('[data-kind="light"]').getAttribute("aria-pressed"), "false");
+    assert.equal(element('[data-room="客厅"]').getAttribute("aria-pressed"), "true");
+
+    const stored = JSON.parse(localStorage.getItem("menumijia.windows.settings.v2") ?? "{}") as Record<string, unknown>;
+    assert.deepEqual(Object.keys(stored).sort(), before);
+    assert.equal("listCut" in stored, false);
+    assert.equal(JSON.stringify(stored).includes("deviceKind"), false);
+  });
+});

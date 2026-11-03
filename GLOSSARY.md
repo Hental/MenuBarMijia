@@ -64,6 +64,10 @@ _Avoid_: Local scene（本地场景）、Custom script（自定义脚本）
 「全关」实际会关闭的设备集合（`HomeStore.allOffTargets`）：当前视图内、开启中、且能从面板关闭的设备。默认不参与全关的类别（插座、扫地机、摄像机，`joinsAllOffByDefault` 返回 false）可由用户按设备覆盖（`setJoinsAllOff`），覆盖结果持久化。
 _Avoid_: All devices（全部设备）
 
+**DeviceListCut（房间或类型筛选）**：
+当前家庭设备列表上的一次性筛选。同一时刻只能是全部设备、一个房间，或一种设备类型（灯、空调、插座等，各房间合在一屏）。不写入磁盘。选中类型时 `selectedRoomId` 仍为空，常用、分组、房间角标和磁贴尺寸继续按全部房间那一页计算。点「全部」、点某个房间，或切换家庭，会取消类型筛选。
+_Avoid_: IntentDeviceCategory（意图设备大类）、Persistent filter（持久筛选）
+
 **IntentPlan（意图执行计划）**：
 自然语言指令经本地规则解析（`LocalIntentParser`）或远端大模型回退（`ModelIntentResolver`）后生成的结构化设备操作列表（`[DeviceIntent]`）与简短反馈文案，经能力校验后由 `HomeStore` 并发下发并支持多设备一键撤销。
 _Avoid_: Prompt output（模型输出）、Action script（动作脚本）
