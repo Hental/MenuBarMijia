@@ -91,7 +91,10 @@ struct ClimatePanelModule: View {
             }
 
             Button {
-                guard !isEditingLayout, (spec.powerWritable || spec.temperatureWritable || !modes.isEmpty) else { return }
+                guard !isEditingLayout, (
+                    spec.powerWritable || spec.temperatureWritable || !modes.isEmpty
+                        || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
+                ) else { return }
                 withAnimation(AppleMotion.snappySpring) { store.toggleExpanded(device.id) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -111,7 +114,8 @@ struct ClimatePanelModule: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .panelHelp(spec.powerWritable || spec.temperatureWritable
+            .panelHelp(spec.powerWritable || spec.temperatureWritable || !modes.isEmpty
+                || !spec.availableFanModes.isEmpty || !spec.availableSwingModes.isEmpty
                 ? L10n.tr("展开模式与风速", "Show modes and fan speed")
                 : L10n.tr("只读状态", "Read only"))
 

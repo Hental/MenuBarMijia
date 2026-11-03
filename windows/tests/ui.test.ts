@@ -893,6 +893,97 @@ describe("Unverified MIoT fallback controls (#154)", () => {
     assert.equal(document.querySelector("[data-fanpercent]"), null);
     assert.match(document.body.textContent ?? "", /PM2\.5 12/);
   });
+
+  it("opens a read-only camera and expands a climate tile that can only change fan speed", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      isCompactGridMode: false,
+      climatePanel: true,
+      cachedXiaomiDevices: [
+        {
+          id: "cam-ro",
+          name: "门口摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-ro:2",
+            isOn: true,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "cam-off",
+          name: "休眠摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-off:2",
+            isOn: false,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "ac-fan",
+          name: "客厅空调",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "xiaomi.aircondition.mc5",
+          isOnline: true,
+          kind: {
+            kind: "climate",
+            entityId: "miot:ac-fan:2",
+            isOn: true,
+            hvacMode: "fan_only",
+            availableModes: [],
+            targetTemperature: 26,
+            currentTemperature: null,
+            minTemp: 16,
+            maxTemp: 30,
+            step: 1,
+            fanMode: "Low",
+            availableFanModes: ["Low", "High"],
+            powerWritable: false,
+            temperatureWritable: false,
+          },
+        },
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    await click('[data-body-device="cam-ro"]');
+    assert.ok(document.querySelector(".cc-camera-live-sheet"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    assert.ok(document.querySelector("#btn-toggle-camera-url"));
+
+    await click('[data-body-device="cam-off"]');
+    assert.ok(document.querySelector(".cc-camera-stage.is-sleeping"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-off"]'), null);
+
+    assert.ok(document.querySelector('[data-expand-device="ac-fan"]'));
+    assert.equal(document.querySelector('[data-toggle-device="ac-fan"]'), null);
+    assert.equal(document.querySelector("[data-acstep]"), null);
+    await click('[data-expand-device="ac-fan"]');
+    assert.ok(document.querySelector('[data-acfan="ac-fan:Low"]'));
+  });
 });
 
 describe("Xiaomi cloud region switch (#37)", () => {

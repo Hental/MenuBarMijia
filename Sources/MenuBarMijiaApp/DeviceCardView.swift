@@ -269,7 +269,7 @@ public struct DeviceCardView: View {
                 }
             }
 
-            if case .camera = device.kind, device.kind.canTogglePower {
+            if case .camera = device.kind {
                 Button {
                     store.openCameraLiveView(device.id)
                 } label: {
@@ -326,15 +326,17 @@ public struct DeviceCardView: View {
 
     private var bentoBody: some View {
         Button {
-            guard !isEditingLayout, device.kind.canTogglePower else { return }
+            guard !isEditingLayout else { return }
             if case .camera(let cam) = device.kind {
-                if !cam.isOn {
+                if device.kind.canTogglePower, !cam.isOn {
                     withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
                 }
                 store.openCameraLiveView(device.id)
-            } else {
-                withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
+                if device.isOnline, device.kind.canTogglePower { SoundFeedback.playSuccess() }
+                return
             }
+            guard device.kind.canTogglePower else { return }
+            withAnimation(AppleMotion.snappySpring) { _ = store.togglePrimary(device) }
             if device.isOnline { SoundFeedback.playSuccess() }
         } label: {
             VStack(alignment: .leading, spacing: 0) {
@@ -373,9 +375,11 @@ public struct DeviceCardView: View {
         }
         .buttonStyle(PressableCardButtonStyle(scaleAmount: 0.95))
         .accessibilityLabel(Text(accessibilitySummary))
-        .accessibilityHint(Text(device.isPrimaryToggleable
-            ? L10n.tr("切换开关", "Toggle power")
-            : L10n.tr("只读状态", "Read only")))
+        .accessibilityHint(Text(isCameraDevice
+            ? L10n.tr("打开实时画面", "Open live view")
+            : device.isPrimaryToggleable
+                ? L10n.tr("切换开关", "Toggle power")
+                : L10n.tr("只读状态", "Read only")))
     }
 
     // MARK: - Compact 2-Column Header (Left Icon Toggles, Right Area Expands)
@@ -383,16 +387,20 @@ public struct DeviceCardView: View {
     private var compactHeaderRow: some View {
         HStack(spacing: 8) {
             Button {
-                guard !isEditingLayout, device.isPrimaryToggleable else { return }
-                withAnimation(AppleMotion.snappySpring) {
-                    if case .camera(let cam) = device.kind {
-                        if !cam.isOn {
+                guard !isEditingLayout else { return }
+                if case .camera(let cam) = device.kind {
+                    withAnimation(AppleMotion.snappySpring) {
+                        if device.kind.canTogglePower, !cam.isOn {
                             _ = store.togglePrimary(device)
                         }
                         store.openCameraLiveView(device.id)
-                    } else {
-                        _ = store.togglePrimary(device)
                     }
+                    if device.isOnline, device.kind.canTogglePower { SoundFeedback.playSuccess() }
+                    return
+                }
+                guard device.isPrimaryToggleable else { return }
+                withAnimation(AppleMotion.snappySpring) {
+                    _ = store.togglePrimary(device)
                 }
                 if device.isOnline { SoundFeedback.playSuccess() }
             } label: {
@@ -403,22 +411,22 @@ public struct DeviceCardView: View {
                 ? L10n.tr("\(device.name) 开关", "\(device.name) power")
                 : accessibilitySummary))
             .panelHelp(
-                device.isPrimaryToggleable
-                    ? (isCameraDevice
-                        ? L10n.tr("点击打开摄像头实时小窗", "Click to open live camera window")
-                        : L10n.tr("点击直接切换开关", "Click to toggle power"))
-                    : L10n.tr("只读状态", "Read only")
+                isCameraDevice
+                    ? L10n.tr("点击打开摄像头实时小窗", "Click to open live camera window")
+                    : device.isPrimaryToggleable
+                        ? L10n.tr("点击直接切换开关", "Click to toggle power")
+                        : L10n.tr("只读状态", "Read only")
             )
 
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
-                    if case .camera = device.kind, device.kind.canTogglePower {
-                        if case .camera(let cam) = device.kind, !cam.isOn {
+                    if case .camera(let cam) = device.kind {
+                        if device.kind.canTogglePower, !cam.isOn {
                             _ = store.togglePrimary(device)
                         }
                         store.openCameraLiveView(device.id)
-                        if device.isOnline { SoundFeedback.playSuccess() }
+                        if device.isOnline, device.kind.canTogglePower { SoundFeedback.playSuccess() }
                     } else if device.hasDetailDrawer {
                         store.toggleExpanded(device.id)
                     } else if device.kind.canTogglePower {
@@ -470,8 +478,8 @@ public struct DeviceCardView: View {
             Button {
                 guard !isEditingLayout else { return }
                 withAnimation(AppleMotion.snappySpring) {
-                    if case .camera = device.kind, device.kind.canTogglePower {
-                        if case .camera(let cam) = device.kind, !cam.isOn {
+                    if case .camera(let cam) = device.kind {
+                        if device.kind.canTogglePower, !cam.isOn {
                             _ = store.togglePrimary(device)
                         }
                         store.openCameraLiveView(device.id)
@@ -523,16 +531,18 @@ public struct DeviceCardView: View {
             }
             .buttonStyle(PressableCardButtonStyle())
             .accessibilityLabel(Text(accessibilitySummary))
-            .accessibilityHint(Text(device.isPrimaryToggleable
-                ? L10n.tr("切换开关", "Toggle power")
-                : L10n.tr("只读状态", "Read only")))
+            .accessibilityHint(Text(isCameraDevice
+                ? L10n.tr("打开实时画面", "Open live view")
+                : device.isPrimaryToggleable
+                    ? L10n.tr("切换开关", "Toggle power")
+                    : L10n.tr("只读状态", "Read only")))
 
             // Quick Index Pill + Favorite Star + Drawer Chevron
             HStack(spacing: 4) {
                 if let quickIndex, shouldShowQuickBadge {
                     quickIndexPill(quickIndex)
                 }
-                if case .camera = device.kind, device.kind.canTogglePower {
+                if case .camera = device.kind {
                     Button {
                         guard !isEditingLayout else { return }
                         store.openCameraLiveView(device.id)

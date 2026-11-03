@@ -3560,7 +3560,8 @@ export class MenuMijiaWindowsApp {
     const running = dev.isOnline && k.isOn && k.hvacMode !== "off";
     const powerWritable = k.powerWritable !== false;
     const temperatureWritable = k.temperatureWritable !== false;
-    const open = (temperatureWritable || k.availableModes.length > 0 || k.availableFanModes.length > 0) && (forceOpen || this.expandedDeviceId === dev.id);
+    const canExpand = temperatureWritable || k.availableModes.length > 0 || k.availableFanModes.length > 0;
+    const open = canExpand && (forceOpen || this.expandedDeviceId === dev.id);
     const id = this.escapeHtml(dev.id);
     const modeLabel: Record<string, string> = { cool: t("制冷"), heat: t("制热"), dry: t("除湿"), fan_only: t("送风"), auto: t("自动") };
     const status = running
@@ -3600,9 +3601,9 @@ export class MenuMijiaWindowsApp {
         ${badge}
         <div class="cc-climate-strip">
           ${power}
-          <button class="cc-climate-name" ${open || temperatureWritable || k.availableModes.length > 0 ? `data-expand-device="${id}"` : ""} aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(subtitle)}" aria-expanded="${open}">
+          <button class="cc-climate-name" ${canExpand ? `data-expand-device="${id}"` : ""} aria-label="${this.escapeHtml(dev.name)}，${this.escapeHtml(subtitle)}" aria-expanded="${open}">
             <span class="cc-tile-name">${this.escapeHtml(dev.name)}</span>
-            <span class="cc-tile-status">${this.escapeHtml(subtitle)} ${!(temperatureWritable || k.availableModes.length > 0) || forceOpen ? "" : `<i class="cc-mini-caret ${open ? "is-open" : ""}">${SF_ICONS.chevronDown}</i>`}</span>
+            <span class="cc-tile-status">${this.escapeHtml(subtitle)} ${!canExpand || forceOpen ? "" : `<i class="cc-mini-caret ${open ? "is-open" : ""}">${SF_ICONS.chevronDown}</i>`}</span>
           </button>
           ${steps}
         </div>
@@ -4403,11 +4404,16 @@ export class MenuMijiaWindowsApp {
 
     let viewportHtml = "";
     if (!k.isOn) {
+      const canWake = k.powerWritable !== false;
       viewportHtml = `
         <div class="cc-camera-stage is-sleeping">
           <strong>${t("摄像机处于物理休眠状态")}</strong>
-          <p>${t("镜头已遮蔽，点击下方唤醒后即可查看实时画面")}</p>
-          <button class="cc-btn-primary" data-toggle-device="${id}">${t("唤醒镜头并观看")}</button>
+          ${
+            canWake
+              ? `<p>${t("镜头已遮蔽，点击下方唤醒后即可查看实时画面")}</p>
+          <button class="cc-btn-primary" data-toggle-device="${id}">${t("唤醒镜头并观看")}</button>`
+              : ""
+          }
         </div>
       `;
     } else if (this.liveCameraMode) {
@@ -5337,8 +5343,7 @@ export class MenuMijiaWindowsApp {
         const k = dev.kind.kind;
         const writable = deviceCanTogglePower(dev);
         if (k === "camera") {
-          if (!writable) return;
-          if (dev.isOnline && !dev.kind.isOn) {
+          if (writable && dev.isOnline && !dev.kind.isOn) {
             toggleDeviceById(id);
           }
           this.openCameraLiveView(id);
