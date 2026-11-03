@@ -222,6 +222,8 @@ To help prevent mistakes, low-confidence AI suggestions and actions such as turn
 
 The macOS app is not yet notarized by Apple, so you may need to allow it in System Settings the first time. Windows may show a SmartScreen prompt. macOS updates are verified with an Ed25519 public key; the signing key stays offline. See [ADR-0007](docs/adr/0007-lan-direct-deferred.md) for more on connection options.
 
+To report a vulnerability in private, follow [Security policy](SECURITY.md).
+
 ---
 
 ## Development & Architecture

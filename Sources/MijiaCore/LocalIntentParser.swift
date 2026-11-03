@@ -227,7 +227,7 @@ public enum LocalIntentParser {
             let onlyActive = ops.allSatisfy(\.isRelative)
             let candidates = devices.filter { dev in
                 let category = IntentDeviceCategory(dev)
-                guard dev.isOnline, category.isAssistantControllable else { return false }
+                guard dev.isOnline, category.isAssistantControllable, dev.kind.acceptsControlWrites else { return false }
                 if onlyActive && !dev.isActiveOn { return false }
                 if !matchedRooms.isEmpty && !roomDeviceIds.contains(dev.id) { return false }
                 if let wanted, !wanted.contains(category) { return false }
@@ -610,7 +610,7 @@ public enum LocalIntentParser {
             let onlyActive = ops.allSatisfy(\.isRelative)
             let candidates = devices.filter { dev in
                 let category = IntentDeviceCategory(dev)
-                guard dev.isOnline, category.isAssistantControllable else { return false }
+                guard dev.isOnline, category.isAssistantControllable, dev.kind.acceptsControlWrites else { return false }
                 if onlyActive && !dev.isActiveOn { return false }
                 if !matchedRoomKeys.isEmpty && !roomDeviceIds.contains(dev.id) { return false }
                 if let wanted, !wanted.contains(category) { return false }

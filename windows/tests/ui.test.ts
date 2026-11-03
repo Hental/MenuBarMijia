@@ -8,8 +8,9 @@ import { Window } from "happy-dom";
 
 import { installWindow } from "./dom.js";
 import { MenuMijiaWindowsApp } from "../src/ui/app.js";
+import { SKINS } from "../src/ui/panelPrefs.js";
 import { cloudFixture } from "./cloudFixture.js";
-import { MiCloudClient, MiotSynthesizer } from "../src/core/miCloudClient.js";
+import { MiCloudClient, MiotSynthesizer, inferFallbackSpec } from "../src/core/miCloudClient.js";
 import { MiCloudCrypto } from "../src/core/miCloudCrypto.js";
 import type { SmartDevice } from "../src/core/models.js";
 
@@ -948,6 +949,217 @@ describe("全关 (#23)", () => {
   });
 });
 
+describe("Unverified MIoT fallback controls (#154)", () => {
+  it("shows readings and hides power, preset, and setpoint controls", async () => {
+    const model = "zhimi.airp.fallback";
+    const spec = inferFallbackSpec({ model, name: "净化器" });
+    const fresh = MiotSynthesizer.synthesize(
+      [{ did: "fb-air", name: "净化器", model, isOnline: true, specType: null }],
+      [{ id: "r1", name: "客厅", dids: ["fb-air"] }],
+      { [model]: spec },
+      new Map<string, unknown>([
+        ["fb-air.2.1", true],
+        ["fb-air.2.4", 0],
+        ["fb-air.3.4", 12],
+      ]),
+    );
+    const verified = {
+      id: "real-light",
+      name: "书房灯",
+      roomId: "r1",
+      roomName: "书房",
+      model: "yeelink.light.ceiling22",
+      isOnline: true,
+      kind: {
+        kind: "light" as const,
+        entityId: "miot:real-light:2",
+        isOn: true,
+        brightnessPercent: 50,
+        colorTempKelvin: 4000,
+        minKelvin: 2700,
+        maxKelvin: 6500,
+        currentEffect: null,
+        availableEffects: [] as string[],
+      },
+    };
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      cachedXiaomiDevices: [...fresh.devices, verified],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="fb-air"]'), null);
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanosc]"), null);
+    assert.ok(document.querySelector('[data-toggle-device="real-light"]'));
+    assert.match(tile("fb-air"), /PM2\.5 12/);
+
+    await click('[data-body-device="fb-air"]');
+    assert.equal(document.querySelector("[data-fanpreset]"), null);
+    assert.equal(document.querySelector("[data-fanpercent]"), null);
+    assert.match(document.body.textContent ?? "", /PM2\.5 12/);
+  });
+
+  it("opens a read-only camera and expands a climate tile that can only change fan speed", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "xiaomiCloud",
+      hasCompletedOnboarding: true,
+      isCompactGridMode: false,
+      climatePanel: true,
+      cachedXiaomiDevices: [
+        {
+          id: "cam-ro",
+          name: "门口摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-ro:2",
+            isOn: true,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "cam-off",
+          name: "休眠摄像机",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "chuangmi.camera.061a01",
+          isOnline: true,
+          kind: {
+            kind: "camera",
+            entityId: "miot:cam-off:2",
+            isOn: false,
+            nightShot: null,
+            availableNightShots: [],
+            motionDetectionEntityId: null,
+            isMotionDetectionOn: null,
+            streamEntityId: null,
+            powerWritable: false,
+          },
+        },
+        {
+          id: "ac-fan",
+          name: "客厅空调",
+          roomId: "r1",
+          roomName: "客厅",
+          model: "xiaomi.aircondition.mc5",
+          isOnline: true,
+          kind: {
+            kind: "climate",
+            entityId: "miot:ac-fan:2",
+            isOn: true,
+            hvacMode: "fan_only",
+            availableModes: [],
+            targetTemperature: 26,
+            currentTemperature: null,
+            minTemp: 16,
+            maxTemp: 30,
+            step: 1,
+            fanMode: "Low",
+            availableFanModes: ["Low", "High"],
+            powerWritable: false,
+            temperatureWritable: false,
+          },
+        },
+      ],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await setImmediate();
+
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    await click('[data-body-device="cam-ro"]');
+    assert.ok(document.querySelector(".cc-camera-live-sheet"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-ro"]'), null);
+    assert.ok(document.querySelector("#btn-toggle-camera-url"));
+
+    await click('[data-body-device="cam-off"]');
+    assert.ok(document.querySelector(".cc-camera-stage.is-sleeping"));
+    assert.equal(document.querySelector('[data-toggle-device="cam-off"]'), null);
+
+    assert.ok(document.querySelector('[data-expand-device="ac-fan"]'));
+    assert.equal(document.querySelector('[data-toggle-device="ac-fan"]'), null);
+    assert.equal(document.querySelector("[data-acstep]"), null);
+    await click('[data-expand-device="ac-fan"]');
+    assert.ok(document.querySelector('[data-acfan="ac-fan:Low"]'));
+  });
+
+  it("does not dim a read-only light when the tile is dragged", async () => {
+    const skins = SKINS as Array<{ id: string; readonly title: string }>;
+    skins.push({ id: "frost", get title() { return "霜"; } });
+    try {
+      const light = (id: string, brightnessWritable: boolean) => ({
+        id,
+        name: id,
+        roomId: "r1",
+        roomName: "客厅",
+        model: "yeelink.light.ceiling22",
+        isOnline: true,
+        kind: {
+          kind: "light",
+          entityId: `miot:${id}:2`,
+          isOn: true,
+          brightnessPercent: 40,
+          colorTempKelvin: 4000,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+          powerWritable: true,
+          brightnessWritable,
+          colorWritable: false,
+        },
+      });
+      localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+        connectionMode: "xiaomiCloud",
+        hasCompletedOnboarding: true,
+        skin: "frost",
+        isCompactGridMode: false,
+        cachedXiaomiDevices: [light("ro-light", false), light("rw-light", true)],
+      }));
+      (globalThis as { CSS?: { escape: (value: string) => string } }).CSS = {
+        escape: (value: string) => value,
+      };
+      new MenuMijiaWindowsApp(element("#app"));
+      await setImmediate();
+
+      const fill = (id: string) =>
+        document.querySelector(`[data-tile-id="${id}"] .cc-tile-fill`)?.getAttribute("style") ?? "";
+      const drag = (id: string) => {
+        element(`[data-tile-id="${id}"]`).dispatchEvent(
+          new window.MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 10, clientY: 40 }),
+        );
+        window.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: 180, clientY: 42 }));
+      };
+
+      const before = fill("ro-light");
+      assert.match(before, /width:40%/);
+      drag("ro-light");
+      await setImmediate();
+      assert.equal(fill("ro-light"), before);
+      window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+      await setImmediate();
+      assert.doesNotMatch(document.body.textContent ?? "", /已将|控制失败/);
+
+      drag("rw-light");
+      await setImmediate();
+      assert.match(fill("rw-light"), /width:100%/);
+    } finally {
+      skins.pop();
+      delete (globalThis as { CSS?: unknown }).CSS;
+    }
+  });
+});
+
 describe("Xiaomi cloud region switch (#37)", () => {
   it("names the current region in the empty state and saves a newly selected region", async () => {
     localStorage.removeItem("menumijia.windows.update.v1");
@@ -1021,7 +1233,6 @@ describe("Update notice (#39)", () => {
   it("installs an update directly in-app when a verified installer asset is present", async () => {
     localStorage.removeItem("menumijia.windows.update.v1");
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-    const sha = "b".repeat(64);
     const expectedAsset = JSON.parse(
       readFileSync(new URL("./fixtures/windows-installer-asset.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
@@ -1035,7 +1246,10 @@ describe("Update notice (#39)", () => {
           browser_download_url:
             "https://github.com/jryang1997/MenuBarMijia/releases/download/v9.9.9/MenuBarMijia-9.9.9-windows-x64-setup.exe",
           size: 3145728,
-          digest: `sha256:${sha}`,
+        },
+        {
+          name: "MenuBarMijia-9.9.9.update.json",
+          size: 526,
         },
       ],
     });

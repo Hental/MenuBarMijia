@@ -418,7 +418,9 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
     assert.equal(purifierKind?.kind, "fan");
     if (purifierKind?.kind === "fan") {
       assert.equal(purifierKind.pm25Density, 18);
-      assert.deepEqual(purifierKind.availablePresetModes, ["Auto", "Sleep", "Favorite"]);
+      assert.deepEqual(purifierKind.availablePresetModes, []);
+      assert.equal(purifierKind.powerWritable, false);
+      assert.equal(purifierKind.availablePresetModes.length, 0);
     }
 
     const cameraFallback = inferFallbackSpec({ model: "chuangmi.camera.061a01", name: "摄像机" });
@@ -428,6 +430,119 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       new Map<string, unknown>([["did_fb_cam.2.1", true]]),
     );
     assert.equal(cameraKind?.kind, "camera");
+    if (cameraKind?.kind === "camera") {
+      assert.equal(cameraKind.powerWritable, false);
+      assert.deepEqual(cameraKind.availableNightShots, []);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setFanPower", entityId: "miot:did_fb_airp:2", isOn: false }, purifierFallback),
+    );
+
+    const vacuumFallback = inferFallbackSpec({ model: "roborock.vacuum.fallback", name: "扫地机" });
+    assert.equal(vacuumFallback.services.every((service) => service.actions.length === 0), true);
+    const vacuumKind = MiotSynthesizer.buildDeviceKind("fb_vac", vacuumFallback, new Map([["fb_vac.2.1", 2]]));
+    assert.equal(vacuumKind?.kind, "vacuum");
+    if (vacuumKind?.kind === "vacuum") assert.equal(vacuumKind.actionsWritable, false);
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "vacuumAction", entityId: "miot:fb_vac:2", action: "start" }, vacuumFallback),
+    );
+
+    const secondaryStart: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:vacuum:0000A006:roborock-s5:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:vacuum:00007810:roborock-s5:1",
+          properties: [
+            {
+              iid: 1,
+              type: "urn:miot-spec-v2:property:status:00000007:roborock-s5:1",
+              format: "uint8",
+              access: ["read", "notify"],
+              valueList: [{ value: 1, description: "Idle" }],
+            },
+          ],
+          actions: [],
+        },
+        {
+          iid: 3,
+          type: "urn:miot-spec-v2:service:vacuum-extend:00007810:roborock-s5:1",
+          properties: [],
+          actions: [
+            { iid: 1, type: "urn:miot-spec-v2:action:start-sweep:00002804:roborock-s5:1" },
+          ],
+        },
+      ],
+    };
+    const secondaryKind = MiotSynthesizer.buildDeviceKind("vac-ext", secondaryStart, new Map([["vac-ext.2.1", 1]]));
+    assert.equal(secondaryKind?.kind, "vacuum");
+    if (secondaryKind?.kind === "vacuum") assert.notEqual(secondaryKind.actionsWritable, false);
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "vacuumAction", entityId: "miot:vac-ext:2", action: "start" }, secondaryStart),
+      { kind: "action", call: { did: "vac-ext", siid: 3, aiid: 1, inputs: [] } },
+    );
+
+    const partialLight: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:light:0000A001:trusted:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:light:00007802:trusted:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:trusted:1", format: "bool", access: ["read"] },
+            { iid: 2, type: "urn:miot-spec-v2:property:brightness:0000000D:trusted:1", format: "uint8", access: ["read", "write"], valueRange: [1, 100, 1] },
+          ],
+          actions: [],
+        },
+      ],
+    };
+    const partialKind = MiotSynthesizer.buildDeviceKind("trusted_light", partialLight, new Map([["trusted_light.2.2", 40]]));
+    assert.equal(partialKind?.kind, "light");
+    if (partialKind?.kind === "light") {
+      assert.equal(partialKind.powerWritable, false);
+      assert.equal(partialKind.brightnessWritable, undefined);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setLightPower", entityId: "miot:trusted_light:2", isOn: false }, partialLight),
+    );
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "setLightBrightness", entityId: "miot:trusted_light:2", percent: 30 }, partialLight),
+      { kind: "setProps", writes: [{ did: "trusted_light", siid: 2, piid: 2, value: 30 }] },
+    );
+
+    const partialFan: MiotDeviceSpec = {
+      type: "urn:miot-spec-v2:device:fan:0000A005:trusted:1",
+      services: [
+        {
+          iid: 2,
+          type: "urn:miot-spec-v2:service:fan:00007808:trusted:1",
+          properties: [
+            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:trusted:1", format: "bool", access: ["read"] },
+            {
+              iid: 2,
+              type: "urn:miot-spec-v2:property:mode:00000008:trusted:1",
+              format: "uint8",
+              access: ["read", "write"],
+              valueList: [{ value: 1, description: "Natural" }],
+            },
+          ],
+          actions: [],
+        },
+      ],
+    };
+    const partialFanKind = MiotSynthesizer.buildDeviceKind("trusted_fan", partialFan, new Map([["trusted_fan.2.2", 1]]));
+    assert.equal(partialFanKind?.kind, "fan");
+    if (partialFanKind?.kind === "fan") {
+      assert.equal(partialFanKind.powerWritable, false);
+      assert.deepEqual(partialFanKind.availablePresetModes, ["Natural"]);
+    }
+    assert.throws(() =>
+      MiotCommandMapper.map({ kind: "setFanPower", entityId: "miot:trusted_fan:2", isOn: true }, partialFan),
+    );
+    assert.deepEqual(
+      MiotCommandMapper.map({ kind: "setFanPresetMode", entityId: "miot:trusted_fan:2", presetMode: "Natural" }, partialFan),
+      { kind: "setProps", writes: [{ did: "trusted_fan", siid: 2, piid: 2, value: 1 }] },
+    );
   });
 
   it("keeps the new fridge/kettle/motion/lock fallbacks read-only until a real spec confirms them (#148)", () => {
@@ -811,6 +926,13 @@ describe("MiotSynthesizer & MiotCommandMapper", () => {
       const fallbackDev = fallbackHome.devices.find((d) => d.id === entry.did);
       assert.ok(fallbackDev, `Missing fallback device ${entry.model}`);
       assert.deepEqual(fallbackDev.kind, entry.expectedKind, `fallback kind mismatch on ${entry.model}`);
+      const rejected = (entry as { rejectedCommands?: Array<Parameters<typeof MiotCommandMapper.map>[0]> }).rejectedCommands ?? [];
+      for (const command of rejected) {
+        assert.throws(
+          () => MiotCommandMapper.map(command, parsedFallback),
+          `${entry.model} ${command.kind} must not write through a fallback spec`,
+        );
+      }
     }
   });
 
@@ -1245,6 +1367,237 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
   });
 });
 
+type ConfirmationDeviceKind = "light" | "climate" | "fan" | "plug" | "vacuum" | "camera" | "sensor";
+
+interface ConfirmationFixtureDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly model: string;
+  readonly kind: ConfirmationDeviceKind;
+  readonly targetTemperature: number | null;
+}
+
+interface ConfirmationFixtureRow {
+  readonly id: string;
+  readonly device: ConfirmationFixtureDevice | null;
+  readonly operation: DeviceIntent["operation"];
+  readonly confirm: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isConfirmationDeviceKind(kind: string): kind is ConfirmationDeviceKind {
+  return (
+    kind === "light" ||
+    kind === "climate" ||
+    kind === "fan" ||
+    kind === "plug" ||
+    kind === "vacuum" ||
+    kind === "camera" ||
+    kind === "sensor"
+  );
+}
+
+function parseConfirmationOperation(raw: unknown, rowId: string): DeviceIntent["operation"] {
+  if (!isRecord(raw) || typeof raw.kind !== "string") throw new Error(`${rowId} operation`);
+  switch (raw.kind) {
+    case "power":
+      if (typeof raw.isOn !== "boolean") throw new Error(`${rowId} power`);
+      return { kind: "power", isOn: raw.isOn };
+    case "hvacMode":
+      if (typeof raw.mode !== "string") throw new Error(`${rowId} hvacMode`);
+      return { kind: "hvacMode", mode: raw.mode };
+    case "targetTemperature":
+      if (typeof raw.celsius !== "number") throw new Error(`${rowId} targetTemperature`);
+      return { kind: "targetTemperature", celsius: raw.celsius };
+    case "brightness":
+      if (typeof raw.percent !== "number") throw new Error(`${rowId} brightness`);
+      return { kind: "brightness", percent: raw.percent };
+    case "fanSpeed":
+      if (typeof raw.speed !== "string") throw new Error(`${rowId} fanSpeed`);
+      return { kind: "fanSpeed", speed: raw.speed };
+    default:
+      throw new Error(`${rowId} unknown operation ${raw.kind}`);
+  }
+}
+
+function parseConfirmationDevice(raw: unknown, rowId: string): ConfirmationFixtureDevice {
+  if (!isRecord(raw)) throw new Error(`${rowId} device`);
+  const id = raw.id;
+  const name = raw.name;
+  const model = raw.model;
+  const kind = raw.kind;
+  if (typeof id !== "string" || typeof name !== "string" || typeof model !== "string" || typeof kind !== "string") {
+    throw new Error(`${rowId} device fields`);
+  }
+  if (!isConfirmationDeviceKind(kind)) throw new Error(`${rowId} kind ${kind}`);
+  const hasSetpoint = Object.prototype.hasOwnProperty.call(raw, "targetTemperature");
+  if (kind === "climate") {
+    if (!hasSetpoint || typeof raw.targetTemperature !== "number") {
+      throw new Error(`${rowId} climate must include targetTemperature`);
+    }
+    return { id, name, model, kind, targetTemperature: raw.targetTemperature };
+  }
+  if (hasSetpoint) throw new Error(`${rowId} ${kind} must omit targetTemperature`);
+  return { id, name, model, kind, targetTemperature: null };
+}
+
+function parseConfirmationRows(raw: string): ConfirmationFixtureRow[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !Array.isArray(parsed.rows)) throw new Error("confirmation rows");
+  return parsed.rows.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") throw new Error(`row ${index} id`);
+    const id = entry.id;
+    if (entry.role !== "pin" && entry.role !== "new") throw new Error(`${id} role`);
+    if (!Object.prototype.hasOwnProperty.call(entry, "device")) throw new Error(`${id} device`);
+    if (typeof entry.confirm !== "boolean") throw new Error(`${id} confirm`);
+    return {
+      id,
+      device: entry.device === null ? null : parseConfirmationDevice(entry.device, id),
+      operation: parseConfirmationOperation(entry.operation, id),
+      confirm: entry.confirm,
+    };
+  });
+}
+
+function smartDeviceFromConfirmation(device: ConfirmationFixtureDevice): SmartDevice {
+  const common = {
+    id: device.id,
+    name: device.name,
+    roomId: "room",
+    roomName: "房间",
+    model: device.model,
+    isOnline: true,
+  };
+  switch (device.kind) {
+    case "light":
+      return {
+        ...common,
+        kind: {
+          kind: "light",
+          entityId: "e",
+          isOn: false,
+          brightnessPercent: null,
+          colorTempKelvin: null,
+          minKelvin: 2700,
+          maxKelvin: 6500,
+          currentEffect: null,
+          availableEffects: [],
+        },
+      };
+    case "climate": {
+      if (device.targetTemperature === null) throw new Error(`${device.id} climate setpoint`);
+      return {
+        ...common,
+        kind: {
+          kind: "climate",
+          entityId: "e",
+          isOn: false,
+          hvacMode: "off",
+          availableModes: ["off", "heat", "cool", "auto"],
+          targetTemperature: device.targetTemperature,
+          currentTemperature: null,
+          minTemp: 16,
+          maxTemp: 80,
+          step: 1,
+          fanMode: null,
+          availableFanModes: [],
+        },
+      };
+    }
+    case "fan":
+      return {
+        ...common,
+        kind: {
+          kind: "fan",
+          entityId: "e",
+          isOn: false,
+          percentage: null,
+          presetMode: null,
+          availablePresetModes: [],
+          isOscillating: null,
+          pm25Density: null,
+          airQuality: null,
+          temperature: null,
+          humidity: null,
+          filterLifePercent: null,
+        },
+      };
+    case "plug":
+      return {
+        ...common,
+        kind: {
+          kind: "plug",
+          switchEntityId: "e",
+          isOn: false,
+          powerWatts: null,
+          childLockEntityId: null,
+          isChildLocked: false,
+        },
+      };
+    case "vacuum":
+      return {
+        ...common,
+        kind: {
+          kind: "vacuum",
+          entityId: "e",
+          status: "idle",
+          battery: null,
+          modeEntityId: null,
+          currentMode: null,
+          availableModes: [],
+        },
+      };
+    case "camera":
+      return {
+        ...common,
+        kind: {
+          kind: "camera",
+          entityId: "e",
+          isOn: false,
+          nightShot: null,
+          availableNightShots: [],
+          motionDetectionEntityId: null,
+          isMotionDetectionOn: null,
+          streamEntityId: null,
+        },
+      };
+    case "sensor":
+      return {
+        ...common,
+        kind: {
+          kind: "sensor",
+          temperature: null,
+          humidity: null,
+          battery: null,
+          statusText: null,
+        },
+      };
+    default: {
+      const unreachable: never = device.kind;
+      return unreachable;
+    }
+  }
+}
+
+it("matches the shared confirmation table in confirmation_golden.json", () => {
+  const raw = readFileSync(resolve(process.cwd(), "../Tests/Fixtures/confirmation_golden.json"), "utf8");
+  const rows = parseConfirmationRows(raw);
+  assert.equal(rows.length, 50);
+  assert.equal(new Set(rows.map((row) => row.id)).size, rows.length);
+  for (const row of rows) {
+    if (row.device) assert.equal(row.device.id, row.id, row.id);
+    const devices = row.device ? [smartDeviceFromConfirmation(row.device)] : [];
+    const intent: DeviceIntent = { targetId: row.device?.id ?? "missing", operation: row.operation };
+    assert.equal(ModelActionPolicy.needsConfirmation(intent, devices), row.confirm, row.id);
+    if (row.device?.kind === "sensor") {
+      assert.deepEqual(IntentValidator.sanitize([intent], devices, []), [], row.id);
+    }
+  }
+});
+
 describe("AI provider detection and key transport (#19)", () => {
   const studyLight: SmartDevice = {
     id: "dev_ceiling",
@@ -1378,17 +1731,6 @@ describe("AI guesses below 80% and risky actions wait for a tap (#21)", () => {
     assert.equal(ModelActionPolicy.probabilityOf({ confidence: 50 }, "a"), 0.5);
     assert.equal(ModelActionPolicy.probabilityOf({ choice: "a" }, "a"), 0);
     assert.equal(ModelActionPolicy.probabilityOf(undefined, "a"), 0);
-  });
-
-  it("flags heater on but not heater off", () => {
-    const needs = (isOn: boolean) =>
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_heater", operation: { kind: "power", isOn } }, devices);
-    assert.equal(needs(true), true);
-    assert.equal(needs(false), false);
-    assert.equal(
-      ModelActionPolicy.needsConfirmation({ targetId: "dev_light", operation: { kind: "power", isOn: true } }, devices),
-      false
-    );
   });
 
   it("turns a 60% System One answer into a chip instead of running it", async () => {
@@ -1840,8 +2182,7 @@ describe("Windows update check (#39)", () => {
     assert.deepEqual(parseUpdateState("{bad json"), { lastCheckedAtMs: null, release: null });
   });
 
-  it("restores an installer asset cached before the camelCase field alignment", () => {
-    const sha = "c".repeat(64);
+  it("drops a cached installer that still points at a package signature", () => {
     const base =
       "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe";
     const legacyState = JSON.stringify({
@@ -1854,25 +2195,23 @@ describe("Windows update check (#39)", () => {
           name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
           downloadURL: base,
           sizeBytes: 2048,
-          sha256: sha,
+          sha256: "c".repeat(64),
           checksumURL: `${base}.sha256`,
           signatureURL: `${base}.ed25519.sig`,
         },
       },
     });
 
-    assert.deepEqual(parseUpdateState(legacyState).release?.installerAsset, {
-      name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
-      downloadUrl: base,
-      sizeBytes: 2048,
-      sha256: sha,
-      checksumUrl: `${base}.sha256`,
-      signatureUrl: `${base}.ed25519.sig`,
-    });
+    assert.equal(parseUpdateState(legacyState).release?.installerAsset, undefined);
   });
 
-  it("selects Windows setup.exe over MSI and requires SHA-256 or sidecar URL", () => {
+  it("prefers Windows setup.exe over MSI and requires the update manifest", () => {
     const sha = "a".repeat(64);
+    const manifest = {
+      name: "MenuBarMijia-1.2.0.update.json",
+      browser_download_url: "https://evil.example/MenuBarMijia-1.2.0.update.json",
+      size: 526,
+    };
     const fullPayload = JSON.stringify({
       tag_name: "v1.2.0",
       html_url: "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.2.0",
@@ -1887,17 +2226,17 @@ describe("Windows update check (#39)", () => {
         },
         {
           name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
-          browser_download_url:
-            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe",
+          browser_download_url: "https://evil.example/setup.exe",
           size: 2048,
           digest: `sha256:${sha.toUpperCase()}`,
         },
         {
-          name: "MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
+          name: "MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
           browser_download_url:
-            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
+            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
           size: 96,
         },
+        manifest,
       ],
     });
     const parsed = parseLatestRelease(fullPayload);
@@ -1907,15 +2246,18 @@ describe("Windows update check (#39)", () => {
       downloadUrl:
         "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe",
       sizeBytes: 2048,
-      sha256: sha,
-      checksumUrl:
-        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
-      signatureUrl:
-        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
+      manifestUrl:
+        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0.update.json",
     });
 
     const roundTrip = parseUpdateState(serializeUpdateState({ lastCheckedAtMs: 123, release: parsed }));
     assert.deepEqual(roundTrip.release, parsed);
+
+    const withoutManifest = JSON.parse(fullPayload) as { assets: unknown[] };
+    withoutManifest.assets = withoutManifest.assets.filter(
+      (asset) => (asset as { name?: string }).name !== "MenuBarMijia-1.2.0.update.json",
+    );
+    assert.equal(parseLatestRelease(JSON.stringify(withoutManifest))?.installerAsset, undefined);
   });
 });
 

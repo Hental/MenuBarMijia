@@ -173,6 +173,7 @@ public struct MiotDeviceSpec: Codable, Equatable, Sendable {
 
     /// Fallback spec for legacy Xiaomi models whose miot-spec.org instance remains in `debug`
     /// status (e.g. `yunmi.kettle.v1`) and is omitted from the `status=released` index.
+    /// These mappings are unverified, so every property stays read-only (#154).
     public static func inferFallbackSpec(model: String) -> MiotDeviceSpec? {
         let lower = model.lowercased()
         if lower.contains(".kettle.") || lower.contains(".waterdispenser.") {

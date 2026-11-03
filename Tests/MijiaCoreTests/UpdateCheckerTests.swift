@@ -67,10 +67,9 @@ struct UpdateCheckerTests {
         #expect(try SHA256Digest.hashFile(at: tempFile) == fromInline)
     }
 
-    @Test("checkRelease selects DMG over ZIP and binds inline or sidecar SHA-256 integrity")
-    func checkReleaseParsesDMGAssets() async throws {
-        let digestHex = String(repeating: "a", count: 64)
-        let inlineJSON = """
+    @Test("checkRelease selects the DMG only when the update manifest is listed")
+    func checkReleaseSelectsDMGWhenManifestIsListed() async throws {
+        let zipOnly = """
         {
           "tag_name": "v1.2.0",
           "html_url": "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.2.0",
@@ -80,46 +79,70 @@ struct UpdateCheckerTests {
               "name": "MenuBarMijia-1.2.0.zip",
               "browser_download_url": "https://example.com/MenuBarMijia-1.2.0.zip",
               "size": 1024,
-              "digest": "sha256:\(digestHex)"
+              "digest": "sha256:\(String(repeating: "a", count: 64))"
             },
             {
-              "name": "MenuBarMijia-1.2.0.dmg",
-              "browser_download_url": "https://example.com/MenuBarMijia-1.2.0.dmg",
-              "size": 2048,
-              "digest": "sha256:\(digestHex)"
+              "name": "MenuBarMijia-1.2.0.update.json",
+              "browser_download_url": "https://example.com/MenuBarMijia-1.2.0.update.json"
             }
           ]
         }
         """
-        let release1 = try await Self.checker(status: 200, body: inlineJSON).checkRelease()
-        #expect(release1?.version == "1.2.0")
-        #expect(release1?.notes == "支持应用内更新")
-        #expect(release1?.packageAsset?.kind == .dmg)
-        #expect(release1?.packageAsset?.sizeBytes == 2048)
-        #expect(release1?.packageAsset?.integrity == .inlineSHA256(SHA256Digest(parsing: digestHex)!))
+        let withoutDMG = try await Self.checker(status: 200, body: zipOnly).checkRelease()
+        #expect(withoutDMG?.version == "1.2.0")
+        #expect(withoutDMG?.packageAsset == nil)
 
-        let sidecarJSON = """
+        let digestOnly = """
+        {
+          "tag_name": "v1.2.0",
+          "html_url": "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.2.0",
+          "assets": [
+            {
+              "name": "MenuBarMijia-1.2.0.dmg",
+              "browser_download_url": "https://example.com/MenuBarMijia-1.2.0.dmg",
+              "size": 2048,
+              "digest": "sha256:\(String(repeating: "a", count: 64))"
+            }
+          ]
+        }
+        """
+        #expect(try await Self.checker(status: 200, body: digestOnly).checkRelease()?.packageAsset == nil)
+
+        let listed = """
         {
           "tag_name": "v1.3.0",
           "html_url": "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.3.0",
-          "body": "Sidecar checksum",
+          "body": "清单在场",
           "assets": [
+            {
+              "name": "MenuBarMijia-1.3.0.zip",
+              "browser_download_url": "https://example.com/MenuBarMijia-1.3.0.zip",
+              "digest": "sha256:\(String(repeating: "b", count: 64))"
+            },
             {
               "name": "MenuBarMijia-1.3.0.dmg",
               "browser_download_url": "https://example.com/MenuBarMijia-1.3.0.dmg",
               "size": 4096
             },
             {
-              "name": "MenuBarMijia-1.3.0.dmg.sha256",
-              "browser_download_url": "https://example.com/MenuBarMijia-1.3.0.dmg.sha256",
-              "size": 96
+              "name": "MenuBarMijia-1.3.0.update.json",
+              "size": 526
             }
           ]
         }
         """
-        let release2 = try await Self.checker(status: 200, body: sidecarJSON).checkRelease()
-        #expect(release2?.packageAsset?.kind == .dmg)
-        #expect(release2?.packageAsset?.integrity == .checksumAssetURL(URL(string: "https://example.com/MenuBarMijia-1.3.0.dmg.sha256")!))
+        let release = try await Self.checker(status: 200, body: listed).checkRelease()
+        #expect(release?.notes == "清单在场")
+        #expect(release?.packageAsset?.kind == .dmg)
+        #expect(release?.packageAsset?.name == "MenuBarMijia-1.3.0.dmg")
+        #expect(release?.packageAsset?.sizeBytes == 4096)
+        #expect(release?.packageAsset?.downloadURL == UpdateChecker.releaseAssetURL(
+            version: "1.3.0",
+            fileName: "MenuBarMijia-1.3.0.dmg"
+        ))
+        #expect(UpdateChecker.releaseAssetURL(version: "1.2", fileName: "MenuBarMijia-1.2.dmg") == nil)
+        #expect(UpdateChecker.releaseAssetURL(version: "v1.2.0", fileName: "MenuBarMijia-1.2.0.dmg") == nil)
+        #expect(UpdateChecker.releaseAssetURL(version: "1.2.0", fileName: "MenuBarMijia-1.2.0.zip") == nil)
     }
 
     private static func makeFakeAppBundle(
@@ -150,21 +173,19 @@ struct UpdateCheckerTests {
         try FileManager.default.createDirectory(at: stagingParent, withIntermediateDirectories: true)
 
         let archiveBytes = Data("verified-dmg-content".utf8)
-        let validDigest = SHA256Digest.hash(archiveBytes)
         let signingKey = Curve25519.Signing.PrivateKey()
         let signingPublicKey = signingKey.publicKey.rawRepresentation.base64EncodedString()
-        let packageSignature = try signingKey.signature(for: archiveBytes).base64EncodedString()
-        let sidecarText = "\(validDigest.hex)  MenuBarMijia-1.2.0.dmg\n"
+        let signed = try signedUpdateManifest(version: "1.2.0", package: archiveBytes, signingKey: signingKey)
+        let packageURL = try #require(UpdateChecker.releaseAssetURL(version: "1.2.0", fileName: "MenuBarMijia-1.2.0.dmg"))
         let release = AppRelease(
             version: "1.2.0",
             pageURL: URL(string: "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.2.0")!,
             notes: "Release notes",
             packageAsset: .init(
                 name: "MenuBarMijia-1.2.0.dmg",
-                downloadURL: URL(string: "https://example.com/MenuBarMijia-1.2.0.dmg")!,
+                downloadURL: packageURL,
                 sizeBytes: Int64(archiveBytes.count),
-                kind: .dmg,
-                integrity: .checksumAssetURL(URL(string: "https://example.com/MenuBarMijia-1.2.0.dmg.sha256")!)
+                kind: .dmg
             )
         )
 
@@ -179,17 +200,26 @@ struct UpdateCheckerTests {
         }
 
         let happyDriver = UpdateSystemDriver(
-            downloadFile: { _, destination, onProgress in
+            downloadFile: { url, destination, onProgress in
+                #expect(url == packageURL)
                 try archiveBytes.write(to: destination)
                 onProgress(DownloadProgress(receivedBytes: Int64(archiveBytes.count), totalBytes: Int64(archiveBytes.count)))
             },
             fetchData: { req in
                 let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                if req.url?.path.hasSuffix(".ed25519.sig") == true {
-                    #expect(req.url?.absoluteString == "https://example.com/MenuBarMijia-1.2.0.dmg.ed25519.sig")
-                    return (Data(packageSignature.utf8), resp)
+                let path = req.url?.path ?? ""
+                if path.hasSuffix(".update.json.ed25519.sig") {
+                    #expect(req.url == UpdateChecker.releaseAssetURL(
+                        version: "1.2.0",
+                        fileName: "MenuBarMijia-1.2.0.update.json.ed25519.sig"
+                    ))
+                    return (Data(signed.signatureText.utf8), resp)
                 }
-                return (Data(sidecarText.utf8), resp)
+                if path.hasSuffix(".update.json") {
+                    return (signed.bytes, resp)
+                }
+                Issue.record("unexpected update fetch \(req.url?.absoluteString ?? "")")
+                return (Data(), resp)
             },
             unpackArchive: { _, _, destinationDir in
                 try Self.makeFakeAppBundle(in: destinationDir, shortVersion: "1.2.0")
@@ -244,50 +274,95 @@ struct UpdateCheckerTests {
             _ = try await makeUpdater(driver: invalidSigDriver).stageUpdate(for: release) { _ in }
         }
 
-        // 篡改 DMG 后同步修改 .sha256：SHA-256 能过，但 Ed25519 必须拒绝。
         let tamperedBytes = Data("tampered-dmg-content".utf8)
-        let tamperedDigest = SHA256Digest.hash(tamperedBytes)
         var tamperedDriver = happyDriver
         tamperedDriver.downloadFile = { _, destination, _ in
             try tamperedBytes.write(to: destination)
         }
-        tamperedDriver.fetchData = { req in
-            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            if req.url?.path.hasSuffix(".ed25519.sig") == true {
-                return (Data(packageSignature.utf8), resp)
-            }
-            return (Data("\(tamperedDigest.hex)  MenuBarMijia-1.2.0.dmg\n".utf8), resp)
-        }
-        await #expect(throws: UpdateInstallError.updateSignatureInvalid("signature does not match the package")) {
+        await #expect(throws: UpdateInstallError.checksumMismatch(
+            expected: SHA256Digest.hash(archiveBytes).hex,
+            actual: SHA256Digest.hash(tamperedBytes).hex
+        )) {
             _ = try await makeUpdater(driver: tamperedDriver).stageUpdate(for: release) { _ in }
         }
 
-        // .sig 缺失（404）时中止安装。
         var missingSignatureDriver = happyDriver
         missingSignatureDriver.fetchData = { req in
-            if req.url?.path.hasSuffix(".ed25519.sig") == true {
+            if req.url?.path.hasSuffix(".update.json.ed25519.sig") == true {
                 let resp = HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
                 return (Data(), resp)
             }
             let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (Data(sidecarText.utf8), resp)
+            return (signed.bytes, resp)
         }
         await #expect(throws: UpdateInstallError.updateSignatureMissing) {
             _ = try await makeUpdater(driver: missingSignatureDriver).stageUpdate(for: release) { _ in }
         }
 
-        // .sig 内容不是合法 base64 时同样中止。
         var malformedSignatureDriver = happyDriver
         malformedSignatureDriver.fetchData = { req in
             let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            if req.url?.path.hasSuffix(".ed25519.sig") == true {
+            if req.url?.path.hasSuffix(".update.json.ed25519.sig") == true {
                 return (Data("not-base64".utf8), resp)
             }
-            return (Data(sidecarText.utf8), resp)
+            return (signed.bytes, resp)
         }
-        await #expect(throws: UpdateInstallError.updateSignatureInvalid("signature is not valid base64")) {
+        await #expect(throws: UpdateInstallError.updateSignatureInvalid("signature does not match the manifest")) {
             _ = try await makeUpdater(driver: malformedSignatureDriver).stageUpdate(for: release) { _ in }
         }
+    }
+
+    @Test("stageUpdate rejects an older signed manifest before unpacking")
+    func stageUpdateRejectsReplayBeforeUnpack() async throws {
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent("replay-update-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+        let targetAppURL = try Self.makeFakeAppBundle(in: rootDir, shortVersion: "1.1.5")
+        let signed = try signedUpdateManifest(version: "1.1.6", package: Data("old-dmg".utf8))
+        let release = AppRelease(
+            version: "1.1.8",
+            pageURL: URL(string: "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.1.8")!,
+            notes: "replay",
+            packageAsset: .init(
+                name: "MenuBarMijia-1.1.8.dmg",
+                downloadURL: try #require(UpdateChecker.releaseAssetURL(version: "1.1.8", fileName: "MenuBarMijia-1.1.8.dmg")),
+                sizeBytes: 7,
+                kind: .dmg
+            )
+        )
+        final class UnpackProbe: @unchecked Sendable {
+            var didRun = false
+        }
+        let unpacked = UnpackProbe()
+        let driver = UpdateSystemDriver(
+            downloadFile: { _, destination, _ in
+                try Data("old-dmg".utf8).write(to: destination)
+            },
+            fetchData: { req in
+                let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                if req.url?.path.hasSuffix(".update.json.ed25519.sig") == true {
+                    return (Data(signed.signatureText.utf8), resp)
+                }
+                return (signed.bytes, resp)
+            },
+            unpackArchive: { _, _, destinationDir in
+                unpacked.didRun = true
+                return try Self.makeFakeAppBundle(in: destinationDir, shortVersion: "1.1.8")
+            },
+            verifyCodeSignature: { _, _ in },
+            launchDetachedSwapAndRelaunch: { _, _, _ in }
+        )
+        let updater = AppUpdater(
+            currentVersion: "1.1.5",
+            targetBundleURL: targetAppURL,
+            stagingBaseDirectory: rootDir,
+            updateSigningPublicKeyBase64: signed.publicKey,
+            driver: driver
+        )
+        await #expect(throws: UpdateInstallError.updateSignatureInvalid("update manifest is signed for a different version")) {
+            _ = try await updater.stageUpdate(for: release) { _ in }
+        }
+        #expect(unpacked.didRun == false)
     }
 
     @Test("Ed25519 update signatures round-trip and reject tampered data, keys, or signatures")
@@ -310,8 +385,6 @@ struct UpdateCheckerTests {
         #expect(!UpdateSignature.verify(signatureBase64: "not-base64", publicKeyBase64: publicKey, data: data))
         #expect(!UpdateSignature.verify(signatureBase64: signature, publicKeyBase64: "AAAA", data: data))
         #expect(Data(base64Encoded: UpdateChecker.updateSigningPublicKeyBase64)?.count == 32)
-        #expect(AppUpdater.signatureURL(for: URL(string: "https://example.com/MenuBarMijia-1.2.0.dmg")!)
-            == URL(string: "https://example.com/MenuBarMijia-1.2.0.dmg.ed25519.sig")!)
     }
 
 
@@ -327,10 +400,9 @@ struct UpdateCheckerTests {
 
         let targetAppURL = try Self.makeFakeAppBundle(in: rootDir, shortVersion: "1.0.0")
         let archiveBytes = Data("release-binary".utf8)
-        let digest = SHA256Digest.hash(archiveBytes)
         let signingKey = Curve25519.Signing.PrivateKey()
         let signingPublicKey = signingKey.publicKey.rawRepresentation.base64EncodedString()
-        let packageSignature = try signingKey.signature(for: archiveBytes).base64EncodedString()
+        let signed = try signedUpdateManifest(version: "1.4.0", package: archiveBytes, signingKey: signingKey)
         let releaseJSON = """
         {
           "tag_name": "v1.4.0",
@@ -339,9 +411,11 @@ struct UpdateCheckerTests {
           "assets": [
             {
               "name": "MenuBarMijia-1.4.0.dmg",
-              "browser_download_url": "https://example.com/MenuBarMijia-1.4.0.dmg",
-              "size": \(archiveBytes.count),
-              "digest": "sha256:\(digest.hex)"
+              "size": \(archiveBytes.count)
+            },
+            {
+              "name": "MenuBarMijia-1.4.0.update.json",
+              "size": \(signed.bytes.count)
             }
           ]
         }
@@ -367,8 +441,12 @@ struct UpdateCheckerTests {
                 fetchData: { req in
                     probe.checkCallCount += 1
                     let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                    if req.url?.path.hasSuffix(".ed25519.sig") == true {
-                        return (Data(packageSignature.utf8), resp)
+                    let path = req.url?.path ?? ""
+                    if path.hasSuffix(".update.json.ed25519.sig") {
+                        return (Data(signed.signatureText.utf8), resp)
+                    }
+                    if path.hasSuffix(".update.json") {
+                        return (signed.bytes, resp)
                     }
                     return (Data(releaseJSON.utf8), resp)
                 },
