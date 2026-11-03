@@ -1,5 +1,10 @@
 # 更新记录
 
+## 未发布
+
+### 安全
+- **更新签名密钥支持过渡公钥与轮换 / 吊销预案（[#164](https://github.com/jryang1997/MenuBarMijia/issues/164)）**：双端信任集扩展为“当前签名公钥 + 可选过渡公钥”，清单 `key_id` 必须指向实际验签的密钥；新增[轮换与吊销操作手册](docs/security/update-signing-key-rotation.md)，覆盖正常轮换的 provisioning / 切主 / 退役、回滚窗口、密钥泄露与丢失、用户手动补救与审计命令。`scripts/check.sh` 现在同时校验两端过渡公钥的一致性。
+
 ## 1.1.6
 
 ### 修复与设备支持

@@ -194,7 +194,7 @@ struct UpdateCheckerTests {
                 currentVersion: "1.0.0",
                 targetBundleURL: targetAppURL,
                 stagingBaseDirectory: stagingParent,
-                updateSigningPublicKeyBase64: signingPublicKey,
+                updateSigningPublicKeysBase64: [signingPublicKey],
                 driver: driver
             )
         }
@@ -356,7 +356,7 @@ struct UpdateCheckerTests {
             currentVersion: "1.1.5",
             targetBundleURL: targetAppURL,
             stagingBaseDirectory: rootDir,
-            updateSigningPublicKeyBase64: signed.publicKey,
+            updateSigningPublicKeysBase64: [signed.publicKey],
             driver: driver
         )
         await #expect(throws: UpdateInstallError.updateSignatureInvalid("update manifest is signed for a different version")) {
@@ -385,6 +385,13 @@ struct UpdateCheckerTests {
         #expect(!UpdateSignature.verify(signatureBase64: "not-base64", publicKeyBase64: publicKey, data: data))
         #expect(!UpdateSignature.verify(signatureBase64: signature, publicKeyBase64: "AAAA", data: data))
         #expect(Data(base64Encoded: UpdateChecker.updateSigningPublicKeyBase64)?.count == 32)
+        #expect(UpdateChecker.updateSigningPublicKeysBase64.first == UpdateChecker.updateSigningPublicKeyBase64)
+        if !UpdateChecker.updateSigningOverlapPublicKeyBase64.isEmpty {
+            #expect(Data(base64Encoded: UpdateChecker.updateSigningOverlapPublicKeyBase64)?.count == 32)
+            #expect(UpdateChecker.updateSigningPublicKeysBase64.count == 2)
+        } else {
+            #expect(UpdateChecker.updateSigningPublicKeysBase64.count == 1)
+        }
     }
 
 
@@ -465,7 +472,7 @@ struct UpdateCheckerTests {
                 currentVersion: "1.0.0",
                 targetBundleURL: targetAppURL,
                 stagingBaseDirectory: rootDir,
-                updateSigningPublicKeyBase64: signingPublicKey,
+                updateSigningPublicKeysBase64: [signingPublicKey],
                 driver: driver
             )
         }
@@ -493,7 +500,7 @@ struct UpdateCheckerTests {
             currentVersion: "1.4.0",
             targetBundleURL: targetAppURL,
             stagingBaseDirectory: rootDir,
-            updateSigningPublicKeyBase64: signingPublicKey,
+            updateSigningPublicKeysBase64: [signingPublicKey],
             driver: UpdateSystemDriver(
                 downloadFile: { _, _, _ in },
                 fetchData: { req in

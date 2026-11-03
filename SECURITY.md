@@ -70,17 +70,15 @@ Storing a Mi `passToken` is in scope.
 
 ### Update chain
 
-macOS `UpdateChecker` fetches the latest GitHub release and checks an Ed25519 signature before installation.
+macOS `UpdateChecker`/`AppUpdater` and the Windows updater verify a detached Ed25519 signature over `MenuBarMijia-<version>.update.json` after download and before unpacking or running anything.
 
-Windows checks the same signature.
+The signed manifest names the release version, the minimum running version (`min_from`), the signing key (`key_id`), and the SHA-256 of the DMG, EXE, and MSI. The package hash check follows the signature check.
 
-The app ships the public key.
+The app ships the trusted public key or keys. `key_id` must name the key that produced the signature. The private key stays off CI.
 
-The private key stays off CI.
+Key rotation and compromise handling are in [docs/security/update-signing-key-rotation.md](docs/security/update-signing-key-rotation.md).
 
-The signed payload does not cover the version number.
-
-Builds from before that signature check are outside this area.
+Builds from before the manifest signature check are outside this area.
 
 ### Local services
 

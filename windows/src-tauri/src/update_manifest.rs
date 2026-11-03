@@ -52,7 +52,7 @@ pub(crate) fn accept_failure_message(failure: AcceptFailure) -> String {
 pub(crate) fn accept_update_manifest(
     manifest: &[u8],
     signature_text: &str,
-    public_key_base64: &str,
+    trusted_public_keys_base64: &[&str],
     release_version: &str,
     running_version: &str,
     package_name: &str,
@@ -65,11 +65,16 @@ pub(crate) fn accept_update_manifest(
     if manifest.len() > 4096 || signature.len() > 256 {
         return Err(AcceptFailure::Malformed);
     }
-    if super::verify_ed25519_signature(signature, public_key_base64, manifest).is_err() {
+    let verifying_keys: Vec<&str> = trusted_public_keys_base64
+        .iter()
+        .copied()
+        .filter(|key| super::verify_ed25519_signature(signature, *key, manifest).is_ok())
+        .collect();
+    if verifying_keys.is_empty() {
         return Err(AcceptFailure::SignatureInvalid);
     }
     let parsed = parse_manifest(manifest).ok_or(AcceptFailure::Malformed)?;
-    if parsed.key_id != public_key_base64 {
+    if !verifying_keys.contains(&parsed.key_id.as_str()) {
         return Err(AcceptFailure::KeyIdMismatch);
     }
     if parsed.version_text != release_version {
@@ -347,7 +352,7 @@ mod tests {
         accept_update_manifest(
             &signed.bytes,
             &signed.signature,
-            &signed.public_key,
+            &[signed.public_key.as_str()],
             release_version,
             running_version,
             package_name,
@@ -378,7 +383,7 @@ mod tests {
         let result = accept_update_manifest(
             text.as_bytes(),
             &signed.signature,
-            &signed.public_key,
+            &[signed.public_key.as_str()],
             "9.9.9",
             "1.0.0",
             "MenuBarMijia-1.1.6.dmg",
@@ -409,6 +414,55 @@ mod tests {
     }
 
     #[test]
+    fn accepts_a_manifest_signed_by_the_overlap_key() {
+        let signed = sign_manifest("1.1.6", "1.0.0", None, None, b"dmg");
+        let primary = sign_manifest("1.1.6", "1.0.0", None, None, b"other").public_key;
+        let verified = accept_update_manifest(
+            &signed.bytes,
+            &signed.signature,
+            &[primary.as_str(), signed.public_key.as_str()],
+            "1.1.6",
+            "1.1.5",
+            "MenuBarMijia-1.1.6.dmg",
+            &signed.package,
+        )
+        .unwrap();
+        assert_eq!(verified.version_text, "1.1.6");
+    }
+
+    #[test]
+    fn rejects_a_signature_from_a_key_outside_the_trusted_set() {
+        let signed = sign_manifest("1.1.6", "1.0.0", None, None, b"dmg");
+        let untrusted = sign_manifest("1.1.6", "1.0.0", None, None, b"other").public_key;
+        let result = accept_update_manifest(
+            &signed.bytes,
+            &signed.signature,
+            &[untrusted.as_str()],
+            "1.1.6",
+            "1.1.5",
+            "MenuBarMijia-1.1.6.dmg",
+            &signed.package,
+        );
+        assert_eq!(result.err(), Some(AcceptFailure::SignatureInvalid));
+    }
+
+    #[test]
+    fn rejects_a_key_id_that_names_a_trusted_key_other_than_the_signer() {
+        let primary = sign_manifest("1.1.6", "1.0.0", None, None, b"other").public_key;
+        let signed = sign_manifest("1.1.6", "1.0.0", Some(primary.as_str()), None, b"dmg");
+        let result = accept_update_manifest(
+            &signed.bytes,
+            &signed.signature,
+            &[primary.as_str(), signed.public_key.as_str()],
+            "1.1.6",
+            "1.1.5",
+            "MenuBarMijia-1.1.6.dmg",
+            &signed.package,
+        );
+        assert_eq!(result.err(), Some(AcceptFailure::KeyIdMismatch));
+    }
+
+    #[test]
     fn rejects_a_running_version_below_the_minimum() {
         let signed = sign_manifest("1.1.6", "1.1.0", None, None, b"dmg");
         let result = accept(&signed, "1.1.6", "1.0.9", "MenuBarMijia-1.1.6.dmg", &signed.package);
@@ -427,7 +481,7 @@ mod tests {
         let result = accept_update_manifest(
             &signed.bytes,
             "",
-            &signed.public_key,
+            &[signed.public_key.as_str()],
             "1.1.6",
             "1.1.5",
             "MenuBarMijia-1.1.6.dmg",
