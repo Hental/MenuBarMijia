@@ -50,6 +50,7 @@ final class CameraLiveVideoPlayer: NSObject, URLSessionDataDelegate, @unchecked 
     private var failure: String?
     private var statsWindowStart = Date()
     private var statsWindowFrames = 0
+    private var playbackPaused = false
 
     @MainActor
     override init() {
@@ -80,7 +81,26 @@ final class CameraLiveVideoPlayer: NSObject, URLSessionDataDelegate, @unchecked 
     }
 
     func stop() {
-        queue.async { self.finish(failure: nil) }
+        queue.async {
+            self.playbackPaused = false
+            self.renderer.flush()
+            self.finish(failure: nil)
+        }
+    }
+
+    func setPlaybackPaused(_ paused: Bool) {
+        queue.async {
+            let resumed = self.playbackPaused && !paused
+            self.playbackPaused = paused
+            if resumed {
+                self.resumeFromNextKeyframe()
+            }
+        }
+    }
+
+    private func resumeFromNextKeyframe() {
+        renderer.flush()
+        waitingForKeyframe = true
     }
 
     // MARK: - Connection lifecycle (queue)
@@ -191,6 +211,14 @@ final class CameraLiveVideoPlayer: NSObject, URLSessionDataDelegate, @unchecked 
             waitingForKeyframe = false
         }
         guard let formatDescription else { return }
+        if playbackPaused { return }
+
+        if !displayLayer.isReadyForMoreMediaData {
+            renderer.flush()
+            waitingForKeyframe = true
+            guard isKeyframe else { return }
+            waitingForKeyframe = false
+        }
 
         if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
             logger.error("camera renderer failed: \(String(describing: self.renderer.error), privacy: .public); waiting for next keyframe")
@@ -401,6 +429,9 @@ struct CameraLiveVideoSurface: NSViewRepresentable {
 
 final class CameraLiveVideoHostView: NSView {
     private weak var videoLayer: CALayer?
+    /// Set while Picture in Picture owns the layer. Resetting `frame` here would pin it to the
+    /// hidden panel and paint a black rectangle over the system window.
+    var suspendsGeometryUpdates = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -432,34 +463,44 @@ final class CameraLiveVideoHostView: NSView {
 
     override func layout() {
         super.layout()
-        // While in Picture in Picture, AVKit hosts the video container layer inside PIPPanel and
-        // derives its sublayerTransform from displayLayer.bounds; do not overwrite it with the
-        // hidden floating window's bounds.
-        let isInPiP = videoLayer?.sublayers?.contains {
-            String(describing: type(of: $0)).contains("PictureInPicture")
-        } ?? false
-        guard !isInPiP else { return }
+        guard !suspendsGeometryUpdates, let videoLayer, videoLayer.superlayer === layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        videoLayer?.frame = bounds
+        videoLayer.frame = bounds
         CATransaction.commit()
     }
 }
 
 // MARK: - Native Picture in Picture
 
+private final class CameraPlaybackPause: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paused = false
+    private var restoreRequested = false
+
+    func isPaused() -> Bool { lock.withLock { paused } }
+    func setPaused(_ value: Bool) { lock.withLock { paused = value } }
+    func setRestoreRequested(_ value: Bool) { lock.withLock { restoreRequested = value } }
+    func consumeRestoreRequested() -> Bool {
+        lock.withLock {
+            let value = restoreRequested
+            restoreRequested = false
+            return value
+        }
+    }
+}
+
 /// Moves the live display layer into the system Picture-in-Picture window (#97).
-///
-/// The camera is a live source, so the playback delegate reports an endless time range that
-/// is never paused; the system then hides scrubbing and shows only restore / close.
 @MainActor
 final class CameraPictureInPicture: NSObject {
     private let displayLayer: AVSampleBufferDisplayLayer
+    private nonisolated let playbackPause = CameraPlaybackPause()
     private(set) var controller: AVPictureInPictureController?
     private var possibleObservation: NSKeyValueObservation?
     private weak var observedPiPContentView: NSView?
     private var pipFrameObserver: NSObjectProtocol?
     private var pipSyncTask: Task<Void, Never>?
+    private var wantsStart = false
 
     private(set) var isPossible = false
     private(set) var isActive = false
@@ -470,7 +511,11 @@ final class CameraPictureInPicture: NSObject {
     var onRestore: (() -> Void)?
     /// PiP ended without a restore request (the user closed it).
     var onClosed: (() -> Void)?
-    private var restoreRequested = false
+    var onPlaybackPaused: ((Bool) -> Void)?
+
+    nonisolated static func livePlaybackTimeRange() -> CMTimeRange {
+        CMTimeRange(start: .zero, duration: .positiveInfinity)
+    }
 
     init(displayLayer: AVSampleBufferDisplayLayer) {
         self.displayLayer = displayLayer
@@ -487,37 +532,54 @@ final class CameraPictureInPicture: NSObject {
         possibleObservation = pip.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] pip, _ in
             let possible = pip.isPictureInPicturePossible
             Task { @MainActor in
-                guard let self, self.isPossible != possible else { return }
+                guard let self else { return }
+                let changed = self.isPossible != possible
                 self.isPossible = possible
-                self.onStateChange?()
+                if changed { self.onStateChange?() }
+                if possible, self.wantsStart, let controller = self.controller, !controller.isPictureInPictureActive {
+                    self.wantsStart = false
+                    self.setHostSuspended(true)
+                    controller.startPictureInPicture()
+                }
             }
         }
     }
 
     func start() {
+        wantsStart = true
+        playbackPause.setRestoreRequested(false)
         guard let controller, controller.isPictureInPicturePossible, !controller.isPictureInPictureActive else { return }
-        restoreRequested = false
+        wantsStart = false
+        setHostSuspended(true)
         controller.startPictureInPicture()
     }
 
     /// Programmatic stop means "bring the floating window back", never "close the camera".
     func stop() {
         guard controller?.isPictureInPictureActive == true else { return }
-        restoreRequested = true
+        wantsStart = false
+        playbackPause.setRestoreRequested(true)
         controller?.stopPictureInPicture()
     }
 
     func invalidate() {
+        wantsStart = false
         pipSyncTask?.cancel()
         pipSyncTask = nil
         stopObservingPiPWindow()
+        setHostSuspended(false)
         possibleObservation?.invalidate()
         possibleObservation = nil
         if controller?.isPictureInPictureActive == true {
+            playbackPause.setRestoreRequested(false)
             controller?.stopPictureInPicture()
         }
         controller?.delegate = nil
         controller = nil
+        if playbackPause.isPaused() {
+            playbackPause.setPaused(false)
+            onPlaybackPaused?(false)
+        }
     }
 
     private func setActive(_ active: Bool) {
@@ -526,12 +588,10 @@ final class CameraPictureInPicture: NSObject {
         onStateChange?()
     }
 
-    /// macOS `AVPictureInPictureSampleBufferDisplayLayerView` moves `displayLayer`'s internal
-    /// `AVSampleBufferDisplayLayerVideoContainerLayer` into the `PIPPanel` `CAContext` with a
-    /// 1600x900 frame while keeping the pre-PiP `sublayerTransform` from `displayLayer.bounds`,
-    /// which clips the video to a top-right corner. Syncing `displayLayer.bounds` to `PIPPanel`'s
-    /// content view forces `AVSampleBufferDisplayLayer` to recompute `sublayerTransform` for the
-    /// exact PiP window size.
+    /// AVKit keeps the pre-PiP sublayer transform when it moves the video container into PIPPanel.
+    /// Updating only `bounds` leaves `position` stale, so the layer's black background covers a
+    /// corner of the picture. Set the full frame, clear that background, and stop the host from
+    /// pinning the layer back to the small panel.
     fileprivate func syncPictureInPictureLayerBounds() {
         guard isActive,
               let pipWindow = NSApp.windows.first(where: { String(describing: type(of: $0)).contains("PIP") }),
@@ -548,24 +608,22 @@ final class CameraPictureInPicture: NSObject {
                 object: contentView,
                 queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated {
+                Task { @MainActor in
                     self?.syncPictureInPictureLayerBounds()
                 }
             }
         }
 
-        let targetBounds = CGRect(origin: .zero, size: contentView.bounds.size)
+        let target = contentView.bounds
+        setHostSuspended(true)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.bounds = CGRect(
-            x: 0,
-            y: 0,
-            width: max(targetBounds.width - 1, 1),
-            height: max(targetBounds.height - 1, 1)
-        )
-        displayLayer.layoutIfNeeded()
-        displayLayer.bounds = targetBounds
-        displayLayer.layoutIfNeeded()
+        fill(displayLayer, in: target)
+        displayLayer.backgroundColor = nil
+        if let root = contentView.layer {
+            repairVideoLayers(root, in: target)
+        }
+        repairVideoLayers(displayLayer, in: target)
         CATransaction.commit()
     }
 
@@ -573,21 +631,46 @@ final class CameraPictureInPicture: NSObject {
         pipSyncTask?.cancel()
         pipSyncTask = nil
         stopObservingPiPWindow()
+        setHostSuspended(false)
+        displayLayer.backgroundColor = NSColor.black.cgColor
         guard let superlayer = displayLayer.superlayer,
               superlayer.bounds.width > 1,
               superlayer.bounds.height > 1 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.bounds = CGRect(
-            x: 0,
-            y: 0,
-            width: max(superlayer.bounds.width - 1, 1),
-            height: max(superlayer.bounds.height - 1, 1)
-        )
-        displayLayer.layoutIfNeeded()
+        displayLayer.sublayerTransform = CATransform3DIdentity
         displayLayer.frame = superlayer.bounds
-        displayLayer.layoutIfNeeded()
         CATransaction.commit()
+    }
+
+    private func setHostSuspended(_ suspended: Bool) {
+        (displayLayer.superlayer?.delegate as? CameraLiveVideoHostView)?.suspendsGeometryUpdates = suspended
+    }
+
+    private func fill(_ layer: CALayer, in bounds: CGRect) {
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.bounds = bounds
+        layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+
+    private func repairVideoLayers(_ layer: CALayer, in bounds: CGRect) {
+        let name = String(describing: type(of: layer))
+        if name.contains("VideoContainer") || name.contains("SampleBufferDisplay") {
+            layer.sublayerTransform = CATransform3DIdentity
+            layer.backgroundColor = nil
+            fill(layer, in: bounds)
+        }
+        layer.sublayers?.forEach { repairVideoLayers($0, in: bounds) }
+    }
+
+    private nonisolated func onMain(_ work: @MainActor @escaping () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated(work)
+            }
+        }
     }
 
     private func stopObservingPiPWindow() {
@@ -601,11 +684,12 @@ final class CameraPictureInPicture: NSObject {
 
 extension CameraPictureInPicture: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        MainActor.assumeIsolated {
-            setActive(true)
-            syncPictureInPictureLayerBounds()
-            pipSyncTask?.cancel()
-            pipSyncTask = Task { @MainActor [weak self] in
+        onMain {
+            self.wantsStart = false
+            self.setActive(true)
+            self.syncPictureInPictureLayerBounds()
+            self.pipSyncTask?.cancel()
+            self.pipSyncTask = Task { @MainActor [weak self] in
                 for delayMs in [60, 220, 500] {
                     try? await Task.sleep(for: .milliseconds(delayMs))
                     guard !Task.isCancelled, let self, self.isActive else { return }
@@ -619,9 +703,10 @@ extension CameraPictureInPicture: AVPictureInPictureControllerDelegate {
         _ pictureInPictureController: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
     ) {
-        MainActor.assumeIsolated {
-            setActive(false)
-            restoreHostLayerBounds()
+        onMain {
+            self.wantsStart = false
+            self.setActive(false)
+            self.restoreHostLayerBounds()
         }
     }
 
@@ -629,32 +714,42 @@ extension CameraPictureInPicture: AVPictureInPictureControllerDelegate {
         _ pictureInPictureController: AVPictureInPictureController,
         restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
     ) {
-        MainActor.assumeIsolated {
-            restoreRequested = true
-            onRestore?()
+        playbackPause.setRestoreRequested(true)
+        onMain {
+            self.onRestore?()
         }
         completionHandler(true)
     }
 
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        MainActor.assumeIsolated {
-            setActive(false)
-            restoreHostLayerBounds()
-            if restoreRequested { onRestore?() } else { onClosed?() }
-            restoreRequested = false
+        let restore = playbackPause.consumeRestoreRequested()
+        onMain {
+            if self.playbackPause.isPaused() {
+                self.playbackPause.setPaused(false)
+                self.onPlaybackPaused?(false)
+            }
+            self.setActive(false)
+            self.restoreHostLayerBounds()
+            if restore { self.onRestore?() } else { self.onClosed?() }
         }
     }
 }
 
 extension CameraPictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
-    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {}
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
+        let paused = !playing
+        playbackPause.setPaused(paused)
+        onMain {
+            self.onPlaybackPaused?(paused)
+        }
+    }
 
     nonisolated func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
-        CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+        Self.livePlaybackTimeRange()
     }
 
     nonisolated func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
-        false
+        playbackPause.isPaused()
     }
 
     nonisolated func pictureInPictureController(
