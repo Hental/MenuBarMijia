@@ -18,7 +18,7 @@ struct UndoScopeTests {
         ))
         let suite = "test.undo.scope.\(UUID().uuidString)"
         let store = HomeStore(provider: provider, defaultsSuiteName: suite)
-        try await store.waitForInitialSnapshot()
+        try await store.waitForInitialSnapshot(timeout: .seconds(15))
         #expect(store.devices.count == 2)
         return (store, provider, suite)
     }

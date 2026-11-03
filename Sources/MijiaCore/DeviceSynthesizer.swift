@@ -20,6 +20,10 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
     public let manufacturer: String?
     public let model: String?
     public let disabled_by: String?
+    public let identifiers: [[String]]?
+    public let connections: [[String]]?
+    public let serial_number: String?
+    public let configuration_url: String?
 
     public init(
         id: String,
@@ -28,7 +32,11 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
         name_by_user: String? = nil,
         manufacturer: String? = nil,
         model: String? = nil,
-        disabled_by: String? = nil
+        disabled_by: String? = nil,
+        identifiers: [[String]]? = nil,
+        connections: [[String]]? = nil,
+        serial_number: String? = nil,
+        configuration_url: String? = nil
     ) {
         self.id = id
         self.area_id = area_id
@@ -37,6 +45,10 @@ public struct HADeviceEntry: Codable, Equatable, Sendable {
         self.manufacturer = manufacturer
         self.model = model
         self.disabled_by = disabled_by
+        self.identifiers = identifiers
+        self.connections = connections
+        self.serial_number = serial_number
+        self.configuration_url = configuration_url
     }
 }
 
@@ -50,6 +62,7 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
     public let entity_category: String?
     public let disabled_by: String?
     public let hidden_by: String?
+    public let unique_id: String?
 
     public init(
         entity_id: String,
@@ -60,7 +73,8 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
         platform: String? = nil,
         entity_category: String? = nil,
         disabled_by: String? = nil,
-        hidden_by: String? = nil
+        hidden_by: String? = nil,
+        unique_id: String? = nil
     ) {
         self.entity_id = entity_id
         self.device_id = device_id
@@ -71,6 +85,7 @@ public struct HAEntityEntry: Codable, Equatable, Sendable {
         self.entity_category = entity_category
         self.disabled_by = disabled_by
         self.hidden_by = hidden_by
+        self.unique_id = unique_id
     }
 }
 
@@ -197,6 +212,12 @@ public struct SynthesizedHome: Equatable, Sendable {
     /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
     /// close the away gap, because the door may have opened while polling was paused.
     public var closesAwayGap: Bool = true
+    /// Pairing evidence captured before `SmartDevice` dropped the did / MAC / HA unique id.
+    public var deviceIdentities: [String: DeviceSourceIdentity] = [:]
+    /// Which provider currently drives each merged card; empty on single-source snapshots.
+    public var deviceBackends: [String: HomeBackend] = [:]
+    /// Sources that contributed this merged snapshot.
+    public var activeBackends: Set<HomeBackend> = []
 
     public init(
         rooms: [RoomArea] = [],
@@ -234,6 +255,7 @@ public enum DeviceSynthesizer {
 
         var smartDevices: [SmartDevice] = []
         var envReadings: [EnvironmentReading] = []
+        var identities: [String: DeviceSourceIdentity] = [:]
 
         for dev in devices {
             guard dev.disabled_by == nil else { continue }
@@ -272,6 +294,7 @@ public enum DeviceSynthesizer {
                 states: states
             ) {
                 smartDevices.append(built)
+                identities[built.id] = sourceIdentity(device: built, registry: dev, entities: devEntities)
             }
         }
 
@@ -317,6 +340,7 @@ public enum DeviceSynthesizer {
                 states: states
             ) {
                 smartDevices.append(built)
+                identities[built.id] = sourceIdentity(device: built, registry: nil, entities: orphanEntities)
             }
         }
 
@@ -358,11 +382,46 @@ public enum DeviceSynthesizer {
         }
         synthesizedScenes.sort { $0.name < $1.name }
 
-        return assembleHome(
+        var home = assembleHome(
             devices: smartDevices,
             readings: envReadings,
             scenes: synthesizedScenes,
             roomNameOrder: roomNameOrder(from: areas.map(\.name))
+        )
+        home.deviceIdentities = identities
+        return home
+    }
+
+    private static func sourceIdentity(
+        device: SmartDevice,
+        registry: HADeviceEntry?,
+        entities: [HAEntityEntry]
+    ) -> DeviceSourceIdentity {
+        var rawDidValues: [String] = []
+        var rawMacValues: [String] = []
+        if let registry {
+            for pair in registry.identifiers ?? [] where pair.count >= 2 {
+                let domain = pair[0].lowercased()
+                if domain.contains("xiaomi") || domain == "miio" || domain == "miot" {
+                    rawDidValues.append(pair[1])
+                } else if domain == "mac" {
+                    rawMacValues.append(pair[1])
+                }
+            }
+            for pair in registry.connections ?? [] where pair.count >= 2 && pair[0].lowercased() == "mac" {
+                rawMacValues.append(pair[1])
+            }
+        }
+        let uniqueIds = entities.compactMap(\.unique_id)
+        rawDidValues.append(contentsOf: uniqueIds)
+        return DeviceSourceIdentity(
+            dids: DeviceIdentityNormalizer.didCandidates(from: rawDidValues),
+            macAddresses: rawMacValues.compactMap { DeviceIdentityNormalizer.macAddress(from: $0) },
+            uniqueIds: uniqueIds,
+            model: device.model,
+            name: device.name,
+            roomName: device.roomName,
+            kindTag: device.kind.tag
         )
     }
 

@@ -50,21 +50,38 @@ final class UnsupportedDeviceScanner {
         errorMessage = nil
         defer { isScanning = false }
 
-        do {
-            switch store.homeBackend {
-            case .demo:
-                // Strictly offline: nothing is skipped, and nothing may be requested (#47).
-                devices = []
-            case .xiaomiCloud:
-                devices = try await Self.scanMiCloud()
-            case .homeAssistant:
-                devices = try await Self.scanHomeAssistant(baseURL: store.serverURLString)
-            }
-            lastScannedAt = Date()
-        } catch {
+        if store.homeBackend == .demo {
+            // Strictly offline: nothing is skipped, and nothing may be requested (#47).
             devices = []
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            lastScannedAt = Date()
+            return
         }
+
+        let scanMi = store.hasMiSource || (!store.hasHASource && store.homeBackend == .xiaomiCloud)
+        let scanHA = store.hasHASource || (!store.hasMiSource && store.homeBackend == .homeAssistant)
+        var results: [UnsupportedDevice] = []
+        var errors: [String] = []
+
+        if scanMi {
+            do {
+                let scanned = try await Self.scanMiCloud()
+                results.append(contentsOf: scanned)
+            } catch {
+                errors.append((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+        if scanHA {
+            do {
+                let scanned = try await Self.scanHomeAssistant(baseURL: store.serverURLString)
+                results.append(contentsOf: scanned)
+            } catch {
+                errors.append((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+
+        devices = results
+        errorMessage = errors.first
+        lastScannedAt = Date()
     }
 
     // MARK: Mi Cloud

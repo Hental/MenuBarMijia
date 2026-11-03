@@ -69,13 +69,21 @@ enum MenuBarStatusSummary {
         } else {
             switch store.connectionStatus {
             case .connected:
-                switch store.homeBackend {
-                case .xiaomiCloud:
+                if store.connectedBackends.contains(.homeAssistant) && store.connectedBackends.contains(.xiaomiCloud) {
+                    parts.append(L10n.tr("Home Assistant + 米家云已连接", "Home Assistant + Xiaomi Cloud connected"))
+                } else if store.connectedBackends.contains(.xiaomiCloud) {
                     parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
-                case .homeAssistant:
+                } else if store.connectedBackends.contains(.homeAssistant) {
                     parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
-                case .demo:
-                    parts.append(L10n.tr("演示模式", "Demo mode"))
+                } else {
+                    switch store.homeBackend {
+                    case .xiaomiCloud:
+                        parts.append(L10n.tr("已连接米家云", "Xiaomi Cloud connected"))
+                    case .homeAssistant:
+                        parts.append(L10n.tr("已连接 Home Assistant", "Home Assistant connected"))
+                    case .demo:
+                        parts.append(L10n.tr("演示模式", "Demo mode"))
+                    }
                 }
             case .connecting:
                 parts.append(L10n.tr("正在连接…", "Connecting…"))

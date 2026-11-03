@@ -118,25 +118,25 @@ public final class HomeStore {
 
     public var favoriteDeviceIds: Set<String> {
         didSet {
-            userDefaults.set(Array(favoriteDeviceIds), forKey: "favorite_device_ids")
+            userDefaults.set(Array(favoriteDeviceIds), forKey: ViewPreferenceKeys.favoriteDeviceIds)
         }
     }
 
     public var favoriteOrder: [String] {
         didSet {
-            userDefaults.set(favoriteOrder, forKey: "favorite_order")
+            userDefaults.set(favoriteOrder, forKey: ViewPreferenceKeys.favoriteOrder)
         }
     }
 
     public var hiddenDeviceIds: Set<String> {
         didSet {
-            userDefaults.set(Array(hiddenDeviceIds), forKey: "hidden_device_ids")
+            userDefaults.set(Array(hiddenDeviceIds), forKey: ViewPreferenceKeys.hiddenDeviceIds)
         }
     }
 
     /// Per-device choice for 全关; a missing entry means the default from `joinsAllOffByDefault` (#23).
     public var allOffOverrides: [String: Bool] {
-        didSet { userDefaults.set(allOffOverrides, forKey: "all_off_overrides") }
+        didSet { userDefaults.set(allOffOverrides, forKey: ViewPreferenceKeys.allOffOverrides) }
     }
 
     public var menuBarDisplayMode: MenuBarDisplayMode {
@@ -144,7 +144,7 @@ public final class HomeStore {
     }
 
     public var menuBarTargetId: String {
-        didSet { userDefaults.set(menuBarTargetId, forKey: "menubar_target_id") }
+        didSet { userDefaults.set(menuBarTargetId, forKey: ViewPreferenceKeys.menuBarTargetId) }
     }
 
     public var enableSafetyAlerts: Bool {
@@ -258,6 +258,36 @@ public final class HomeStore {
         didSet { syncSensorHistoryScope() }
     }
 
+    /// Whether an HA token is saved. The chosen `homeBackend` no longer implies the only live source.
+    public internal(set) var hasHASource: Bool = false
+    public var hasMiSource: Bool { miSessionMaskedUserId != nil }
+    public var isDualSourceActive: Bool {
+        homeBackend != .demo && hasHASource && hasMiSource
+    }
+    public var preferredLiveBackend: HomeBackend {
+        if hasHASource { return .homeAssistant }
+        if hasMiSource { return .xiaomiCloud }
+        return .homeAssistant
+    }
+    /// Which provider currently drives each merged card.
+    public internal(set) var deviceBackends: [String: HomeBackend] = [:]
+    /// Sources that contributed the latest merged snapshot.
+    public internal(set) var connectedBackends: Set<HomeBackend> = []
+
+    public func deviceBackend(for deviceId: String) -> HomeBackend {
+        deviceBackends[deviceId] ?? homeBackend
+    }
+
+    public var connectionSourceSummary: String {
+        if homeBackend == .demo { return L10n.tr("演示模式", "Demo Mode") }
+        if hasHASource && hasMiSource {
+            return L10n.tr("Home Assistant + 米家云端", "Home Assistant + Xiaomi Cloud")
+        }
+        if hasMiSource { return L10n.tr("米家云端", "Xiaomi Cloud") }
+        if hasHASource { return "Home Assistant" }
+        return L10n.tr("尚未配置数据源", "No data source configured")
+    }
+
     public private(set) var toastNotice: ToastNotice?
     public internal(set) var undoBanner: UndoBanner? {
         didSet {
@@ -272,8 +302,8 @@ public final class HomeStore {
 
     public var onOpenCameraLiveView: ((SmartDevice) -> Void)?
     public internal(set) var activeLiveCameraDeviceId: String?
-    public static let cameraStreamURLsKey = "camera_stream_urls_v1"
-    public static let cameraStreamQualityKey = "camera_stream_quality_v1"
+    public static let cameraStreamURLsKey = ViewPreferenceKeys.cameraStreamURLs
+    public static let cameraStreamQualityKey = ViewPreferenceKeys.cameraStreamQuality
     public static let automaticUpdateCheckInterval: TimeInterval = 6 * 3600
     public internal(set) var updateState: AppUpdateState = .idle
     public var automaticallyChecksForUpdates: Bool = true {
@@ -319,7 +349,7 @@ public final class HomeStore {
     private var toastTimerTask: Task<Void, Never>?
     var optimisticLockUntil: [String: ContinuousClock.Instant] = [:]
     var optimisticLockRevision: [String: UInt64] = [:]
-    public static let deviceAliasesKey = "device_aliases"
+    public static let deviceAliasesKey = ViewPreferenceKeys.deviceAliases
     var rawDeviceNames: [String: String] = [:]
 
     var lowBatteryAlertedAt: [String: Date] = [:]
@@ -328,7 +358,7 @@ public final class HomeStore {
     var activeSinceByDeviceId: [String: Date] = [:]
     var longRunAlertedForSession: Set<String> = []
 
-    static let lastManualLightIdKey = "last_manual_light_id"
+    static let lastManualLightIdKey = ViewPreferenceKeys.lastManualLightId
     /// Last light the user switched on by hand; the 柔和夜灯 fallback uses it instead of "主卧" (#36).
     var lastManuallyUsedLightId: String?
     /// A legacy 主卧/阳台 menu-bar mode was migrated; pick the first temperature sensor when readings arrive.
@@ -337,12 +367,13 @@ public final class HomeStore {
 
     public init(
         provider: (any HomeProvider)? = nil,
+        dualSource: (homeAssistant: any HomeProvider, xiaomiCloud: any HomeProvider)? = nil,
         defaultsSuiteName: String? = nil,
         updater: AppUpdater? = nil
     ) {
         let ud = defaultsSuiteName.flatMap { UserDefaults(suiteName: $0) } ?? .standard
         self.userDefaults = ud
-        let isTestEnvironment = (provider != nil || defaultsSuiteName != nil)
+        let isTestEnvironment = (provider != nil || dualSource != nil || defaultsSuiteName != nil)
         self.isTestEnvironment = isTestEnvironment
         self.updater = updater ?? AppUpdater()
         self.energyHistory = EnergyHistory(defaults: ud)
@@ -378,6 +409,10 @@ public final class HomeStore {
         self.serverURLString = savedURL
         let initialBackend = ud.string(forKey: "home_backend").flatMap(HomeBackend.init(rawValue:)) ?? .homeAssistant
         self.homeBackend = initialBackend
+        // Demo mode and injected providers must not touch the Keychain until live mode needs it.
+        let needsInitialHAToken = provider == nil && dualSource == nil && initialBackend != .demo
+        let initialHAToken = needsInitialHAToken ? KeychainHelper.loadToken(defaults: ud) : ""
+        self.hasHASource = !initialHAToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         self.miSessionMaskedUserId = initialMiSession?.maskedUserId
         self.miSessionExpiresAt = initialAccounts.compactMap(\.session.expiresAt).min()
         self.miSessionScopeIdentifier = initialMiSession?.historyScopeIdentifier
@@ -462,25 +497,32 @@ public final class HomeStore {
         }
         self.allOffOverrides = ud.dictionary(forKey: "all_off_overrides") as? [String: Bool] ?? [:]
 
-        let initialHAToken = (provider == nil && initialBackend == .homeAssistant) ? KeychainHelper.loadToken(defaults: ud) : ""
+        let initialProvider: any HomeProvider
         if let provider {
-            self.provider = provider
+            initialProvider = provider
+        } else if let dualSource {
+            initialProvider = Self.makeComposite(
+                homeAssistant: dualSource.homeAssistant,
+                xiaomiCloud: dualSource.xiaomiCloud,
+                defaults: ud
+            )
         } else if initialBackend == .xiaomiCloud {
-            self.provider = Self.makeMiAccountsProvider(accounts: initialAccounts, defaults: ud)
+            initialProvider = Self.makeMiAccountsProvider(accounts: initialAccounts, defaults: ud)
         } else if initialBackend == .demo {
-            self.provider = DemoHomeProvider()
+            initialProvider = DemoHomeProvider()
         } else {
-            self.provider = HAWebSocketProvider(baseURLString: savedURL, token: initialHAToken)
+            initialProvider = HAWebSocketProvider(baseURLString: savedURL, token: initialHAToken)
         }
-        if provider == nil, initialBackend == .homeAssistant, !isTestEnvironment {
-            self.provider = makeHAProvider(baseURLString: savedURL, token: initialHAToken)
+        self.provider = initialProvider
+        if provider == nil, dualSource == nil, initialBackend != .demo {
+            self.provider = makeLiveProvider()
         }
         syncSensorHistoryScope()
         scheduleMiSessionExpiryTransition()
         startListening()
         restoreScheduledCommands()
         // Demo mode is strictly offline: no LAN discovery, no LG connection (#47).
-        if provider == nil, initialBackend != .demo {
+        if provider == nil, dualSource == nil, initialBackend != .demo {
             startLGWebOSIfNeeded()
             Task { [weak self] in
                 _ = await self?.discoverHomeAssistantOnLAN(autoApplyIfDefault: true)

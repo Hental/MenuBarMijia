@@ -86,6 +86,7 @@ public enum MiotSynthesizer {
 
         var smartDevices: [SmartDevice] = []
         var readings: [EnvironmentReading] = []
+        var identities: [String: DeviceSourceIdentity] = [:]
 
         for record in devices where !splitParents.contains(record.did) {
             guard let spec = specs[record.model],
@@ -110,18 +111,28 @@ public enum MiotSynthesizer {
                 isSharedHome: room?.isSharedHome ?? false
             )
             smartDevices.append(device)
+            identities[device.id] = DeviceSourceIdentity(
+                dids: [record.did],
+                macAddresses: record.splitParentDid == nil ? [record.mac].compactMap { $0 } : [],
+                model: record.model,
+                name: name,
+                roomName: roomName,
+                kindTag: kind.tag
+            )
 
             if let reading = device.environmentReading {
                 readings.append(reading)
             }
         }
 
-        return DeviceSynthesizer.assembleHome(
+        var home = DeviceSynthesizer.assembleHome(
             devices: smartDevices,
             readings: readings,
             scenes: [],
             roomNameOrder: DeviceSynthesizer.roomNameOrder(from: rooms.map(\.name))
         )
+        home.deviceIdentities = identities
+        return home
     }
 
     /// The (did, siid, piid) triples the synthesizer reads for this device; poll exactly these.

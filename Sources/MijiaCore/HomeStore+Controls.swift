@@ -743,15 +743,18 @@ extension HomeStore {
         command: DeviceCommand,
         habitIntents: [DeviceIntent] = []
     ) {
+        let expectedRevision = optimisticLockRevision[deviceId]
         Task {
             do {
                 try await executeDeviceCommand(command)
                 confirmManualControl(intents: habitIntents)
             } catch {
-                if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
-                    self.devices[idx] = fallback
+                if self.optimisticLockRevision[deviceId] == expectedRevision {
+                    if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
+                        self.devices[idx] = fallback
+                    }
+                    self.optimisticLockUntil.removeValue(forKey: deviceId)
                 }
-                self.optimisticLockUntil.removeValue(forKey: deviceId)
                 self.showToast(L10n.tr("\(fallback.name) 操作未生效", "\(fallback.name) action failed"), isError: true)
             }
         }
@@ -764,18 +767,21 @@ extension HomeStore {
         command: DeviceCommand,
         habitIntents: [DeviceIntent] = []
     ) {
+        let expectedRevision = optimisticLockRevision[deviceId]
         debounceTasks[key]?.cancel()
         debounceTasks[key] = Task { [weak self] in
             try? await Task.sleep(for: self?.controlDebounceInterval ?? .milliseconds(280))
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.optimisticLockRevision[deviceId] == expectedRevision else { return }
             do {
                 try await self.executeDeviceCommand(command)
                 self.confirmManualControl(intents: habitIntents)
             } catch {
-                if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
-                    self.devices[idx] = fallback
+                if self.optimisticLockRevision[deviceId] == expectedRevision {
+                    if let idx = self.devices.firstIndex(where: { $0.id == deviceId }) {
+                        self.devices[idx] = fallback
+                    }
+                    self.optimisticLockUntil.removeValue(forKey: deviceId)
                 }
-                self.optimisticLockUntil.removeValue(forKey: deviceId)
                 self.showToast(L10n.tr("\(fallback.name) 调节未生效", "\(fallback.name) adjustment failed"), isError: true)
             }
         }
