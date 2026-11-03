@@ -3,7 +3,7 @@
 #
 # 用法：
 #   scripts/check_release.sh tag <tag>              # 校验 VERSION、tag、HEAD 与 Windows 版本元数据
-#   scripts/check_release.sh assets <version> <dir> # 校验 9 个附件、SHA-256 与 Ed25519 签名
+#   scripts/check_release.sh assets <version> <dir> # 校验 8 个附件、SHA-256、清单签名与字段
 #
 # `tag` 在 GitHub Actions 中会把 version/tag/commit 写入 $GITHUB_OUTPUT。
 # `assets` 需要 openssl（Ed25519 校验）与 python3；发布工作流在 ubuntu-latest 上执行。
@@ -31,11 +31,10 @@ usage() {
   scripts/check_release.sh notes <输入.md> <输出.md> <version> <signed:true|false>
 
 tag 必须等于 VERSION 加 v 前缀（例如 VERSION=1.0.6 → v1.0.6），并且指向当前 HEAD。
-assets 只接受 MenuBarMijia-<version>.dmg / .dmg.sha256 / .dmg.ed25519.sig、
-MenuBarMijia-<version>-windows-x64-setup.exe / .exe.sha256 / .exe.ed25519.sig 与
-MenuBarMijia-<version>-windows-x64.msi / .msi.sha256 / .msi.ed25519.sig 这 9 个文件。
-draft-assets 接受同样的 9 个文件去掉 3 个 .ed25519.sig 后的 6 个待签附件，供 CI 产出草稿时自检；
-它不做签名校验，发布前仍必须跑 assets（严格 9 个且三份 Ed25519 签名都必须对得上）。
+assets 只接受 6 个安装包和校验文件，再加上 MenuBarMijia-<version>.update.json
+与 MenuBarMijia-<version>.update.json.ed25519.sig，一共 8 个文件。
+draft-assets 只接受那 6 个待签附件，供 CI 产出草稿时自检；
+它不做签名校验，发布前仍必须跑 assets（严格 8 个，只验清单签名）。
 notes 按 Windows 签名状态增删“未签名”段落，重复执行结果一致。
 EOF
     exit 2
@@ -267,32 +266,24 @@ PY
 verify_ed25519() {
     local dir="$1"
     local version="$2"
-    verify_ed25519_file "$dir/MenuBarMijia-${version}.dmg"
-    verify_ed25519_file "$dir/MenuBarMijia-${version}-windows-x64-setup.exe"
-    verify_ed25519_file "$dir/MenuBarMijia-${version}-windows-x64.msi"
+    verify_ed25519_file "$dir/MenuBarMijia-${version}.update.json"
 }
 
 release_assets() {
-    # 单一附件清单：signature 阶段只差 3 个 .ed25519.sig，其余 6 个完全一致。
+    # 草稿是 6 个安装包和校验文件。发布再加清单和清单签名，一共 8 个。
     local version="$1"
     local with_signature="$2"
     printf '%s\n' \
         "MenuBarMijia-${version}.dmg" \
-        "MenuBarMijia-${version}.dmg.sha256"
-    if [ "$with_signature" = "1" ]; then
-        printf '%s\n' "MenuBarMijia-${version}.dmg.ed25519.sig"
-    fi
-    printf '%s\n' \
+        "MenuBarMijia-${version}.dmg.sha256" \
         "MenuBarMijia-${version}-windows-x64-setup.exe" \
-        "MenuBarMijia-${version}-windows-x64-setup.exe.sha256"
-    if [ "$with_signature" = "1" ]; then
-        printf '%s\n' "MenuBarMijia-${version}-windows-x64-setup.exe.ed25519.sig"
-    fi
-    printf '%s\n' \
+        "MenuBarMijia-${version}-windows-x64-setup.exe.sha256" \
         "MenuBarMijia-${version}-windows-x64.msi" \
         "MenuBarMijia-${version}-windows-x64.msi.sha256"
     if [ "$with_signature" = "1" ]; then
-        printf '%s\n' "MenuBarMijia-${version}-windows-x64.msi.ed25519.sig"
+        printf '%s\n' \
+            "MenuBarMijia-${version}.update.json" \
+            "MenuBarMijia-${version}.update.json.ed25519.sig"
     fi
 }
 
@@ -325,7 +316,7 @@ check_asset_set() {
 }
 
 validate_assets() {
-    # assets：严格 9 个附件（含三份 Ed25519 签名），签名必须与 DMG/EXE/MSI 字节匹配。
+    # assets：严格 8 个附件。Ed25519 只验证清单，再由 check-fields 把清单和三个安装包对上。
     # draft-assets：只要求 6 个待签附件，供 CI 阶段产出草稿时自检；绝不替代签名验证。
     local mode="$1"
     [ "$#" -eq 3 ] || usage
@@ -337,7 +328,7 @@ validate_assets() {
     [ "$version" = "$(version_file)" ] \
         || fail "附件版本 $version 与 VERSION=$(version_file) 不一致"
 
-    local with_signature=1 expect="9 个文件（DMG/EXE/MSI、SHA-256 与 Ed25519 签名）"
+    local with_signature=1 expect="8 个文件（DMG/EXE/MSI、SHA-256、更新清单与清单签名）"
     if [ "$mode" = "draft-assets" ]; then
         with_signature=0
         expect="6 个待签文件（DMG/EXE/MSI 与 SHA-256；Ed25519 签名由维护者离线补上）"
@@ -356,6 +347,7 @@ validate_assets() {
 
     if [ "$with_signature" -eq 1 ]; then
         verify_ed25519 "$dir" "$version"
+        python3 scripts/update_manifest.py check-fields "$version" "$dir"
     fi
 
     info "发布附件完整：$expect"
@@ -376,7 +368,7 @@ END = "<!-- windows-signing-status:end -->"
 BLOCK = [
     "### ⚠️ Windows 安装包未签名",
     "本次 release 的 EXE/MSI 没有 Authenticode 签名，安装时 SmartScreen 会提示“Windows 已保护你的电脑”。",
-    f"这与 macOS 侧无关：DMG 仍带 Ed25519 更新签名（`MenuBarMijia-{version}.dmg.ed25519.sig`），应用内更新会强制校验。",
+    f"这与 macOS 侧无关：发布清单 `MenuBarMijia-{version}.update.json` 带 Ed25519 签名，应用内更新会强制校验。",
     "Windows 安装包请以本页附带的 `.sha256` 为准。签名接入见 issue #32。",
 ]
 

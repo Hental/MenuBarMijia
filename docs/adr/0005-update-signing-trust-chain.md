@@ -14,7 +14,7 @@
 
 ## 决定
 
-1. **Ed25519 分离签名，作为主防线。** 发布时用私钥对最终安装包字节签名，生成 `<安装包>.ed25519.sig` 并作为 release 附件上传。双端应用把同一 32 字节公钥编进源码（macOS `UpdateChecker.updateSigningPublicKeyBase64`、Windows `UPDATE_SIGNING_PUBLIC_KEY_BASE64`），在下载完成、SHA-256 校验通过之后、解包或启动安装程序之前验证签名。签名缺失、不是合法 base64、或与包内容不匹配，一律中止安装并报明确错误（`updateSignatureMissing` / `updateSignatureInvalid`）。macOS 侧选择 CryptoKit `Curve25519.Signing`（Linux 侧由 ADR-0003 的 swift-crypto 垫片提供同名 API）；Windows 侧复用 `rustls` 已引入的 `ring::signature::ED25519` 验签。
+1. **Ed25519 分离签名，作为主防线。** 发布时用私钥对发布清单 `MenuBarMijia-<version>.update.json` 的字节签名，生成同名 `.update.json.ed25519.sig` 并作为 release 附件上传。清单写明版本、最低可升级版本、公钥标识，以及 DMG、EXE、MSI 的文件名和 SHA-256。签名覆盖的是这份清单，不是安装包字节，所以一份旧清单不能被改挂到更高的版本号上。双端应用把同一 32 字节公钥编进源码（macOS `UpdateChecker.updateSigningPublicKeyBase64`、Windows `UPDATE_SIGNING_PUBLIC_KEY_BASE64`），在下载完成之后、解包或启动安装程序之前验证清单签名，再按清单里的 SHA-256 核对安装包。签名缺失、不是合法 base64、或与清单字节不匹配，一律中止安装并报明确错误（`updateSignatureMissing` / `updateSignatureInvalid`）。macOS 侧选择 CryptoKit `Curve25519.Signing`（Linux 侧由 ADR-0003 的 swift-crypto 垫片提供同名 API）；Windows 侧复用 `rustls` 已引入的 `ring::signature::ED25519` 验签。
 
    私钥的保存方式决定这条防线到底防谁：**私钥只保存在维护者的可信本机，永不进入 GitHub**。`release.yml` 与 `finalize.yml` 都不读取 `MENUBARMIJIA_UPDATE_SIGNING_KEY`，CI 里也没有该 secret，因此 GitHub 账号、Token 或 CI 任意一环被拿下都拿不到签名私钥，攻击者最多造成“更新失败”，而不是“装上恶意版本”。代价是发布必须多一次人工离线签名（见下文第 4 条）。
 
@@ -32,19 +32,19 @@
 
 4. **发布拆成两阶段：CI 只产草稿，人工离线签名，再由 Finalize 校验后发布。**
 
-   - **阶段一（`release.yml`，push tag `v*` 或 workflow_dispatch 输入 `tag`）**：`verify-tag` → `macos-release` / `windows-release` → `stage-draft`。构建 job 只上传 artifact；`stage-draft` 校验 6 个未签名附件（DMG、`.dmg.sha256`、EXE、`.exe.sha256`、MSI、`.msi.sha256`）、拒绝改动已发布的 release、创建或刷新**草稿**，并在缺 `.ed25519.sig` 时以“⏳ 等待离线签名”成功结束。`release.yml` 全文件没有 `--draft=false`，构建阶段无法发布。
-   - **阶段二（维护者本机）**：下载草稿里的 DMG/EXE/MSI，用离线私钥执行 `scripts/sign_update.swift` 生成 3 份 `.ed25519.sig`（脚本要求私钥对应的公钥等于内置值），再用 `gh release upload <tag> dist/*.ed25519.sig` 显式上传这三个公有签名附件。
-   - **阶段三（`finalize.yml`，仅手动 workflow_dispatch，输入 `tag`）**：校验 tag == `v$(VERSION)`、四处版本号一致、远程 tag 仍指向检出提交、目标必须是未发布草稿；下载**恰好 9 个**附件，逐个比对下载字节与草稿的服务端 `sha256:` digest 与大小，并用 `scripts/check_release.sh assets` 就地解析 `UpdateChecker.updateSigningPublicKeyBase64` 对 DMG/EXE/MSI 验签（没有可配置公钥，换密钥必须改源码并发新版）；最后只执行 `gh release edit --draft=false`，**不重编译、不上传、不 `--clobber`**。
+   - **阶段一（`release.yml`，push tag `v*` 或 workflow_dispatch 输入 `tag`）**：`verify-tag` → `macos-release` / `windows-release` → `stage-draft`。构建 job 只上传 artifact；`stage-draft` 校验 6 个未签名附件（DMG、`.dmg.sha256`、EXE、`.exe.sha256`、MSI、`.msi.sha256`）、拒绝改动已发布的 release、创建或刷新**草稿**，并在缺清单签名时以“⏳ 等待离线签名”成功结束。草稿里如果还留着旧的 `<安装包>.ed25519.sig`，工作流拒绝继续，并且不会删除 GitHub 附件。`release.yml` 全文件没有 `--draft=false`，构建阶段无法发布。
+   - **阶段二（维护者本机）**：下载草稿里的 DMG/EXE/MSI，用离线私钥执行 `scripts/sign_update.swift --min-from <x.y.z>` 生成清单和 `MenuBarMijia-<version>.update.json.ed25519.sig`（脚本要求私钥对应的公钥等于内置值），再把这两个文件上传回同一草稿。
+   - **阶段三（`finalize.yml`，仅手动 workflow_dispatch，输入 `tag`）**：校验 tag == `v$(VERSION)`、四处版本号一致、远程 tag 仍指向检出提交、目标必须是未发布草稿；下载**恰好 8 个**附件，逐个比对下载字节与草稿的服务端 `sha256:` digest 与大小，并用 `scripts/check_release.sh assets` 就地解析 `UpdateChecker.updateSigningPublicKeyBase64` 对清单验签，再 `check-fields` 把清单和三个安装包对上（没有可配置公钥，换密钥必须改源码并发新版）；最后只执行 `gh release edit --draft=false`，**不重编译、不上传、不 `--clobber`**。
 
-   缺签名时 `stage-draft` 只留草稿；`finalize.yml` 发现草稿里缺少任一 `.sig` 会输出完整离线命令并以非零退出，验签失败（包括安装包重建后仍挂旧签名）同样硬失败。`draft-assets` 严格 6 个、`assets` 严格 9 个，多一个少一个都失败，因此“少签名”不会悄悄降级为不带签名的发布。私钥格式支持 32 字节 raw seed 的 base64 或 PKCS#8 PEM。
+   缺签名时 `stage-draft` 只留草稿；`finalize.yml` 发现草稿里缺少清单或清单签名会输出完整离线命令并以非零退出，验签失败（包括安装包重建后仍挂旧清单）同样硬失败。`draft-assets` 严格 6 个、`assets` 严格 8 个，多一个少一个都失败，因此“少签名”不会悄悄降级为不带签名的发布。私钥格式支持 32 字节 raw seed 的 base64 或 PKCS#8 PEM。
 
 ## 后果
 
 - 私钥只在本机：GitHub 账号、release、CI 任一被攻破都无法产出能通过校验的更新包；攻击者最多造成“更新失败”或“发布被拖延”，而不是“装上恶意版本”。
 - 发布流程固定多一步人工离线签名 + 手动触发 Finalize，换取更新链路的独立性。轮换密钥需要同时改 `UpdateChecker.updateSigningPublicKeyBase64` 并发布新版本；轮换代码签名证书同理，旧版本会因钉住旧证书而拒绝新包，需要先用旧证书发一个过渡版本。
 - 残余风险：升级到本实现之前发布的旧版本仍按旧信任链检查更新，因此“第一次升级到带签名校验的版本”这一步无法由新机制保护；之后的所有更新才受 Ed25519 约束。
-- 残余风险：攻击者可以重放一份**旧版本但签名有效**的 DMG，并把 release 标成更高版本号；版本号本身没有签名覆盖。当前缓解依赖 release 可见性与用户察觉，后续可把最低版本/渠道写进签名载荷再收紧。
-- 残余风险：`stage-draft` 复用一个已有草稿并且重传了 DMG 时，草稿里会短暂留着旧 `.sig`（工作流只打 `::warning::`）。真正把关的是 `finalize.yml`：字节与签名不符会硬失败，因此这种状态无法发布出去。
+- 残余风险：早于这次改动的客户端仍然寻找 `<安装包>.ed25519.sig`。它们认不出清单签名，不能自动安装这一版，需要一次手动安装。装上这一版之后，后续更新才按清单签名校验。
+- 残余风险：草稿里如果还留着旧的 `<安装包>.ed25519.sig`，`release.yml` 会拒绝继续，并且不会从 GitHub 删除这些附件。维护者需要先手动去掉旧签名，再上传清单和清单签名。
 - CI secret 里的 p12 / Authenticode 证书能签出同证书的 App 与安装包，但不能伪造更新签名；私钥泄露才是灾难性事件。
 - 自签名构建仍会去隔离；这是“没有 Apple 公证”这一前提下的可用性取舍，而不是对 Gatekeeper 的普遍绕过。
 
@@ -52,4 +52,4 @@
 
 - #17（本 ADR 的来源）、#25（CI 权限与 release 覆盖风险）
 - ADR-0003（MijiaCore 在 Linux 上编译，CryptoKit 由 swift-crypto 垫片提供）
-- `Sources/MijiaCore/UpdateChecker.swift`、`Sources/MijiaCore/UpdateSignature.swift`、`scripts/sign_update.swift`、`scripts/build_app.sh`、`scripts/release.sh`、`scripts/check_release.sh`、`.github/workflows/release.yml`、`.github/workflows/finalize.yml`
+- `Sources/MijiaCore/UpdateChecker.swift`、`Sources/MijiaCore/UpdateManifest.swift`、`Sources/MijiaCore/UpdateSignature.swift`、`scripts/sign_update.swift`、`scripts/update_manifest.py`、`scripts/build_app.sh`、`scripts/release.sh`、`scripts/check_release.sh`、`.github/workflows/release.yml`、`.github/workflows/finalize.yml`

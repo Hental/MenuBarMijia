@@ -18,16 +18,12 @@ export const UPDATE_SIGNING_PUBLIC_KEY_BASE64 = "rLwWXuP0sOZvgd/KusLTTmBXN9DAZ9E
 export interface WindowsInstallerAsset {
   /** Asset file name, e.g. `MenuBarMijia-1.1.4-windows-x64-setup.exe`. */
   readonly name: string;
-  /** Direct download URL under https://github.com/jryang1997/MenuBarMijia/releases/download/... */
+  /** Constructed download URL under https://github.com/jryang1997/MenuBarMijia/releases/download/... */
   readonly downloadUrl: string;
   /** Byte size reported by GitHub (0 when unknown). */
   readonly sizeBytes: number;
-  /** Lowercase 64-hex SHA-256 from GitHub's inline `digest`, or `null` when only a `.sha256` sidecar exists. */
-  readonly sha256: string | null;
-  /** Optional `.sha256` sidecar download URL under https://github.com/jryang1997/MenuBarMijia/releases/download/... */
-  readonly checksumUrl: string | null;
-  /** Detached Ed25519 signature URL (`<asset>.ed25519.sig`, ADR-0005). */
-  readonly signatureUrl: string;
+  /** Release manifest URL. The signature is this URL with `.ed25519.sig` appended. */
+  readonly manifestUrl: string;
 }
 
 export interface GitHubRelease {
@@ -95,103 +91,53 @@ export function shouldCheckForUpdate(nowMs: number, lastCheckedAtMs: number | nu
 const RELEASE_DOWNLOAD_URL_PATTERN =
   /^https:\/\/github\.com\/jryang1997\/MenuBarMijia\/releases\/download\/[^\s]+$/i;
 
-/** Parses a 64-char hex SHA-256 digest from `"sha256:<hex>"` or a `.sha256` sidecar line. */
-export function parseSha256Digest(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  const firstToken = raw.trim().split(/\s+/)[0] ?? "";
-  const candidate = firstToken.toLowerCase().replace(/^sha256:/, "");
-  if (!/^[0-9a-f]{64}$/.test(candidate)) return null;
-  return candidate;
+function releaseDownloadURL(version: string, fileName: string): string {
+  return `https://github.com/jryang1997/MenuBarMijia/releases/download/v${version}/${fileName}`;
 }
 
-function buildValidatedInstallerAsset(params: {
-  rawName: unknown;
-  rawDownloadUrl: unknown;
-  rawSizeBytes: unknown;
-  rawSha256: unknown;
-  rawChecksumUrl: unknown;
-  rawSignatureUrl?: unknown;
-}): WindowsInstallerAsset | null {
-  const name = typeof params.rawName === "string" ? params.rawName.trim() : "";
-  if (!name || /[\\/:]|\.\./.test(name) || !/\.(?:exe|msi)$/i.test(name)) return null;
-  const downloadUrl = typeof params.rawDownloadUrl === "string" ? params.rawDownloadUrl.trim() : "";
-  if (!RELEASE_DOWNLOAD_URL_PATTERN.test(downloadUrl)) return null;
-  const sizeBytes =
-    typeof params.rawSizeBytes === "number" && Number.isFinite(params.rawSizeBytes) && params.rawSizeBytes >= 0
-      ? Math.floor(params.rawSizeBytes)
-      : 0;
-  const sha256 = parseSha256Digest(params.rawSha256);
-  const rawChecksum = typeof params.rawChecksumUrl === "string" ? params.rawChecksumUrl.trim() : "";
-  const checksumUrl =
-    RELEASE_DOWNLOAD_URL_PATTERN.test(rawChecksum) && /\.sha256$/i.test(rawChecksum)
-      ? rawChecksum
-      : null;
-  if (!sha256 && !checksumUrl) return null;
-  const rawSig = typeof params.rawSignatureUrl === "string" ? params.rawSignatureUrl.trim() : "";
-  const signatureUrl =
-    RELEASE_DOWNLOAD_URL_PATTERN.test(rawSig) && /\.ed25519\.sig$/i.test(rawSig)
-      ? rawSig
-      : `${downloadUrl}.ed25519.sig`;
-  return { name, downloadUrl, sizeBytes, sha256, checksumUrl, signatureUrl };
+function assetSize(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
 }
 
 function parseInstallerAssetRecord(raw: unknown): WindowsInstallerAsset | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
-  // Cached releases written before the serde camelCase alignment still use uppercase URL keys.
-  return buildValidatedInstallerAsset({
-    rawName: record["name"],
-    rawDownloadUrl: record["downloadUrl"] ?? record["downloadURL"],
-    rawSizeBytes: record["sizeBytes"],
-    rawSha256: record["sha256"],
-    rawChecksumUrl: record["checksumUrl"] ?? record["checksumURL"],
-    rawSignatureUrl: record["signatureUrl"] ?? record["signatureURL"],
-  });
+  const legacySignature = record["signatureUrl"] ?? record["signatureURL"];
+  const manifestUrl = typeof record["manifestUrl"] === "string" ? record["manifestUrl"].trim() : "";
+  if (typeof legacySignature === "string" && legacySignature.trim() !== "" && manifestUrl === "") return null;
+  const name = typeof record["name"] === "string" ? record["name"].trim() : "";
+  const downloadUrlRaw = record["downloadUrl"] ?? record["downloadURL"];
+  const downloadUrl = typeof downloadUrlRaw === "string" ? downloadUrlRaw.trim() : "";
+  if (!name || /[\\/:]|\.\./.test(name) || !/\.(?:exe|msi)$/i.test(name)) return null;
+  if (!RELEASE_DOWNLOAD_URL_PATTERN.test(downloadUrl)) return null;
+  if (!RELEASE_DOWNLOAD_URL_PATTERN.test(manifestUrl) || !manifestUrl.endsWith(".update.json")) return null;
+  return { name, downloadUrl, sizeBytes: assetSize(record["sizeBytes"]), manifestUrl };
 }
 
-export function selectWindowsInstallerAsset(rawAssets: unknown): WindowsInstallerAsset | null {
-  if (!Array.isArray(rawAssets)) return null;
-  const sidecarByBaseName = new Map<string, string>();
-  const signatureByBaseName = new Map<string, string>();
+export function selectWindowsInstallerAsset(version: string, rawAssets: unknown): WindowsInstallerAsset | null {
+  if (!/^\d+\.\d+\.\d+$/.test(version) || !Array.isArray(rawAssets)) return null;
+  const names = new Set<string>();
+  const sizeByName = new Map<string, number>();
   for (const item of rawAssets) {
     if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const name = typeof rec["name"] === "string" ? rec["name"].trim() : "";
-    const url = typeof rec["browser_download_url"] === "string" ? rec["browser_download_url"].trim() : "";
-    if (!RELEASE_DOWNLOAD_URL_PATTERN.test(url)) continue;
-    const lower = name.toLowerCase();
-    if (lower.endsWith(".sha256")) {
-      sidecarByBaseName.set(lower.slice(0, -".sha256".length), url);
-    } else if (lower.endsWith(".ed25519.sig")) {
-      signatureByBaseName.set(lower.slice(0, -".ed25519.sig".length), url);
-    }
+    const record = item as Record<string, unknown>;
+    const name = typeof record["name"] === "string" ? record["name"].trim() : "";
+    if (!name) continue;
+    names.add(name);
+    if (!sizeByName.has(name)) sizeByName.set(name, assetSize(record["size"]));
   }
-
-  let exeCandidate: WindowsInstallerAsset | null = null;
-  let msiCandidate: WindowsInstallerAsset | null = null;
-
-  for (const item of rawAssets) {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const name = typeof rec["name"] === "string" ? rec["name"].trim() : "";
-    const lowerName = name.toLowerCase();
-    const candidate = buildValidatedInstallerAsset({
-      rawName: name,
-      rawDownloadUrl: rec["browser_download_url"],
-      rawSizeBytes: rec["size"],
-      rawSha256: rec["digest"],
-      rawChecksumUrl: sidecarByBaseName.get(lowerName) ?? null,
-      rawSignatureUrl: signatureByBaseName.get(lowerName) ?? null,
-    });
-    if (!candidate) continue;
-    if (lowerName.endsWith(".exe") && !exeCandidate) {
-      exeCandidate = candidate;
-    } else if (lowerName.endsWith(".msi") && !msiCandidate) {
-      msiCandidate = candidate;
-    }
-  }
-
-  return exeCandidate ?? msiCandidate;
+  const manifestName = `MenuBarMijia-${version}.update.json`;
+  if (!names.has(manifestName)) return null;
+  const exeName = `MenuBarMijia-${version}-windows-x64-setup.exe`;
+  const msiName = `MenuBarMijia-${version}-windows-x64.msi`;
+  const chosen = names.has(exeName) ? exeName : names.has(msiName) ? msiName : null;
+  if (!chosen) return null;
+  return {
+    name: chosen,
+    downloadUrl: releaseDownloadURL(version, chosen),
+    sizeBytes: sizeByName.get(chosen) ?? 0,
+    manifestUrl: releaseDownloadURL(version, manifestName),
+  };
 }
 
 /** Parses `GET /repos/.../releases/latest`; rejects drafts/odd payloads without a tag. */
@@ -210,7 +156,7 @@ export function parseLatestRelease(body: string): GitHubRelease | null {
   const rawURL = typeof record["html_url"] === "string" ? record["html_url"].trim() : "";
   const htmlURL = /^https:\/\/github\.com\/[^\s]+$/i.test(rawURL) ? rawURL : UPDATE_RELEASES_PAGE;
   const notes = typeof record["body"] === "string" ? record["body"].trim() : "";
-  const installerAsset = selectWindowsInstallerAsset(record["assets"]);
+  const installerAsset = selectWindowsInstallerAsset(version, record["assets"]);
   return {
     version,
     tag,

@@ -1840,8 +1840,7 @@ describe("Windows update check (#39)", () => {
     assert.deepEqual(parseUpdateState("{bad json"), { lastCheckedAtMs: null, release: null });
   });
 
-  it("restores an installer asset cached before the camelCase field alignment", () => {
-    const sha = "c".repeat(64);
+  it("drops a cached installer that still points at a package signature", () => {
     const base =
       "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe";
     const legacyState = JSON.stringify({
@@ -1854,25 +1853,23 @@ describe("Windows update check (#39)", () => {
           name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
           downloadURL: base,
           sizeBytes: 2048,
-          sha256: sha,
+          sha256: "c".repeat(64),
           checksumURL: `${base}.sha256`,
           signatureURL: `${base}.ed25519.sig`,
         },
       },
     });
 
-    assert.deepEqual(parseUpdateState(legacyState).release?.installerAsset, {
-      name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
-      downloadUrl: base,
-      sizeBytes: 2048,
-      sha256: sha,
-      checksumUrl: `${base}.sha256`,
-      signatureUrl: `${base}.ed25519.sig`,
-    });
+    assert.equal(parseUpdateState(legacyState).release?.installerAsset, undefined);
   });
 
-  it("selects Windows setup.exe over MSI and requires SHA-256 or sidecar URL", () => {
+  it("prefers Windows setup.exe over MSI and requires the update manifest", () => {
     const sha = "a".repeat(64);
+    const manifest = {
+      name: "MenuBarMijia-1.2.0.update.json",
+      browser_download_url: "https://evil.example/MenuBarMijia-1.2.0.update.json",
+      size: 526,
+    };
     const fullPayload = JSON.stringify({
       tag_name: "v1.2.0",
       html_url: "https://github.com/jryang1997/MenuBarMijia/releases/tag/v1.2.0",
@@ -1887,17 +1884,17 @@ describe("Windows update check (#39)", () => {
         },
         {
           name: "MenuBarMijia-1.2.0-windows-x64-setup.exe",
-          browser_download_url:
-            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe",
+          browser_download_url: "https://evil.example/setup.exe",
           size: 2048,
           digest: `sha256:${sha.toUpperCase()}`,
         },
         {
-          name: "MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
+          name: "MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
           browser_download_url:
-            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
+            "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
           size: 96,
         },
+        manifest,
       ],
     });
     const parsed = parseLatestRelease(fullPayload);
@@ -1907,15 +1904,18 @@ describe("Windows update check (#39)", () => {
       downloadUrl:
         "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe",
       sizeBytes: 2048,
-      sha256: sha,
-      checksumUrl:
-        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.sha256",
-      signatureUrl:
-        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0-windows-x64-setup.exe.ed25519.sig",
+      manifestUrl:
+        "https://github.com/jryang1997/MenuBarMijia/releases/download/v1.2.0/MenuBarMijia-1.2.0.update.json",
     });
 
     const roundTrip = parseUpdateState(serializeUpdateState({ lastCheckedAtMs: 123, release: parsed }));
     assert.deepEqual(roundTrip.release, parsed);
+
+    const withoutManifest = JSON.parse(fullPayload) as { assets: unknown[] };
+    withoutManifest.assets = withoutManifest.assets.filter(
+      (asset) => (asset as { name?: string }).name !== "MenuBarMijia-1.2.0.update.json",
+    );
+    assert.equal(parseLatestRelease(JSON.stringify(withoutManifest))?.installerAsset, undefined);
   });
 });
 

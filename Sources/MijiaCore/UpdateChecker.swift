@@ -85,30 +85,22 @@ public struct AppRelease: Equatable, Sendable {
         case zip
     }
 
-    public enum IntegritySource: Equatable, Sendable {
-        case inlineSHA256(SHA256Digest)
-        case checksumAssetURL(URL)
-    }
-
     public struct PackageAsset: Equatable, Sendable {
         public let name: String
         public let downloadURL: URL
         public let sizeBytes: Int64
         public let kind: AssetKind
-        public let integrity: IntegritySource
 
         public init(
             name: String,
             downloadURL: URL,
             sizeBytes: Int64,
-            kind: AssetKind,
-            integrity: IntegritySource
+            kind: AssetKind
         ) {
             self.name = name
             self.downloadURL = downloadURL
             self.sizeBytes = sizeBytes
             self.kind = kind
-            self.integrity = integrity
         }
     }
 
@@ -155,7 +147,7 @@ public struct DownloadProgress: Equatable, Sendable {
     }
 }
 
-/// Proof token constructed only after SHA-256, Ed25519 package signature, bundle identifier, version, optional quarantine removal, and code signature checks pass.
+/// Proof token constructed only after the signed update manifest, bundle identifier, version, optional quarantine removal, and code signature checks pass.
 public struct VerifiedStagedApp: Equatable, Sendable {
     public let release: AppRelease
     public let stagedBundleURL: URL
@@ -257,7 +249,7 @@ public struct UpdateChecker: Sendable {
     public static let latestReleaseURL = URL(string: "https://api.github.com/repos/jryang1997/MenuBarMijia/releases/latest")!
     public static let releasesPage = URL(string: "https://github.com/jryang1997/MenuBarMijia/releases")!
 
-    /// Ed25519 public key (32-byte raw, base64) that update packages must be signed with.
+    /// Ed25519 public key (32-byte raw, base64) that the release manifest must be signed with.
     /// The private key should stay offline; see `scripts/sign_update.swift` and ADR-0005.
     public static let updateSigningPublicKeyBase64 = "rLwWXuP0sOZvgd/KusLTTmBXN9DAZ9EzPBNhFSn9yUo="
 
@@ -294,79 +286,58 @@ public struct UpdateChecker: Sendable {
         let shown = tag.lowercased().hasPrefix("v") ? String(tag.dropFirst()) : tag
         let notes = object["body"] as? String ?? ""
         let rawAssets = object["assets"] as? [[String: Any]] ?? []
-        let packageAsset = Self.selectPackageAsset(from: rawAssets)
+        let packageAsset = Self.selectPackageAsset(version: shown, from: rawAssets)
         return AppRelease(version: shown, pageURL: url, notes: notes, packageAsset: packageAsset)
     }
 
-    private static func selectPackageAsset(from rawAssets: [[String: Any]]) -> AppRelease.PackageAsset? {
-        var sidecarURLByAssetName: [String: URL] = [:]
-        for item in rawAssets {
-            guard let name = item["name"] as? String,
-                  name.lowercased().hasSuffix(".sha256"),
-                  let urlString = item["browser_download_url"] as? String,
-                  let url = URL(string: urlString) else {
-                continue
-            }
-            let baseName = String(name.dropLast(".sha256".count)).lowercased()
-            sidecarURLByAssetName[baseName] = url
+    /// GitHub release URL for one of the eight publish names. `browser_download_url` is not used.
+    public static func releaseAssetURL(version: String, fileName: String) -> URL? {
+        guard UpdateManifest.isReleaseVersionText(version) else { return nil }
+        let allowed: Set<String> = [
+            "MenuBarMijia-\(version).dmg",
+            "MenuBarMijia-\(version).dmg.sha256",
+            "MenuBarMijia-\(version)-windows-x64-setup.exe",
+            "MenuBarMijia-\(version)-windows-x64-setup.exe.sha256",
+            "MenuBarMijia-\(version)-windows-x64.msi",
+            "MenuBarMijia-\(version)-windows-x64.msi.sha256",
+            "MenuBarMijia-\(version).update.json",
+            "MenuBarMijia-\(version).update.json.ed25519.sig",
+        ]
+        guard allowed.contains(fileName) else { return nil }
+        return URL(string: "https://github.com/jryang1997/MenuBarMijia/releases/download/v\(version)/\(fileName)")
+    }
+
+    private static func selectPackageAsset(version: String, from rawAssets: [[String: Any]]) -> AppRelease.PackageAsset? {
+        let dmgName = "MenuBarMijia-\(version).dmg"
+        let manifestName = "MenuBarMijia-\(version).update.json"
+        guard let downloadURL = releaseAssetURL(version: version, fileName: dmgName) else {
+            return nil
         }
-
-        var dmgCandidate: AppRelease.PackageAsset?
-        var zipCandidate: AppRelease.PackageAsset?
-
+        var sawDMG = false
+        var sawManifest = false
+        var sizeBytes: Int64 = 0
         for item in rawAssets {
-            guard let name = item["name"] as? String,
-                  let urlString = item["browser_download_url"] as? String,
-                  let downloadURL = URL(string: urlString) else {
-                continue
-            }
-            let lowerName = name.lowercased()
-            let kind: AppRelease.AssetKind
-            if lowerName.hasSuffix(".dmg") {
-                kind = .dmg
-            } else if lowerName.hasSuffix(".zip") {
-                kind = .zip
-            } else {
-                continue
-            }
-
-            let integrity: AppRelease.IntegritySource
-            if let rawDigest = item["digest"] as? String,
-               let parsedDigest = SHA256Digest(parsing: rawDigest) {
-                integrity = .inlineSHA256(parsedDigest)
-            } else if let sidecarURL = sidecarURLByAssetName[lowerName] {
-                integrity = .checksumAssetURL(sidecarURL)
-            } else {
-                continue
-            }
-
-            let sizeBytes: Int64
-            if let int64Size = item["size"] as? Int64 {
-                sizeBytes = int64Size
-            } else if let intSize = item["size"] as? Int {
-                sizeBytes = Int64(intSize)
-            } else if let numberSize = item["size"] as? NSNumber {
-                sizeBytes = numberSize.int64Value
-            } else {
-                sizeBytes = 0
-            }
-
-            let candidate = AppRelease.PackageAsset(
-                name: name,
-                downloadURL: downloadURL,
-                sizeBytes: sizeBytes,
-                kind: kind,
-                integrity: integrity
-            )
-            switch kind {
-            case .dmg:
-                if dmgCandidate == nil { dmgCandidate = candidate }
-            case .zip:
-                if zipCandidate == nil { zipCandidate = candidate }
+            guard let name = item["name"] as? String else { continue }
+            if name == dmgName {
+                sawDMG = true
+                if let int64Size = item["size"] as? Int64 {
+                    sizeBytes = int64Size
+                } else if let intSize = item["size"] as? Int {
+                    sizeBytes = Int64(intSize)
+                } else if let numberSize = item["size"] as? NSNumber {
+                    sizeBytes = numberSize.int64Value
+                }
+            } else if name == manifestName {
+                sawManifest = true
             }
         }
-
-        return dmgCandidate ?? zipCandidate
+        guard sawDMG, sawManifest else { return nil }
+        return AppRelease.PackageAsset(
+            name: dmgName,
+            downloadURL: downloadURL,
+            sizeBytes: sizeBytes,
+            kind: .dmg
+        )
     }
 }
 
@@ -377,13 +348,13 @@ public enum UpdateInstallError: LocalizedError, Equatable, Sendable {
     case notRunningFromAppBundle
     case targetLocationNotWritable(String)
     case checksumMismatch(expected: String, actual: String)
-    case invalidChecksumFile
     case unpackFailed(String)
     case bundleIdentifierMismatch(found: String?)
     case bundleVersionMismatch(found: String?, expected: String)
     case codeSignatureInvalid(String)
     case updateSignatureMissing
     case updateSignatureInvalid(String)
+    case updateBelowMinimum(current: String, minimum: String)
     case relaunchFailed(String)
 
     public var errorDescription: String? {
@@ -408,11 +379,6 @@ public enum UpdateInstallError: LocalizedError, Equatable, Sendable {
                 "安装包 SHA-256 校验失败（期望 \(expected.prefix(12))…，实际 \(actual.prefix(12))…）",
                 "Package SHA-256 verification failed (expected \(expected.prefix(12))…, got \(actual.prefix(12))…)"
             )
-        case .invalidChecksumFile:
-            return L10n.tr(
-                "无法解析更新校验文件（.sha256）",
-                "Invalid SHA-256 checksum file"
-            )
         case .unpackFailed(let detail):
             return L10n.tr(
                 "解压更新包失败：\(detail)",
@@ -435,8 +401,13 @@ public enum UpdateInstallError: LocalizedError, Equatable, Sendable {
             )
         case .updateSignatureMissing:
             return L10n.tr(
-                "更新包缺少 Ed25519 数字签名（.ed25519.sig），已中止安装",
-                "Update package is missing its Ed25519 signature (.ed25519.sig); installation aborted"
+                "更新包缺少 Ed25519 数字签名（.update.json.ed25519.sig），已中止安装",
+                "Update package is missing its Ed25519 signature (.update.json.ed25519.sig); installation aborted"
+            )
+        case .updateBelowMinimum(let current, let minimum):
+            return L10n.tr(
+                "当前版本 \(current) 低于此更新要求的最低版本 \(minimum)，已中止安装",
+                "Installed version \(current) is below the minimum \(minimum) required by this update; installation aborted"
             )
         case .updateSignatureInvalid(let detail):
             return L10n.tr(
@@ -837,8 +808,18 @@ public struct AppUpdater: Sendable {
         guard let asset = release.packageAsset else {
             throw UpdateInstallError.missingPackageAsset
         }
+        guard let packageURL = UpdateChecker.releaseAssetURL(version: release.version, fileName: asset.name),
+              let manifestURL = UpdateChecker.releaseAssetURL(
+                version: release.version,
+                fileName: "MenuBarMijia-\(release.version).update.json"
+              ),
+              let signatureURL = UpdateChecker.releaseAssetURL(
+                version: release.version,
+                fileName: "MenuBarMijia-\(release.version).update.json.ed25519.sig"
+              ) else {
+            throw UpdateInstallError.updateSignatureInvalid("release asset name is not publishable")
+        }
 
-        let expectedDigest = try await resolveExpectedDigest(for: asset)
         sweepStaleStagingDirectories()
         let stagingRootURL = stagingBaseDirectory.appendingPathComponent(
             "\(Self.stagingDirectoryPrefix)\(UUID().uuidString)",
@@ -856,25 +837,52 @@ public struct AppUpdater: Sendable {
         let initialTotal: Int64? = asset.sizeBytes > 0 ? asset.sizeBytes : nil
         onPhaseChange(.downloading(release, progress: DownloadProgress(receivedBytes: 0, totalBytes: initialTotal)))
 
-        try await driver.downloadFile(asset.downloadURL, archiveURL) { progress in
+        try await driver.downloadFile(packageURL, archiveURL) { progress in
             onPhaseChange(.downloading(release, progress: progress))
         }
         try Task.checkCancellation()
 
         onPhaseChange(.verifying(release))
-        let actualDigest = try SHA256Digest.hashFile(at: archiveURL)
-        guard actualDigest == expectedDigest else {
-            throw UpdateInstallError.checksumMismatch(expected: expectedDigest.hex, actual: actualDigest.hex)
+        let manifestBytes = try await fetchReleaseFile(
+            from: manifestURL,
+            missing: UpdateInstallError.updateSignatureInvalid("update manifest is missing")
+        )
+        let signatureData = try await fetchReleaseFile(
+            from: signatureURL,
+            missing: UpdateInstallError.updateSignatureMissing
+        )
+        guard let signatureText = String(data: signatureData, encoding: .utf8) else {
+            throw UpdateInstallError.updateSignatureInvalid("signature file is not UTF-8")
         }
-        try Task.checkCancellation()
-        try await verifyPackageSignature(for: asset, archiveURL: archiveURL)
+        let packageBytes: Data
+        do {
+            packageBytes = try Data(contentsOf: archiveURL)
+        } catch {
+            throw UpdateInstallError.updateSignatureInvalid("cannot read the downloaded package")
+        }
+        let decision = UpdateManifest.accept(
+            manifestBytes: manifestBytes,
+            signatureText: signatureText,
+            publicKeyBase64: updateSigningPublicKeyBase64,
+            releaseVersion: release.version,
+            runningVersion: checker.currentVersion,
+            packageName: asset.name,
+            packageBytes: packageBytes
+        )
+        let verified: UpdateManifest.VerifiedUpdate
+        switch decision {
+        case .success(let value):
+            verified = value
+        case .failure(let failure):
+            throw Self.installError(for: failure)
+        }
         try Task.checkCancellation()
 
         let stagedBundleURL = try await driver.unpackArchive(archiveURL, asset.kind, stagingRootURL)
         try? FileManager.default.removeItem(at: archiveURL)
         try Task.checkCancellation()
 
-        try validateBundleMetadata(at: stagedBundleURL, expectedVersion: release.version)
+        try validateBundleMetadata(at: stagedBundleURL, expectedVersion: verified.versionText)
         if Self.shouldStripQuarantine(currentAppIsAdHoc: Self.currentAppIsAdHoc()) {
             try await driver.stripQuarantine(stagedBundleURL)
         }
@@ -906,21 +914,12 @@ public struct AppUpdater: Sendable {
         try? FileManager.default.removeItem(at: staged.stagingRootURL)
     }
 
-    /// Detached Ed25519 signature asset that must accompany every downloadable package.
-    public static func signatureURL(for assetURL: URL) -> URL {
-        guard var components = URLComponents(url: assetURL, resolvingAgainstBaseURL: false) else {
-            return assetURL
-        }
-        components.path += ".ed25519.sig"
-        return components.url ?? assetURL
-    }
-
     /// `codesign` requirement used to verify the staged bundle.
     ///
     /// The pinned leaf certificate hash itself is the anchor. `anchor apple generic` is not
     /// assumed because the release certificate is self-signed and would never satisfy it;
     /// missing or malformed pins fail closed, including local development builds.
-    /// The Ed25519 package signature is independently mandatory.
+    /// The signed update manifest is independently mandatory.
     public static func codeSigningRequirement(bundleIdentifier: String, certificateSHA1: String?) -> String {
         let base = "identifier \"\(bundleIdentifier)\""
         guard let raw = certificateSHA1?.trimmingCharacters(in: .whitespacesAndNewlines) else {
@@ -1004,54 +1003,39 @@ public struct AppUpdater: Sendable {
         }
     }
 
-    private func verifyPackageSignature(for asset: AppRelease.PackageAsset, archiveURL: URL) async throws {
-        let request = URLRequest(url: Self.signatureURL(for: asset.downloadURL), timeoutInterval: 15)
+    private func fetchReleaseFile(from url: URL, missing: UpdateInstallError) async throws -> Data {
+        let request = URLRequest(url: url, timeoutInterval: 15)
         let (data, response) = try await driver.fetchData(request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 200
         if status == 404 {
-            throw UpdateInstallError.updateSignatureMissing
+            throw missing
         }
         guard (200..<300).contains(status) else {
             throw UpdateChecker.CheckError.httpStatus(status)
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw UpdateInstallError.updateSignatureInvalid("signature file is not UTF-8")
-        }
-        let signature = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !signature.isEmpty else {
-            throw UpdateInstallError.updateSignatureMissing
-        }
-        guard Data(base64Encoded: signature) != nil else {
-            throw UpdateInstallError.updateSignatureInvalid("signature is not valid base64")
-        }
-        guard let packageData = try? Data(contentsOf: archiveURL, options: .mappedIfSafe) else {
-            throw UpdateInstallError.updateSignatureInvalid("cannot read the downloaded package")
-        }
-        guard UpdateSignature.verify(
-            signatureBase64: signature,
-            publicKeyBase64: updateSigningPublicKeyBase64,
-            data: packageData
-        ) else {
-            throw UpdateInstallError.updateSignatureInvalid("signature does not match the package")
-        }
+        return data
     }
 
-    private func resolveExpectedDigest(for asset: AppRelease.PackageAsset) async throws -> SHA256Digest {
-        switch asset.integrity {
-        case .inlineSHA256(let digest):
-            return digest
-        case .checksumAssetURL(let url):
-            let request = URLRequest(url: url, timeoutInterval: 15)
-            let (data, response) = try await driver.fetchData(request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-            guard (200..<300).contains(status) else {
-                throw UpdateChecker.CheckError.httpStatus(status)
-            }
-            guard let text = String(data: data, encoding: .utf8),
-                  let digest = SHA256Digest(parsing: text) else {
-                throw UpdateInstallError.invalidChecksumFile
-            }
-            return digest
+    private static func installError(for failure: UpdateManifest.Failure) -> UpdateInstallError {
+        switch failure {
+        case .signatureMissing:
+            return .updateSignatureMissing
+        case .hashMismatch(let expected, let actual):
+            return .checksumMismatch(expected: expected, actual: actual)
+        case .belowMinimum(let current, let minimum):
+            return .updateBelowMinimum(current: current, minimum: minimum)
+        case .signatureInvalid:
+            return .updateSignatureInvalid("signature does not match the manifest")
+        case .malformed:
+            return .updateSignatureInvalid("update manifest is malformed")
+        case .keyIDMismatch:
+            return .updateSignatureInvalid("update manifest key id does not match")
+        case .releaseVersionMismatch:
+            return .updateSignatureInvalid("update manifest is signed for a different version")
+        case .notNewer:
+            return .updateSignatureInvalid("update manifest is not newer than the installed version")
+        case .unexpectedPackage:
+            return .updateSignatureInvalid("update package is not listed in the manifest")
         }
     }
 

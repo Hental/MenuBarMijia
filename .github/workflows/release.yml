@@ -5,7 +5,7 @@ name: Release
 #
 # 为什么这里不发布：应用内更新用离线 Ed25519 私钥签名（issue #17），私钥必须留在维护者的可信机器上。
 # 本工作流刻意**不读取、不存储**任何 Ed25519 私钥，因此不具备发布未签名更新的能力；草稿缺少
-# .ed25519.sig 是预期状态，由维护者离线签名后，用 .github/workflows/finalize.yml 严格校验再发布。
+# 清单签名 `.update.json.ed25519.sig` 是预期状态，由维护者离线签名后，用 .github/workflows/finalize.yml 严格校验再发布。
 # 普通推送与 PR 只跑 ci.yml（只读），不会走到这里。
 on:
   push:
@@ -215,7 +215,7 @@ jobs:
             echo "❌ CI 不应产出 Ed25519 签名：私钥必须留在可信机器上（issue #17）。" >&2
             exit 1
           fi
-          echo "ℹ️ 本次构建未签名更新包；发布前需在可信机器上执行 scripts/sign_update.swift 并上传 .ed25519.sig。"
+          echo "ℹ️ 本次构建未签名更新清单；发布前需在可信机器上执行 scripts/sign_update.swift --min-from <x.y.z>。"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -401,7 +401,7 @@ jobs:
     # 为什么不自动发布（issue #17）：应用内更新用离线 Ed25519 私钥签名，私钥必须留在维护者的
     # 可信机器上。任何能从 secrets 读到私钥的 CI 都等于把“GitHub 被攻破”重新纳入密钥泄露面，
     # 所以本工作流不读取、不存储私钥，也就不具备发布未签名更新的能力。
-    # 草稿缺 .ed25519.sig 是**预期状态**：维护者离线签名并上传后，由 finalize-release.yml 发布。
+    # 草稿缺清单签名是**预期状态**：维护者离线签名并上传后，由 finalize-release.yml 发布。
     needs: [verify-tag, macos-release, windows-release]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -436,7 +436,7 @@ jobs:
 
       - name: Validate the 6 unsigned-draft assets
         # 只校验“待签名的 6 个附件”（DMG / EXE / MSI + 各自 .sha256）。
-        # 这不是签名校验的降级替代：真正发布前的 assets 模式仍然要求 9 个且三份 Ed25519 必须匹配。
+        # 这不是签名校验的降级替代：真正发布前的 assets 模式仍然要求 8 个，且清单签名必须匹配。
         run: bash scripts/check_release.sh draft-assets "${RELEASE_VERSION}" dist
 
       - name: Verify the remote tag still points at the built commit
@@ -474,7 +474,7 @@ jobs:
             exit 1
           fi
 
-          # 草稿里只允许出现本阶段会产出的附件，以及维护者离线补上的 .ed25519.sig。
+          # 草稿可以留下清单和清单签名。旧的安装包 .ed25519.sig 必须由维护者先删掉；这里不删 GitHub 附件。
           mapfile -t expected < <(cd dist && ls -1 | sort)
           mapfile -t actual < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort)
           for name in "${actual[@]:-}"; do
@@ -483,6 +483,11 @@ jobs:
               "MenuBarMijia-${RELEASE_VERSION}.dmg.ed25519.sig"|\
               "MenuBarMijia-${RELEASE_VERSION}-windows-x64-setup.exe.ed25519.sig"|\
               "MenuBarMijia-${RELEASE_VERSION}-windows-x64.msi.ed25519.sig")
+                echo "❌ 草稿里还有旧的安装包签名 $name。请手动删除后再跑；本工作流不会删除 GitHub 附件。" >&2
+                exit 1
+                ;;
+              "MenuBarMijia-${RELEASE_VERSION}.update.json"|\
+              "MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig")
                 continue
                 ;;
             esac
@@ -493,7 +498,7 @@ jobs:
           done
 
           echo "draft_exists=true" >> "$GITHUB_OUTPUT"
-          echo "✅ 复用已存在的草稿 ${RELEASE_TAG}（只重传同名附件，不动 .ed25519.sig）"
+          echo "✅ 复用已存在的草稿 ${RELEASE_TAG}（只重传 6 个构建附件，不动清单和清单签名）"
 
       - name: Create draft release with the 6 build assets
         if: steps.existing.outputs.draft_exists == 'false'
@@ -511,27 +516,26 @@ jobs:
         if: steps.existing.outputs.draft_exists == 'true'
         run: |
           set -euo pipefail
-          # 只对同 tag 的草稿重传这 6 个附件；维护者已上传的 .ed25519.sig 不在 dist/ 里，不会被覆盖。
+          # 只重传这 6 个构建附件。清单和清单签名不在 dist/ 里，不会被覆盖，也不会被删除。
           had_sig=false
-          if gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | grep -qE '\.ed25519\.sig$'; then
+          if gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | grep -qF "MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"; then
             had_sig=true
           fi
           gh release upload "${RELEASE_TAG}" dist/* --clobber
           if [ "$had_sig" = "true" ]; then
-            # 安装包重新构建后字节会变，旧签名随即失效；
-            # 这里只是提醒，真正的把关在 Finalize 的 Ed25519 校验（不匹配即失败）。
+            # 安装包重新构建后字节会变，旧清单里的哈希随即失效。
             {
-              echo "### ⚠️ 草稿里已有 .ed25519.sig，但本次重新上传了安装包"
-              echo "请重新离线签名并覆盖对应的 .ed25519.sig，否则 Finalize Release 会因签名与安装包不匹配而失败。"
+              echo "### ⚠️ 草稿里已有更新清单签名，但本次重新上传了安装包"
+              echo "请重新离线签名并覆盖 \`.update.json\` 与 \`.update.json.ed25519.sig\`，否则 Finalize Release 会失败。"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::草稿已含 .ed25519.sig，安装包被重新构建后旧签名失效；请重新离线签名。"
+            echo "::warning::草稿已含更新清单签名，安装包被重新构建后旧清单失效；请重新离线签名。"
           fi
 
       - name: Verify draft assets and server-side digests
         run: |
           set -euo pipefail
           expected="$(cd dist && ls -1 | sort)"
-          actual="$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort | grep -vE '\.ed25519\.sig$' || true)"
+          actual="$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | tr -d '\r' | sort | grep -vE '\.ed25519\.sig$' | grep -vFx "MenuBarMijia-${RELEASE_VERSION}.update.json" || true)"
           if [ "$actual" != "$expected" ]; then
             echo "❌ 草稿附件与本地构建产物不一致" >&2
             diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
@@ -549,7 +553,7 @@ jobs:
           while read -r name digest size; do
             [ -n "$name" ] || continue
             case "$name" in
-              *.ed25519.sig) continue ;;
+              *.ed25519.sig|"MenuBarMijia-${RELEASE_VERSION}.update.json") continue ;;
             esac
             local_file="dist/${name}"
             local_size="$(wc -c < "$local_file" | tr -d '[:space:]')"
@@ -599,10 +603,13 @@ jobs:
             echo '```bash'
             echo "gh release download ${RELEASE_TAG} --pattern \"MenuBarMijia-${RELEASE_VERSION}*\" --dir dist"
             echo "MENUBARMIJIA_UPDATE_SIGNING_KEY=\"<离线私钥>\" swift scripts/sign_update.swift \\"
+            echo "  --min-from <x.y.z> \\"
             echo "  dist/MenuBarMijia-${RELEASE_VERSION}.dmg \\"
             echo "  dist/MenuBarMijia-${RELEASE_VERSION}-windows-x64-setup.exe \\"
             echo "  dist/MenuBarMijia-${RELEASE_VERSION}-windows-x64.msi"
-            echo "gh release upload ${RELEASE_TAG} dist/*.ed25519.sig"
+            echo "gh release upload ${RELEASE_TAG} \\"
+            echo "  dist/MenuBarMijia-${RELEASE_VERSION}.update.json \\"
+            echo "  dist/MenuBarMijia-${RELEASE_VERSION}.update.json.ed25519.sig"
             echo '```'
             echo "然后运行 **Finalize Release** 工作流（tag=${RELEASE_TAG}）完成严格校验并发布。"
           } >> "$GITHUB_STEP_SUMMARY"
