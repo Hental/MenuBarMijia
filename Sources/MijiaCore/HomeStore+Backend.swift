@@ -184,6 +184,9 @@ extension HomeStore {
                 connectedBackends = homeBackend == .demo ? [.demo] : [homeBackend]
             }
 
+        case .sourceStatusesChanged(let statuses):
+            if sourceStatuses != statuses { sourceStatuses = statuses }
+
         case .sessionExpired(let rejected):
             if let updated = MiSessionStore.markRejected(rejected, defaults: userDefaults) {
                 if let idx = miAccounts.firstIndex(where: {
@@ -206,6 +209,8 @@ extension HomeStore {
                 : snapshot.activeBackends
             if connectedBackends != nextConnected { connectedBackends = nextConnected }
             if deviceBackends != snapshot.deviceBackends { deviceBackends = snapshot.deviceBackends }
+            if pairedDeviceIDs != snapshot.pairedDeviceIDs { pairedDeviceIDs = snapshot.pairedDeviceIDs }
+            if sourceStatuses != snapshot.sourceStatuses { sourceStatuses = snapshot.sourceStatuses }
             var nextRooms = snapshot.rooms
             if var lgDev = latestLGDevice, lgConfig.isEnabled {
                 if let matchedRoom = nextRooms.first(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
@@ -432,6 +437,9 @@ extension HomeStore {
             initialCanonicalIDs: stored,
             knownPreferenceIDs: {
                 DevicePreferenceIndex.referencedIDs(defaults: box.defaults)
+            },
+            pinnedBackends: {
+                DeviceSourcePinStorage.load(defaults: box.defaults)
             },
             persistCanonicalIDs: { assignments in
                 box.defaults.set(assignments, forKey: ViewPreferenceKeys.canonicalDeviceIds)

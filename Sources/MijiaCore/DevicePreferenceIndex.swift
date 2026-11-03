@@ -24,6 +24,7 @@ public enum ViewPreferenceKeys {
     public static let lastManualLightId = "last_manual_light_id"
     public static let menuBarTargetId = "menubar_target_id"
     public static let canonicalDeviceIds = "dual_source_canonical_ids_v1"
+    public static let pinnedDeviceSources = "dual_source_pinned_sources_v1"
 }
 
 public enum DevicePreferenceIndex {
@@ -61,6 +62,7 @@ public enum DevicePreferenceIndex {
         addDictionaryKeys(ViewPreferenceKeys.allOffOverrides)
         addDictionaryKeys(ViewPreferenceKeys.cameraStreamURLs)
         addDictionaryKeys(ViewPreferenceKeys.cameraStreamQuality)
+        addDictionaryKeys(ViewPreferenceKeys.pinnedDeviceSources)
         jsonKeys(ViewPreferenceKeys.customOrder).forEach { add($0) }
         jsonKeys(ViewPreferenceKeys.deviceAliases).forEach { add($0) }
         jsonKeys(ViewPreferenceKeys.groupMap).forEach { add($0) }

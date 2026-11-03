@@ -8,6 +8,7 @@ public actor DualSourceHomeProvider: HomeProvider {
     private let homeAssistant: (any HomeProvider)?
     private let xiaomiCloud: (any HomeProvider)?
     private let knownPreferenceIDs: @Sendable () -> Set<String>
+    private let pinnedBackends: @Sendable () -> [String: HomeBackend]
     private let persistCanonicalIDs: CanonicalIDPersistence
 
     private var continuation: AsyncStream<HomeProviderEvent>.Continuation?
@@ -30,12 +31,14 @@ public actor DualSourceHomeProvider: HomeProvider {
         xiaomiCloud: (any HomeProvider)?,
         initialCanonicalIDs: [String: String] = [:],
         knownPreferenceIDs: @escaping @Sendable () -> Set<String> = { [] },
+        pinnedBackends: @escaping @Sendable () -> [String: HomeBackend] = { [:] },
         persistCanonicalIDs: @escaping CanonicalIDPersistence = { _ in }
     ) {
         self.homeAssistant = homeAssistant
         self.xiaomiCloud = xiaomiCloud
         self.canonical = CanonicalDeviceRegistry(assignments: initialCanonicalIDs)
         self.knownPreferenceIDs = knownPreferenceIDs
+        self.pinnedBackends = pinnedBackends
         self.persistCanonicalIDs = persistCanonicalIDs
     }
 
@@ -72,6 +75,7 @@ public actor DualSourceHomeProvider: HomeProvider {
             })
         }
         emitStatus(force: true)
+        emitSourceStatuses()
     }
 
     private func handle(_ event: HomeProviderEvent, from backend: HomeBackend) {
@@ -85,10 +89,14 @@ public actor DualSourceHomeProvider: HomeProvider {
                 if case .disconnected = status { miSnapshot = nil }
             }
             emitStatus()
+            emitSourceStatuses()
             recompute()
 
         case .sessionExpired(let session):
             continuation?.yield(.sessionExpired(session))
+
+        case .sourceStatusesChanged:
+            break
 
         case .snapshotUpdated(let home):
             if backend == .homeAssistant {
@@ -112,6 +120,7 @@ public actor DualSourceHomeProvider: HomeProvider {
             miSnapshot = nil
         }
         emitStatus()
+        emitSourceStatuses()
         recompute()
     }
 
@@ -120,6 +129,12 @@ public actor DualSourceHomeProvider: HomeProvider {
         guard force || status != lastStatus else { return }
         lastStatus = status
         continuation?.yield(.statusChanged(status))
+    }
+
+    private func emitSourceStatuses() {
+        let statuses = configuredSourceStatuses()
+        guard !statuses.isEmpty else { return }
+        continuation?.yield(.sourceStatusesChanged(statuses))
     }
 
     private func aggregateStatus() -> ConnectionStatus? {
@@ -149,7 +164,8 @@ public actor DualSourceHomeProvider: HomeProvider {
             xiaomiCloud: miSnapshot,
             canonical: canonical,
             rooms: rooms,
-            knownPreferenceIDs: knownPreferenceIDs()
+            knownPreferenceIDs: knownPreferenceIDs(),
+            pinnedBackends: pinnedBackends()
         )
         if result.canonical != canonical {
             canonical = result.canonical
@@ -175,7 +191,16 @@ public actor DualSourceHomeProvider: HomeProvider {
                 }
             }
         }
-        continuation?.yield(.snapshotUpdated(result.home))
+        var home = result.home
+        home.sourceStatuses = configuredSourceStatuses()
+        continuation?.yield(.snapshotUpdated(home))
+    }
+
+    private func configuredSourceStatuses() -> [HomeBackend: ConnectionStatus] {
+        var statuses: [HomeBackend: ConnectionStatus] = [:]
+        if homeAssistant != nil { statuses[.homeAssistant] = haStatus }
+        if xiaomiCloud != nil { statuses[.xiaomiCloud] = miStatus }
+        return statuses
     }
 
     // MARK: - Commands
@@ -372,5 +397,12 @@ public actor DualSourceHomeProvider: HomeProvider {
         } else if let mi = xiaomiCloud as? MiCloudProvider {
             Task { await mi.shutdown() }
         }
+    }
+}
+
+extension DualSourceHomeProvider: DualSourceRecomputing {
+    /// Re-merges cached snapshots after a source pin changes, without polling either backend.
+    public nonisolated func requestRecompute() {
+        Task { await self.recompute() }
     }
 }

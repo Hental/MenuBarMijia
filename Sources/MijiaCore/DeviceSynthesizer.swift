@@ -216,8 +216,12 @@ public struct SynthesizedHome: Equatable, Sendable {
     public var deviceIdentities: [String: DeviceSourceIdentity] = [:]
     /// Which provider currently drives each merged card; empty on single-source snapshots.
     public var deviceBackends: [String: HomeBackend] = [:]
+    /// Cards that matched one physical device in both sources; only these offer a source pin.
+    public var pairedDeviceIDs: Set<String> = []
     /// Sources that contributed this merged snapshot.
     public var activeBackends: Set<HomeBackend> = []
+    /// Per-source connection state for the bottom dual-source summary. Empty on single-source.
+    public var sourceStatuses: [HomeBackend: ConnectionStatus] = [:]
 
     public init(
         rooms: [RoomArea] = [],

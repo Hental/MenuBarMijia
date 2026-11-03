@@ -537,4 +537,58 @@ struct DualSourceIntegrationTests {
         }
         #expect(spec.entityId == "miot:\(did):2")
     }
+
+    @MainActor
+    @Test("Per-source statuses update after both snapshots are dropped")
+    func sourceStatusesSurviveBothOffline() async throws {
+        let suite = "test.dual.statuses.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let haDevice = light(
+            id: "ha-status-light",
+            name: "客厅灯",
+            roomID: "ha-living",
+            roomName: "客厅",
+            entityId: "light.living_ceiling"
+        )
+        let miDevice = light(
+            id: "999888777",
+            name: "吸顶灯",
+            roomID: "mi-living",
+            roomName: "客厅",
+            entityId: "miot:999888777:2"
+        )
+        let haMock = MockHomeProvider(snapshot: home([haDevice], identities: [:]))
+        let miMock = MockHomeProvider(snapshot: home([miDevice], identities: [:]))
+        let store = HomeStore(
+            dualSource: (homeAssistant: haMock, xiaomiCloud: miMock),
+            defaultsSuiteName: suite
+        )
+        store.hasHASource = true
+        store.miSessionMaskedUserId = "masked"
+
+        try await waitUntil {
+            store.sourceStatuses[.homeAssistant] == .connected
+                && store.sourceStatuses[.xiaomiCloud] == .connected
+        }
+
+        await haMock.sendStatus(.disconnected("HA down"))
+        await miMock.sendStatus(.disconnected("Mi down"))
+        try await waitUntil {
+            if case .disconnected = store.connectionStatus {
+                return store.sourceStatuses[.homeAssistant] != .connected
+                    && store.sourceStatuses[.xiaomiCloud] != .connected
+            }
+            return false
+        }
+
+        await haMock.sendStatus(.connecting)
+        try await waitUntil {
+            store.sourceStatuses[.homeAssistant] == .connecting
+                && store.sourceStatuses[.xiaomiCloud] != .connected
+        }
+        #expect(store.dualSourceStatusSummary == L10n.tr(
+            "HA 连接中 · 米家云未连接",
+            "HA connecting · Xiaomi Cloud offline"
+        ))
+    }
 }
