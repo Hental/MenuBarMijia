@@ -1675,7 +1675,7 @@ function isPowerToggleable(device: SmartDevice): boolean {
   const k = device.kind.kind;
   return (
     deviceCanTogglePower(device) &&
-    (k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera" || k === "vacuum")
+    (k === "light" || k === "climate" || k === "fan" || k === "plug" || k === "camera")
   );
 }
 

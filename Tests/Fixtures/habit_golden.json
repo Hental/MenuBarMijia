@@ -110,6 +110,40 @@
       }
     },
     {
+      "id": "dev_vac",
+      "name": "扫地机器人",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "roborock.vacuum.a15",
+      "isOnline": true,
+      "kind": {
+        "kind": "vacuum",
+        "entityId": "vacuum.robovac",
+        "status": "returning",
+        "battery": 40,
+        "modeEntityId": null,
+        "currentMode": null,
+        "availableModes": []
+      }
+    },
+    {
+      "id": "dev_vac_clean",
+      "name": "扫地机清扫中",
+      "roomId": "ke_ting",
+      "roomName": "客厅",
+      "model": "roborock.vacuum.a15",
+      "isOnline": true,
+      "kind": {
+        "kind": "vacuum",
+        "entityId": "vacuum.cleaning",
+        "status": "cleaning",
+        "battery": 80,
+        "modeEntityId": null,
+        "currentMode": null,
+        "availableModes": []
+      }
+    },
+    {
       "id": "dev_sensor",
       "name": "温湿度计",
       "roomId": "ke_ting",
@@ -947,6 +981,32 @@
         [
           {
             "targetId": "off_dev_ac",
+            "kind": "power",
+            "value": true
+          }
+        ]
+      ],
+      "sequencesBefore": []
+    },
+    {
+      "name": "a returning vacuum is not offered a power toggle",
+      "date": "2026-10-16",
+      "hour": 21,
+      "deviceIds": [
+        "dev_vac",
+        "dev_vac_clean",
+        "off_dev_desk"
+      ],
+      "entriesBefore": [],
+      "favoriteIds": [
+        "dev_vac"
+      ],
+      "environment": [],
+      "limit": 4,
+      "expected": [
+        [
+          {
+            "targetId": "off_dev_desk",
             "kind": "power",
             "value": true
           }
