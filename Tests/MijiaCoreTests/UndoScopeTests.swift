@@ -39,7 +39,7 @@ struct UndoScopeTests {
     func unrelatedDeviceKeepsItsLaterState() async throws {
         let (store, provider, suite) = try await makeStore()
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
-        store.selectedRoomId = "a"
+        store.selectRoom("a")
         store.turnAllOff()
         let other = try #require(store.devices.first { $0.id == "b" })
         let task = try #require(store.togglePrimary(other))
