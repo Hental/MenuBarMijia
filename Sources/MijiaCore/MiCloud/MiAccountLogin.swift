@@ -231,15 +231,23 @@ public enum MiSessionStore {
     private static let envelopeVersion = 2
 
     public static func loadAccounts(defaults: UserDefaults = .standard) -> [MiAccount] {
-        guard let data = storedData(defaults: defaults),
-              let sessions = decodeSessions(from: data) else { return [] }
-        let accounts = deduped(sessions).map { MiAccount(session: $0) }
-        // Every earlier build wrote one bare session here; rewrite the slot in the canonical form once
-        // (#27, ADR-0004).
-        if let canonical = encode(accounts.map(\.session)), canonical != data {
+        guard let data = storedData(defaults: defaults) else { return [] }
+        // Every earlier build wrote one bare session here; rewrite the slot in the v2 envelope once
+        // (#27, ADR-0004). A v2 envelope is never re-encoded, so a normal launch does not write the
+        // Keychain just because JSONEncoder's key order changed.
+        if let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+           envelope.version == envelopeVersion {
+            let sessions = deduped(envelope.accounts)
+            if sessions.count != envelope.accounts.count, let canonical = encode(sessions) {
+                store(canonical, defaults: defaults)
+            }
+            return sessions.map { MiAccount(session: $0) }
+        }
+        guard let legacy = try? JSONDecoder().decode(MiSession.self, from: data) else { return [] }
+        if let canonical = encode([legacy]) {
             store(canonical, defaults: defaults)
         }
-        return accounts
+        return [MiAccount(session: legacy)]
     }
 
     @discardableResult

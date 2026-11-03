@@ -57,11 +57,12 @@ struct MultiAccountHomeStoreTests {
         let suite = Self.makeSuite()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let defaults = try #require(UserDefaults(suiteName: suite))
+        MiSessionStore.saveAccounts([Self.cn, Self.de], defaults: defaults)
         let store = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
         defer { store.logoutMiAccount() }
-
-        store.completeMiLogin(Self.cnSession)
-        store.completeMiLogin(Self.deSession)
+        store.miAccounts = [Self.cn, Self.de]
+        store.miSessionMaskedUserId = Self.cn.maskedUserId
+        store.homeBackend = .xiaomiCloud
 
         store.devices = [
             SmartDevice(

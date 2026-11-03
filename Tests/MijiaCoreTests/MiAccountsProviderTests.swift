@@ -114,6 +114,7 @@ struct MiAccountsProviderTests {
         defer { task.cancel() }
 
         let droppedExpired = await log.wait { events in
+            guard await deApi.deviceListCalls > 0 else { return false }
             guard let latest = await events.snapshots.last else { return false }
             let ids = latest.devices.map(\.id)
             return ids.contains("cn-light") && !ids.contains("de-plug")

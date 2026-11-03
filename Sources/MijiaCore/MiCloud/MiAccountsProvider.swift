@@ -214,7 +214,9 @@ public actor MiAccountsProvider: HomeProvider {
         }
         var merged = SynthesizedHome(rooms: rooms, devices: devices, environmentReadings: readings, scenes: scenes)
         merged.homes = homes
-        merged.closesAwayGap = closesAwayGap
+        // A partially reported panel must not close an away gap: the missing account may hold the
+        // door sensor that changed while polling was paused.
+        merged.closesAwayGap = closesAwayGap && accounts.allSatisfy { snapshots[$0.id] != nil }
         continuation?.yield(.snapshotUpdated(merged))
     }
 
