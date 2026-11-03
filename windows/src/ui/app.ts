@@ -11,7 +11,8 @@ import {
   UndoPhrase,
   UserHabitMemory,
   buildAssistantContext,
-  buildHabitSummary,
+  resolveHabitSharing,
+  shareHabitSentence,
   habitActionable,
   inferAssistantPreset,
   assistantEndpointIdentity,
@@ -206,6 +207,7 @@ interface PersistedSettings {
   allOffOverrides: Record<string, boolean>;
   assistantModel: string;
   habitLearningEnabled: boolean;
+  habitShareEnabled: boolean;
   learnedShortcuts: LearnedShortcut[];
   /** Time-bucket habit entries learned from manual card actions and local commands (#113). */
   habitEntries: HabitEntry[];
@@ -564,6 +566,10 @@ function loadSettings(): LoadedSettings {
       const mode: ConnectionMode = parsed.connectionMode === "demo" || parsed.connectionMode === "xiaomiCloud" || parsed.connectionMode === "homeAssistant"
         ? parsed.connectionMode
         : miSession ? "xiaomiCloud" : "demo";
+      const habitShare = resolveHabitSharing(parsed.habitShareEnabled);
+      if (habitShare.persistOff) {
+        writeSettingsForStorage({ ...parsed, habitShareEnabled: false });
+      }
       return {
         settings: {
           connectionMode: mode,
@@ -592,6 +598,7 @@ function loadSettings(): LoadedSettings {
               : {},
           assistantModel: parsed.assistantModel ?? "~typesafe/jev-latest",
           habitLearningEnabled: parsed.habitLearningEnabled ?? true,
+          habitShareEnabled: habitShare.sharing === "on",
           learnedShortcuts: parsed.learnedShortcuts ?? [],
           habitEntries: Array.isArray(parsed.habitEntries)
             ? parsed.habitEntries.filter(
@@ -668,6 +675,7 @@ function loadSettings(): LoadedSettings {
       allOffOverrides: {},
       assistantModel: "~typesafe/jev-latest",
       habitLearningEnabled: true,
+      habitShareEnabled: false,
       learnedShortcuts: [],
       habitEntries: [],
       hasCompletedOnboarding: false,
@@ -696,7 +704,7 @@ function loadSettings(): LoadedSettings {
 }
 
 /** Writes settings without credentials; secrets belong to the Windows Credential Manager (#28). */
-function writeSettingsForStorage(settings: PersistedSettings): void {
+function writeSettingsForStorage(settings: object): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeSettingsForStorage(settings)));
   } catch {
@@ -1931,13 +1939,14 @@ export class MenuMijiaWindowsApp {
           now: new Date(),
           readings,
           devices: aliasedDevices,
-          habitSummary: buildHabitSummary(
-            this.settings.habitLearningEnabled,
-            this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-            this.devices,
-            this.scenes,
-          ),
+          scenes: this.scenes,
+          sharing: this.settings.habitShareEnabled ? "on" : "off",
+          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+            phrase: shortcut.phrase,
+            intents: shortcut.intents,
+          })),
+          mention: { kind: "utterance", text: trimmed },
         });
         plan = await resolver.resolve(trimmed, aliasedDevices, this.scenes, context);
         if (sourceRevision !== this.sourceRevision) return;
@@ -2463,13 +2472,14 @@ export class MenuMijiaWindowsApp {
           now: new Date(),
           readings: this.computedEnvironmentReadings,
           devices: this.devices,
-          habitSummary: buildHabitSummary(
-            this.settings.habitLearningEnabled,
-            this.settings.learnedShortcuts,
-            new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-            this.devices,
-            this.scenes,
-          ),
+          scenes: this.scenes,
+          sharing: this.settings.habitShareEnabled ? "on" : "off",
+          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+            phrase: shortcut.phrase,
+            intents: shortcut.intents,
+          })),
+          mention: { kind: "none" },
         }),
       )
       .then((suggestions) => {
@@ -5002,6 +5012,13 @@ export class MenuMijiaWindowsApp {
               <input type="checkbox" id="settings-habit" ${this.settings.habitLearningEnabled ? "checked" : ""} />
               <span>${t("自动记住自然语言习惯（相同表达下次 0ms 本地直达）")}</span>
             </label>
+            <label class="cc-checkbox">
+              <input type="checkbox" id="settings-habit-share" ${this.settings.habitShareEnabled ? "checked" : ""} />
+              <span>${t("发送习惯摘要（只包含这句话点名的设备）")}</span>
+            </label>
+            <label>${t("预览这句话会发送的习惯摘要")}</label>
+            <input id="settings-habit-share-sample" class="cc-input" type="text" />
+            <div id="settings-habit-share-preview">${t("不会发送习惯摘要")}</div>
             ${
               this.settings.learnedShortcuts.length > 0
                 ? `<div class="cc-timers-stack">
@@ -6011,6 +6028,29 @@ export class MenuMijiaWindowsApp {
       if (apiKeyEl) this.syncKeyFieldWithEndpoint(apiKeyEl, target.value);
     });
 
+    const refreshHabitSharePreview = () => {
+      const shareEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share");
+      const sampleEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share-sample");
+      const preview = this.root.querySelector<HTMLElement>("#settings-habit-share-preview");
+      if (!shareEl || !sampleEl || !preview) return;
+      const sentence = shareHabitSentence({
+        sharing: shareEl.checked ? "on" : "off",
+        memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
+        phrases: this.settings.learnedShortcuts.map((shortcut) => ({
+          phrase: shortcut.phrase,
+          intents: shortcut.intents,
+        })),
+        devices: this.devices,
+        scenes: this.scenes,
+        mention: { kind: "utterance", text: sampleEl.value },
+        now: new Date(),
+      });
+      preview.textContent = sentence.length > 0 ? sentence : t("不会发送习惯摘要");
+    };
+    this.root.querySelector("#settings-habit-share")?.addEventListener("change", refreshHabitSharePreview);
+    this.root.querySelector("#settings-habit-share-sample")?.addEventListener("input", refreshHabitSharePreview);
+    refreshHabitSharePreview();
+
     this.root.querySelector("#btn-save-settings")?.addEventListener("click", () => {
       const baseEl = this.root.querySelector<HTMLInputElement>("#settings-base-url");
       const apiKeyEl = this.root.querySelector<HTMLInputElement>("#settings-api-key");
@@ -6051,6 +6091,8 @@ export class MenuMijiaWindowsApp {
       const fallbackModel = inferredPreset.defaultModel || "gpt-4o-mini";
       if (modelEl) this.settings.assistantModel = modelEl.value.trim() || fallbackModel;
       if (habitEl) this.settings.habitLearningEnabled = habitEl.checked;
+      const habitShareEl = this.root.querySelector<HTMLInputElement>("#settings-habit-share");
+      if (habitShareEl) this.settings.habitShareEnabled = habitShareEl.checked;
       this.saveSettings(true);
       if (this.settings.connectionMode === "homeAssistant") void this.refreshHADevices();
       this.activeSheet = "none";

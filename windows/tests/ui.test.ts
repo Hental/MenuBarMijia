@@ -2293,6 +2293,31 @@ describe("Manual habit learning and proactive Top-4 (#113)", () => {
     assert.equal(habitEntries().length, 0);
   });
 
+  it("previews the draft habit sentence and writes the share switch only when saving", async () => {
+    const hour = new Date().getHours();
+    const bucket = hour >= 18 && hour < 23 ? "夜晚" : hour >= 14 && hour < 18 ? "下午" : hour >= 11 && hour < 14 ? "午间" : hour >= 6 && hour < 11 ? "清晨" : "深夜";
+    localStorage.setItem(settingsKey, JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      habitEntries: [{ bucket, targetId: "light.study_desk", operationKey: "power:off", count: 3 }],
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, false);
+    await click("#btn-settings");
+    const share = element("#settings-habit-share") as HTMLInputElement;
+    assert.equal(share.checked, false);
+    const sample = element("#settings-habit-share-sample") as HTMLInputElement;
+    sample.value = "书房台灯";
+    sample.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(element("#settings-habit-share-preview").textContent, "不会发送习惯摘要");
+    share.checked = true;
+    share.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.match(element("#settings-habit-share-preview").textContent ?? "", /关闭书房台灯\(3次\)/);
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, false);
+    await click("#btn-save-settings");
+    assert.equal((JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as { habitShareEnabled?: boolean }).habitShareEnabled, true);
+  });
+
   it("learns nothing when habit learning is disabled", async () => {
     localStorage.setItem(settingsKey, JSON.stringify({
       connectionMode: "demo",

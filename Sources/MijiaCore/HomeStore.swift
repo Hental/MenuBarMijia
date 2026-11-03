@@ -140,9 +140,12 @@ public final class HomeStore {
         }
     }
 
-    /// When off, nothing new is learned and no habit summary is sent to the AI model.
     public var isHabitLearningEnabled: Bool = true {
         didSet { userDefaults.set(isHabitLearningEnabled, forKey: "assistant_habit_learning_enabled") }
+    }
+
+    public var habitSharing: HabitSharing = .off {
+        didSet { userDefaults.set(habitSharing == .on, forKey: "assistant_habit_share_enabled") }
     }
 
     /// Test seam for the manual-control debounce window (sliders fire continuously, #113).
@@ -322,6 +325,22 @@ public final class HomeStore {
         self.lgConfig = LGWebOSConfig.load(from: ud)
         self.homeName = ud.string(forKey: "home_name") ?? KeychainHelper.localizedDefaultHomeName
         self.isHabitLearningEnabled = boolOrDefaultTrue("assistant_habit_learning_enabled")
+        let habitShareKey = "assistant_habit_share_enabled"
+        let storedHabitShare: StoredHabitShare
+        if let object = ud.object(forKey: habitShareKey) {
+            if let flag = object as? Bool {
+                storedHabitShare = flag ? .on : .off
+            } else {
+                storedHabitShare = .absent
+            }
+        } else {
+            storedHabitShare = .absent
+        }
+        let habitShare = resolveHabitSharing(storedHabitShare)
+        if habitShare.persistOff {
+            ud.set(false, forKey: habitShareKey)
+        }
+        self.habitSharing = habitShare.sharing
         // Privacy-first default: ask for on-device recognition unless the user explicitly opted out (#50).
         self.prefersOnDeviceSpeech = boolOrDefaultTrue("assistant_on_device_speech")
         self.hasCompletedOnboarding = ud.bool(forKey: "has_completed_onboarding")
