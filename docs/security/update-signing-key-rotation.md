@@ -289,7 +289,7 @@ After `R3`, `K_old` is no longer trusted by updated clients and cannot be used f
 | Point | Rollback action |
 | --- | --- |
 | Before `R1` is published | Clear the overlap constants and abandon the rotation. No client changed trust. |
-| After `R1`, before `R2` | Set the overlap back to `""` in a newer release signed by `K_old`. Clients that installed `R1` still accept `K_old`; clients that did not are unaffected. |
+| After `R1`, before `R2` | Set primary back to `K_old` and the overlap to `""` in a newer release, and sign with `K_old`. Clients that installed `R1` still accept `K_old`; clients that did not are unaffected. If the reason is a compromised `K_new`, this release is **mandatory**, must be newer than `R1`, and must ship with the §4.5 advisory; leaving `R1` as the current release leaves its clients trusting the compromised key. |
 | After `R2`, before `R3` | Set primary back to `K_old`, overlap to `""` (or `K_new` if only `K_new`'s release was bad and you want to retry), bump the version above `R2`, and sign with `K_old`. Clients on `R1`/`R2` trust `K_old`. |
 | After `R3` | `K_old` is no longer trusted. Roll forward with `K_new`; if `K_new` is lost, every client needs a manual install of a build signed by a key you still hold. |
 
@@ -334,15 +334,45 @@ There is no release that existing clients can verify. This is the catastrophic c
 
 The implementation cannot distinguish a malicious manifest signed by the compromised key from a legitimate one. Only users who replace their install manually leave the compromised trust set.
 
-### 4.3 Overlap key compromised before cutover
+### 4.3 Overlap key compromised
 
-`K_new` has not signed a published release yet.
+`K_new` is the overlap key. The required response depends on whether the provisioning release `R1` — the first release that compiles `K_new` into the trust set — has been published. Once `R1` ships, every client that installs it trusts `K_new`, even if the cutover never happens.
 
-1. Set both overlap constants back to `""`.
-2. Ship a release signed by `K_old` (or simply stop using `K_new` and keep the current release).
-3. No advisory is required for clients because no published release trusted `K_new`; record the event in the rotation log anyway.
+| Situation | Required action |
+| --- | --- |
+| `R1` not yet published | Clear the overlap constants. No client trusts `K_new`; no user-facing advisory is required. |
+| `R1` published, `R2` not yet published | Ship a **newer `K_old`-signed release with the overlap removed**, then publish an advisory. Keeping `R1` as the current release is not sufficient. |
+| `R2` or later already published | `K_new` is the primary key, not the overlap key; use §4.1 or §4.2 instead. |
+
+#### 4.3.1 Before `R1` is published
+
+No client trusts `K_new` yet.
+
+1. Set `updateSigningOverlapPublicKeyBase64` and `UPDATE_SIGNING_OVERLAP_PUBLIC_KEY_BASE64` back to `""`.
+2. Do not publish a release containing `K_new`. If no other change needs a release, keeping the current release is sufficient.
+3. No user-facing advisory is required. Record the event in the rotation log anyway.
+4. Generate a fresh replacement key and restart the rotation from Step 1 when ready. Do not reuse `K_new`.
+
+#### 4.3.2 After `R1` is published
+
+Clients that installed `R1` now trust `{K_old, K_new}`. If `K_new` leaks, any manifest signed with `K_new` and carrying `key_id = K_new` passes the signature and key-id checks on those clients. Removing `K_new` from source is not enough; the removal must ship in a release those clients will install.
+
+1. Freeze releases and preserve logs, drafts, and the compromised key's storage state for forensics.
+2. Build a newer release `R1a` with:
+   - `updateSigningPublicKeyBase64 = "<K_old>"` and `updateSigningOverlapPublicKeyBase64 = ""` in `UpdateChecker.swift`;
+   - the same primary/empty-overlap pair in `windows/src-tauri/src/main.rs`;
+   - `expectedPublicKeyBase64 = "<K_old>"` in `scripts/sign_update.swift`;
+   - `UPDATE_SIGNING_PUBLIC_KEY_BASE64 = "<K_old>"` in `windows/src/core/updateChecker.ts`;
+   - a version strictly higher than `R1`;
+   - the golden manifest unchanged (`K_old` is still the primary).
+3. Run `bash scripts/check.sh --skip-snapshots`.
+4. Sign with `K_old`, upload, and Finalize. Clients on `R1` trust `K_old`, so they accept `R1a` and drop `K_new` from their trust set.
+5. Publish an out-of-band advisory (§4.5). State that `R1` clients trust the compromised `K_new` until they install `R1a`, and that a malicious manifest signed with `K_new` would be accepted on an unpatched `R1` client if it were published as a release.
+6. After the advisory window, generate a fresh replacement key and restart the normal rotation from a new provisioning release. Do not reuse the compromised key.
 
 If a release was signed with the compromised overlap key outside the normal tooling, treat it as §4.1/§4.2 depending on which key the clients trust.
+
+Do not keep `K_new` in the overlap "for compatibility": it remains a valid signer for every client that has not installed `R1a`.
 
 ### 4.4 Current key lost (not compromised)
 
@@ -472,6 +502,13 @@ PY
 
 The manifest `key_id` must equal the primary key compiled at the signed tag. `scripts/sign_update.swift` refuses to sign with any other key, so a normal release should never show the overlap key here. If it does, the signature was produced outside the documented tooling and should be treated as an incident.
 
+For the §4.3.2 removal release `R1a`, also verify:
+
+1. the tag's `UpdateChecker.swift` and `windows/src-tauri/src/main.rs` both compile the overlap constant as `""`;
+2. the manifest `key_id` is `K_old`, and `bash scripts/check_release.sh assets <R1a> dist` passes against the tag's `K_old` primary;
+3. `R1a` is strictly newer than `R1` — a client at or above the signed version returns `notNewer`;
+4. `R1a` is the Latest release and the advisory links it, so a client still on `R1` has an installable target that removes `K_new` from its trust set.
+
 ### 5.6 Audit trail for a rotation PR
 
 Record in the PR or incident record:
@@ -482,6 +519,7 @@ Record in the PR or incident record:
 - [ ] the release tags/paths for `R1`, `R2`, and `R3` (or the emergency release);
 - [ ] the manifest `key_id` for each release;
 - [ ] the advisory URL, for any revocation;
+- [ ] for an overlap-key compromise after `R1`: the `R1a` tag, proof its overlap constant is `""`, the advisory URL, and confirmation that `R1a` is Latest;
 - [ ] confirmation that no private key material appears in the diff, CI logs, or release assets.
 
 ## 6. Code gaps and follow-ups
