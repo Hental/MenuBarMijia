@@ -192,6 +192,10 @@ public struct ControlCenterPanel: View {
                 isSearchFieldFocused = false
             }
         }
+        // #180: typing a query — through the key monitor or the field — ticks the guide's search step.
+        .onChange(of: search.query) { _, query in
+            if !query.isEmpty { store.recordOnboardingMilestone(.searchedDevice) }
+        }
         // Mi cloud polls every 6 s only while the panel is on screen (#26).
         .onChange(of: isPresented) { _, visible in store.setPanelVisible(visible) }
         .onDisappear { store.setPanelVisible(false) }

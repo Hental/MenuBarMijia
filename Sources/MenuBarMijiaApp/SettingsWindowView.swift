@@ -486,7 +486,7 @@ private struct GeneralSettingsTab: View {
 
                 SettingsSection(title: L10n.tr("首次设置", "Setup")) {
                     HStack {
-                        Text(L10n.tr("重新打开新手引导，可再次查看连接、AI 与语音步骤。", "Reopen the setup guide to review connections, AI and voice."))
+                        Text(L10n.tr("重新打开新手引导，再看一遍连接、搜索与全关撤销。", "Reopen the setup guide to review connecting, search and All Off + Undo."))
                             .font(.system(size: DesignTokens.TypeSize.caption))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -736,11 +736,46 @@ private struct ConnectionSettingsTab: View {
 
 private struct AssistantSettingsTab: View {
     let store: HomeStore
+    @State private var showsThresholdDetail = false
 
     var body: some View {
         let _ = store.effectiveLanguage
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 16) {
+                // #180: the headline is plain language; the number moved into advanced settings.
+                SettingsSection(title: L10n.tr("AI 不确定时", "When the AI Is Unsure")) {
+                    SettingsToggleRow(
+                        title: L10n.tr("不确定时先问我", "Ask me when unsure"),
+                        isOn: Binding(
+                            get: { store.askWhenUnsureBeforeAIActions },
+                            set: { store.askWhenUnsureBeforeAIActions = $0 }
+                        )
+                    )
+
+                    Text(L10n.tr(
+                        "开着时，AI 没把握的动作只给建议，点一下才执行。关掉后它会更主动；电暖器、插座、扫地机这类高风险设备仍然会先问。",
+                        "On: actions the AI is unsure about become suggestions and wait for a click. Off: it acts more boldly; risky devices such as heaters, plugs and vacuums still ask first."
+                    ))
+                    .font(.system(size: DesignTokens.TypeSize.caption))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    DisclosureGroup(isExpanded: $showsThresholdDetail) {
+                        Text(L10n.tr(
+                            "把握度低于 \(Int(ModelActionPolicy.autoRunThreshold * 100))% 时算「不确定」，AI 会先问你。这个阈值是固定的，用来避免误操作。",
+                            "Below \(Int(ModelActionPolicy.autoRunThreshold * 100))% confidence counts as unsure, so the AI asks first. The threshold is fixed to prevent accidental control."
+                        ))
+                        .font(.system(size: DesignTokens.TypeSize.caption))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
+                    } label: {
+                        Text(L10n.tr("高级：把握度阈值", "Advanced: confidence threshold"))
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 AssistantSettingsSection(store: store)
             }
             .padding(14)

@@ -218,6 +218,16 @@ public final class HomeStore {
         didSet { userDefaults.set(hasCompletedOnboarding, forKey: "has_completed_onboarding") }
     }
 
+    /// Steps the guide has seen the user try (#180). Persisted so the checkmarks survive a relaunch.
+    /// Connecting is deliberately not stored here: it is derived from the live connection state.
+    public internal(set) var onboardingMilestones: Set<OnboardingMilestone> = []
+
+    /// Plain-language "不确定时先问我" switch (#180). On by default, matching the shared
+    /// confirmation rules both platforms ship with; the numeric threshold lives in advanced settings.
+    public var askWhenUnsureBeforeAIActions: Bool = true {
+        didSet { userDefaults.set(askWhenUnsureBeforeAIActions, forKey: Self.askWhenUnsureKey) }
+    }
+
     /// Transient flag allowing the user to reopen the onboarding guide from Settings at any time.
     public var isShowingOnboarding: Bool = false
 
@@ -547,6 +557,11 @@ public final class HomeStore {
         // Privacy-first default: ask for on-device recognition unless the user explicitly opted out (#50).
         self.prefersOnDeviceSpeech = boolOrDefaultTrue("assistant_on_device_speech")
         self.hasCompletedOnboarding = ud.bool(forKey: "has_completed_onboarding")
+        self.onboardingMilestones = Set(
+            (ud.stringArray(forKey: Self.onboardingMilestonesKey) ?? [])
+                .compactMap(OnboardingMilestone.init(rawValue:))
+        )
+        self.askWhenUnsureBeforeAIActions = boolOrDefaultTrue(Self.askWhenUnsureKey)
         self.hideOfflineDevices = ud.bool(forKey: "hide_offline_devices")
         self.enableGlobalHotkey = boolOrDefaultTrue("enable_global_hotkey")
         self.enableSafetyAlerts = boolOrDefaultTrue("enable_safety_alerts")

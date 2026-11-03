@@ -265,6 +265,7 @@ extension HomeStore {
             showToast(L10n.tr("当前没有开启的设备", "No active devices are currently on"))
             return
         }
+        recordOnboardingMilestone(.turnedAllOff)
 
         let previousSnapshot = devices
         var offCommands: [(deviceId: String, command: DeviceCommand)] = []
@@ -359,6 +360,7 @@ extension HomeStore {
             showToast(L10n.tr("设备状态已变化，无法撤销", "Device state changed; cannot undo"), isError: true)
             return nil
         }
+        if !applicable.isEmpty { recordOnboardingMilestone(.undidAllOff) }
 
         let context = controlContextID
         return Task {

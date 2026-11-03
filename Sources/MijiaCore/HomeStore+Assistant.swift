@@ -383,7 +383,13 @@ extension HomeStore {
                 habitSummary = context.habitSummary
             }
             do {
-                plan = try await resolver.resolve(utterance, devices: devices, scenes: scenes, context: context)
+                plan = try await resolver.resolve(
+                    utterance,
+                    devices: devices,
+                    scenes: scenes,
+                    context: context,
+                    confirmation: aiConfirmationPolicy
+                )
             } catch {
                 guard controlContext == controlContextID else { return nil }
                 setAssistantState(.failed(AssistantError.userMessage(for: error)))

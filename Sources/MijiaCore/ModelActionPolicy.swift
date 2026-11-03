@@ -84,6 +84,21 @@ public enum ModelActionPolicy {
     public static let suggestionFloor = 0.2
     public static let maxAutoRunDevices = 3
 
+    /// How unsure answers are handled (#180). `askWhenUnsure` is the plain-language switch
+    /// ("不确定时先问我"); `threshold` is the number that used to be the headline copy and now lives
+    /// in advanced settings. Both platforms default to asking, so the shared rules stay aligned.
+    public struct ConfirmationPolicy: Equatable, Sendable {
+        public var askWhenUnsure: Bool
+        public var threshold: Double
+
+        public static let `default` = ConfirmationPolicy()
+
+        public init(askWhenUnsure: Bool = true, threshold: Double = ModelActionPolicy.autoRunThreshold) {
+            self.askWhenUnsure = askWhenUnsure
+            self.threshold = threshold
+        }
+    }
+
     /// Probability of the chosen option: `probabilities[choice]`, else `confidence`, else 0 —
     /// a missing number means "not sure", never a default pass.
     public static func probability(of answer: [String: Any]?, choice: String) -> Double {
@@ -97,7 +112,8 @@ public enum ModelActionPolicy {
     public static func decide(
         devices: [SmartDevice],
         scenes: [HomeScene],
-        payload: ModelDecisionPayload
+        payload: ModelDecisionPayload,
+        policy: ConfirmationPolicy = .default
     ) -> ModelDecision {
         let deviceById = Dictionary(devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seen: [DeviceIntent] = []
@@ -121,7 +137,7 @@ public enum ModelActionPolicy {
                 return (action, true)
             }
             if let device = deviceById[action.intent.targetId] {
-                let lowConfidence = action.confidence.map { $0 < autoRunThreshold } ?? false
+                let lowConfidence = needsUnsureConfirmation(action.confidence, policy: policy)
                 let confirms = device.isSharedHome
                     || PromptText.sanitize(device.name, limit: PromptText.nameLimit) != device.name
                     || PromptText.sanitize(device.roomName, limit: PromptText.nameLimit) != device.roomName
@@ -130,11 +146,11 @@ public enum ModelActionPolicy {
                 return (action, confirms)
             }
             if let scene = scenes.first(where: { $0.id == action.intent.targetId }) {
-                let lowConfidence = action.confidence.map { $0 < autoRunThreshold } ?? false
+                let lowConfidence = needsUnsureConfirmation(action.confidence, policy: policy)
                 let confirms = PromptText.sanitize(scene.name, limit: PromptText.nameLimit) != scene.name || lowConfidence
                 return (action, confirms)
             }
-            let confirms = action.confidence.map { $0 < autoRunThreshold } ?? false
+            let confirms = needsUnsureConfirmation(action.confidence, policy: policy)
             return (action, confirms)
         }
         let run = judged.filter { !$0.confirms }.map(\.action.intent)
@@ -143,6 +159,13 @@ public enum ModelActionPolicy {
             intents: run,
             suggestions: confirmationSuggestions(waiting: waiting, wide: wide, devices: devices, scenes: scenes)
         )
+    }
+
+    /// Confidence-based confirmation, gated by the plain-language switch (#180). Hazard rules are
+    /// separate and still apply when the user turns the switch off.
+    private static func needsUnsureConfirmation(_ confidence: Double?, policy: ConfirmationPolicy) -> Bool {
+        guard policy.askWhenUnsure, let confidence else { return false }
+        return confidence < policy.threshold
     }
 
     /// A heater change other than off, any plug or camera power change, a vacuum start, or turning a
