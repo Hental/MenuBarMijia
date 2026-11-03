@@ -3,6 +3,7 @@
 ## 1.1.6
 
 ### 修复与设备支持
+- **多小米账号同时登录与跨区合并（[#140](https://github.com/jryang1997/MenuBarMijia/issues/140), [ADR-0010](docs/adr/0010-multi-account-xiaomi-sessions.md)）**：macOS 支持在设置中添加多个米家账号（包括中国大陆与海外不同云端地区），在单个面板中合并展示各账号的家庭、房间与设备，并支持按账号分区查看、切换家庭及单独移除账号（Windows 端暂保持单账号登录）。
 - **同一账号下多个家庭与共享家庭（[#134](https://github.com/jryang1997/MenuBarMijia/issues/134)）**：现在会加载账号被分享的家庭，家庭成员扫码后不再一直停在「同步设备中」。
 - **智能插座功率显示异常（[#129](https://github.com/jryang1997/MenuBarMijia/issues/129)）**：按设备上报的比例换算功率，不再出现巨大的数值；同时支持云端上报但此前未识别的设备。
 - **新风机与更多家电（[#124](https://github.com/jryang1997/MenuBarMijia/issues/124)–[#127](https://github.com/jryang1997/MenuBarMijia/issues/127)，[#142](https://github.com/jryang1997/MenuBarMijia/pull/142)）**：新增新风机、除湿机、水暖毯、香氛机、音箱等家电的识别与控制，恢复快捷动作，并更清楚地提示 Home Assistant 局域网限制。

@@ -10,6 +10,12 @@ extension HomeStore {
             return L10n.tr("演示模式（虚拟设备）", "Demo Mode (Virtual Devices)")
         }
         if homeBackend == .xiaomiCloud {
+            if miAccounts.count > 1 {
+                return L10n.tr(
+                    "米家云端 (\(miAccounts.count) 个账号)",
+                    "Xiaomi Cloud (\(miAccounts.count) accounts)"
+                )
+            }
             return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
                 ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
         }
@@ -57,6 +63,10 @@ extension HomeStore {
             latestLGDevice = nil
             devices.removeAll { $0.id == dev.id }
             return
+        }
+        var dev = dev
+        if let matchedRoom = rooms.first(where: { $0.id == dev.roomId || $0.name == dev.roomName }) {
+            dev.roomId = matchedRoom.id
         }
         latestLGDevice = dev
         rawDeviceNames[dev.id] = dev.name
@@ -159,10 +169,17 @@ extension HomeStore {
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
+            if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
+                miAccountStatuses = snapshot.accountStatuses
+            }
             var nextRooms = snapshot.rooms
-            if let lgDev = latestLGDevice, lgConfig.isEnabled,
-               !nextRooms.contains(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
-                nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+            if var lgDev = latestLGDevice, lgConfig.isEnabled {
+                if let matchedRoom = nextRooms.first(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
+                    lgDev.roomId = matchedRoom.id
+                    latestLGDevice = lgDev
+                } else {
+                    nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+                }
             }
             if rooms != nextRooms { rooms = nextRooms }
             if homes != snapshot.homes { homes = snapshot.homes }
@@ -379,7 +396,7 @@ extension HomeStore {
     public func switchBackend(_ backend: HomeBackend) {
         let matches: Bool = switch backend {
         case .homeAssistant: provider is HAWebSocketProvider
-        case .xiaomiCloud: provider is MiCloudProvider
+        case .xiaomiCloud: provider is MiAccountsProvider
         case .demo: provider is DemoHomeProvider
         }
         guard homeBackend != backend || !matches else { return }
@@ -394,8 +411,7 @@ extension HomeStore {
         case .homeAssistant:
             self.provider = makeHAProvider(baseURLString: serverURLString, token: KeychainHelper.loadToken(defaults: userDefaults))
         case .xiaomiCloud:
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = makeMiAccountsProvider()
         case .demo:
             // Strictly offline: stop any LAN TV and update work started by the previous backend (#47).
             if let lgClient = lgWebOSClient {
@@ -420,10 +436,19 @@ extension HomeStore {
     }
 
     public func completeMiLogin(_ session: MiSession) {
+        guard MiSessionStore.upsert(session, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法写入钥匙串，请授权钥匙串访问后重试", "Could not save to Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
         invalidateUndoContext()
-        MiSessionStore.save(session, defaults: userDefaults)
-        self.miSessionMaskedUserId = session.maskedUserId
-        self.miSessionScopeIdentifier = session.historyScopeIdentifier
+        // The primary (first) account drives the summary and the history scope, so signing in a
+        // second account must not relabel the panel with the newcomer.
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
@@ -431,33 +456,79 @@ extension HomeStore {
         self.completeOnboarding()
         eventTask?.cancel()
         shutdownCurrentProvider()
-        nonisolated(unsafe) let ud = userDefaults
-        self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+        self.provider = makeMiAccountsProvider()
         startListening()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
 
     public func logoutMiAccount() {
         MiSessionStore.clear(defaults: userDefaults)
+        miAccounts = []
+        miAccountStatuses = [:]
         self.miSessionMaskedUserId = nil
         self.miSessionScopeIdentifier = nil
+        self.homes = []
+        self.selectedMiHomeId = nil
+        userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         if homeBackend == .xiaomiCloud {
             invalidateUndoContext()
             self.devices = []
             self.rooms = []
             self.environmentReadings = []
             self.scenes = []
+            selectRoom(nil)
             eventTask?.cancel()
             shutdownCurrentProvider()
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = makeMiAccountsProvider()
             startListening()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
     }
 
+    /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel
+    /// right away instead of waiting for the next merged snapshot.
+    public func logoutMiAccount(id: String) {
+        guard MiSessionStore.remove(accountID: id, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法更新钥匙串，请授权钥匙串访问后重试", "Could not update Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
+        invalidateUndoContext()
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        miAccountStatuses.removeValue(forKey: id)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
+        if selectedMiHomeId?.hasPrefix(id + "/") == true {
+            selectedMiHomeId = nil
+            userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
+        }
+        if homeBackend == .xiaomiCloud {
+            let removedDeviceIds = Set(devices.filter { $0.accountId == id }.map(\.id))
+            devices.removeAll { $0.accountId == id }
+            environmentReadings.removeAll { removedDeviceIds.contains($0.id) }
+            rooms.removeAll { $0.id.hasPrefix(id + "/") }
+            // Its homes leave too, so the home menu cannot offer a home nobody owns any more.
+            homes.removeAll { $0.accountId == id }
+            // A room pill pointing at the removed account would show an empty panel.
+            if let roomId = selectedRoomId, roomId.hasPrefix(id + "/") {
+                selectRoom(nil)
+            }
+            eventTask?.cancel()
+            shutdownCurrentProvider()
+            self.provider = makeMiAccountsProvider()
+            startListening()
+        }
+        showToast(miAccounts.isEmpty
+            ? L10n.tr("已退出米家账号", "Signed out of Xiaomi Home")
+            : L10n.tr("已移除米家账号", "Removed Xiaomi account"))
+    }
+
     private func shutdownCurrentProvider() {
-        if let old = provider as? MiCloudProvider {
+        if let old = provider as? MiAccountsProvider {
+            Task { await old.shutdown() }
+        } else if let old = provider as? MiCloudProvider {
             Task { await old.shutdown() }
         } else if let old = provider as? HAWebSocketProvider {
             Task { await old.shutdown() }

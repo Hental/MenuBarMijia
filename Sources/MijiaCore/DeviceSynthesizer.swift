@@ -172,11 +172,16 @@ public struct HomeOption: Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var deviceCount: Int
+    /// Set when the home belongs to one of several signed-in Mi accounts.
+    public var accountId: String?
+    public var accountLabel: String?
 
-    public init(id: String, name: String, deviceCount: Int) {
+    public init(id: String, name: String, deviceCount: Int, accountId: String? = nil, accountLabel: String? = nil) {
         self.id = id
         self.name = name
         self.deviceCount = deviceCount
+        self.accountId = accountId
+        self.accountLabel = accountLabel
     }
 }
 
@@ -187,6 +192,8 @@ public struct SynthesizedHome: Equatable, Sendable {
     public var scenes: [HomeScene]
     /// Homes on the account (empty for backends without the concept).
     public var homes: [HomeOption] = []
+    /// Per-account connection status when merged across several Mi accounts.
+    public var accountStatuses: [String: ConnectionStatus] = [:]
     /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
     /// close the away gap, because the door may have opened while polling was paused.
     public var closesAwayGap: Bool = true

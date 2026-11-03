@@ -69,10 +69,10 @@ public final class CredentialVault: @unchecked Sendable {
 
     /// Reads go to memory after the first successful load. An unreadable vault is not retried on reads, so a
     /// declined prompt is not followed by another one on the next read.
-    public func lookup(_ account: String) -> Lookup {
+    public func lookup(_ account: String, retryingUnavailable: Bool = false) -> Lookup {
         lock.lock()
         defer { lock.unlock() }
-        loadIfNeeded(retryingUnavailable: false)
+        loadIfNeeded(retryingUnavailable: retryingUnavailable)
         switch state {
         case .loaded(let items):
             return items[account].map(Lookup.value) ?? .missing

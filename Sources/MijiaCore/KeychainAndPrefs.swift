@@ -121,7 +121,8 @@ public enum KeychainHelper {
         defaults: UserDefaults, account: String = MiSessionStore.keychainAccount, vault: CredentialVault = .shared
     ) {
         guard let legacy = defaults.data(forKey: MiSessionStore.fallbackDefaultsKey) else { return }
-        // Re-encoding through `MiSession` drops the `passToken` that ≤1.0.6 also persisted (#27, ADR-0004).
+        // Re-encoding through `MiSession` into a v2 envelope drops the `passToken` that ≤1.0.6 also persisted
+        // (#27, ADR-0004).
         if let data = MiSessionStore.migratedData(fromLegacyDefaults: legacy) {
             guard vault.insertIfMissing(data, for: account) else { return }
         }

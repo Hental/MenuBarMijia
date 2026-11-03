@@ -53,7 +53,9 @@ public struct MiAccountSection: View {
 
             switch phase {
             case .idle:
-                if let masked = store.miSessionMaskedUserId {
+                if store.miAccounts.count > 1 {
+                    multiAccountView
+                } else if let masked = store.miSessionMaskedUserId {
                     loggedInView(maskedUserId: masked)
                 } else {
                     loggedOutView
@@ -137,9 +139,70 @@ public struct MiAccountSection: View {
                 }
                 .buttonStyle(PillActionButtonStyle())
 
+                Button(L10n.tr("添加账号", "Add Account")) {
+                    startQRLogin()
+                }
+                .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+
                 Spacer()
 
                 Button(L10n.tr("退出登录", "Sign Out")) {
+                    store.logoutMiAccount()
+                }
+                .buttonStyle(PillActionButtonStyle())
+            }
+        }
+    }
+
+    /// Several accounts merged into one panel: one removable row each, plus the actions that apply to
+    /// all of them.
+    private var multiAccountView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(store.miAccounts) { account in
+                let disconnectReason: String? = {
+                    if case .disconnected(let reason) = store.miAccountStatuses[account.id], !reason.isEmpty {
+                        return reason
+                    }
+                    return nil
+                }()
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: disconnectReason == nil
+                            ? "person.crop.circle.badge.checkmark"
+                            : "exclamationmark.triangle.fill")
+                            .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                            .foregroundStyle(disconnectReason == nil ? .green : .orange)
+                        Text(account.displayName)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        Spacer()
+                        Button(L10n.tr("移除", "Remove")) {
+                            store.logoutMiAccount(id: account.id)
+                        }
+                        .buttonStyle(PillActionButtonStyle())
+                    }
+                    if let reason = disconnectReason {
+                        Text(reason)
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
+            HStack(spacing: 6) {
+                Button(L10n.tr("同步设备", "Sync Devices")) {
+                    store.refreshNow()
+                    store.showToast(L10n.tr("正在同步米家云端设备…", "Syncing Xiaomi Cloud devices…"))
+                }
+                .buttonStyle(PillActionButtonStyle(isSelected: true, tintColor: .accentColor))
+
+                Button(L10n.tr("添加账号", "Add Account")) {
+                    startQRLogin()
+                }
+                .buttonStyle(PillActionButtonStyle())
+
+                Spacer()
+
+                Button(L10n.tr("全部退出", "Sign Out of All")) {
                     store.logoutMiAccount()
                 }
                 .buttonStyle(PillActionButtonStyle())

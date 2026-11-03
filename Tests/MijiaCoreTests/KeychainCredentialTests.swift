@@ -11,6 +11,12 @@ struct KeychainCredentialTests {
         CredentialVault(storage: storage.storage)
     }
 
+    /// The session slot holds a v2 envelope; assert on the raw JSON instead of the store's private type.
+    private func envelope(_ data: Data) throws -> (version: Int, accounts: [[String: Any]]) {
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return (try #require(object["version"] as? Int), try #require(object["accounts"] as? [[String: Any]]))
+    }
+
     @Test("A rejected vault write preserves the previous credential")
     func rejectedReplacementPreservesPreviousCredential() throws {
         let storage = MemoryVaultStorage()
@@ -148,9 +154,11 @@ struct KeychainCredentialTests {
         defaults.set(legacy, forKey: MiSessionStore.fallbackDefaultsKey)
         KeychainHelper.migratePlaintextSession(defaults: defaults, account: "s", vault: vault)
         let migrated = try #require(KeychainHelper.readKeychainData(account: "s", vault: vault))
-        let object = try #require(try JSONSerialization.jsonObject(with: migrated) as? [String: Any])
-        #expect(object["serviceToken"] as? String == "old-token")
-        #expect(object["passToken"] == nil)
+        let stored = try envelope(migrated)
+        #expect(stored.version == 2)
+        #expect(stored.accounts.count == 1)
+        #expect(stored.accounts[0]["serviceToken"] as? String == "old-token")
+        #expect(stored.accounts[0]["passToken"] == nil)
         #expect(defaults.object(forKey: MiSessionStore.fallbackDefaultsKey) == nil)
     }
 
@@ -190,24 +198,27 @@ struct KeychainCredentialTests {
         #expect(defaults.string(forKey: KeychainHelper.secretFallbackKey(for: account)) == nil)
     }
 
-    @Test("Suite sessions round-trip through the test store and are stored without passToken")
+    @Test("Suite sessions round-trip through the test store as a v2 envelope without passToken")
     func suiteSessionRoundTrip() throws {
         let suite = "com.jryang1997.MenuBarMijia.session-seam.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let session = MiSession(userId: "987654321", cUserId: "cid", ssecurity: "ssec", serviceToken: "stoken")
-        #expect(MiSessionStore.save(session, defaults: defaults))
+        #expect(MiSessionStore.saveAccounts([MiAccount(session: session)], defaults: defaults))
         let data = try #require(defaults.data(forKey: MiSessionStore.fallbackDefaultsKey))
-        let stored = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(stored["passToken"] == nil)
-        #expect(MiSessionStore.load(defaults: defaults) == session)
+        let stored = try envelope(data)
+        #expect(stored.version == 2)
+        #expect(stored.accounts.count == 1)
+        #expect(stored.accounts[0]["serviceToken"] as? String == "stoken")
+        #expect(stored.accounts[0]["passToken"] == nil)
+        #expect(MiSessionStore.loadAccounts(defaults: defaults) == [MiAccount(session: session)])
 
         MiSessionStore.clear(defaults: defaults)
-        #expect(MiSessionStore.load(defaults: defaults) == nil)
+        #expect(MiSessionStore.loadAccounts(defaults: defaults).isEmpty)
     }
 
-    @Test("Loading a ≤1.0.6 session rewrites it without passToken, once (#27)")
+    @Test("Loading a ≤1.0.6 session migrates it into the v2 envelope once (#27)")
     func legacySessionIsRewrittenOnLoad() throws {
         let suite = "com.jryang1997.MenuBarMijia.session-rewrite.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -216,19 +227,21 @@ struct KeychainCredentialTests {
         let legacy = Data(#"{"userId":"42","cUserId":"c","ssecurity":"c2VjcmV0","serviceToken":"tok","passToken":"pt","region":"cn"}"#.utf8)
         defaults.set(legacy, forKey: MiSessionStore.fallbackDefaultsKey)
 
-        let loaded = try #require(MiSessionStore.load(defaults: defaults))
-        #expect(loaded.serviceToken == "tok")
+        let loaded = try #require(MiSessionStore.loadAccounts(defaults: defaults).first)
+        #expect(loaded.session.serviceToken == "tok")
         let rewritten = try #require(defaults.data(forKey: MiSessionStore.fallbackDefaultsKey))
         #expect(rewritten != legacy)
-        let object = try #require(try JSONSerialization.jsonObject(with: rewritten) as? [String: Any])
-        #expect(object["passToken"] == nil)
+        let stored = try envelope(rewritten)
+        #expect(stored.version == 2)
+        #expect(stored.accounts.count == 1)
+        #expect(stored.accounts[0]["passToken"] == nil)
 
-        // A second read is stable: the stripped session is not rewritten again.
-        #expect(MiSessionStore.load(defaults: defaults) == loaded)
+        // A second read is stable: the migrated envelope is not rewritten again.
+        #expect(MiSessionStore.loadAccounts(defaults: defaults) == [loaded])
         #expect(defaults.data(forKey: MiSessionStore.fallbackDefaultsKey) == rewritten)
     }
 
-    @Test("A ≤1.0.6 session JSON still decodes, and re-encoding drops its passToken (#27)")
+    @Test("A ≤1.0.6 session JSON still decodes, and the migrated envelope drops its passToken (#27)")
     func legacySessionJSONDropsPassToken() throws {
         let legacy = Data(#"{"userId":"42","cUserId":"c","ssecurity":"c2VjcmV0","serviceToken":"tok","passToken":"pt","region":"cn"}"#.utf8)
         let session = try #require(try? JSONDecoder().decode(MiSession.self, from: legacy))
@@ -238,12 +251,91 @@ struct KeychainCredentialTests {
         #expect(session.region == "cn")
 
         let migrated = try #require(MiSessionStore.migratedData(fromLegacyDefaults: legacy))
-        let object = try #require(try JSONSerialization.jsonObject(with: migrated) as? [String: Any])
-        #expect(object["passToken"] == nil)
-        #expect(object["serviceToken"] as? String == "tok")
+        let stored = try envelope(migrated)
+        #expect(stored.version == 2)
+        #expect(stored.accounts.count == 1)
+        #expect(stored.accounts[0]["serviceToken"] as? String == "tok")
+        #expect(stored.accounts[0]["passToken"] == nil)
 
         // Undecodable legacy data is reported instead of being written to the Keychain.
         #expect(MiSessionStore.migratedData(fromLegacyDefaults: Data("not-json".utf8)) == nil)
+    }
+
+    @Test("Two accounts in different regions round-trip in their saved order")
+    func multipleAccountsRoundTripInOrder() throws {
+        let suite = "com.jryang1997.MenuBarMijia.multi-account.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let cn = MiSession(userId: "11112222", cUserId: "c1", ssecurity: "s1", serviceToken: "cn-token", region: "cn")
+        let de = MiSession(userId: "33334444", cUserId: "c2", ssecurity: "s2", serviceToken: "de-token", region: "de")
+        #expect(MiSessionStore.saveAccounts([MiAccount(session: cn), MiAccount(session: de)], defaults: defaults))
+
+        let loaded = MiSessionStore.loadAccounts(defaults: defaults)
+        #expect(loaded.map { $0.session } == [cn, de])
+        #expect(loaded.map { $0.region } == [MiCloudRegion.cn, MiCloudRegion.de])
+        #expect(loaded.map { $0.id } == [cn.historyScopeIdentifier, de.historyScopeIdentifier])
+    }
+
+    @Test("Upsert replaces the same user and region in place, and another region adds an account")
+    func upsertReplacesSameAccount() throws {
+        let suite = "com.jryang1997.MenuBarMijia.upsert.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let first = MiSession(userId: "55556666", cUserId: "c", ssecurity: "s", serviceToken: "old-token", region: "cn")
+        let refreshed = MiSession(userId: "55556666", cUserId: "c", ssecurity: "s", serviceToken: "new-token", region: "cn")
+        let us = MiSession(userId: "55556666", cUserId: "c", ssecurity: "s", serviceToken: "us-token", region: "us")
+
+        #expect(MiSessionStore.upsert(first, defaults: defaults))
+        #expect(MiSessionStore.upsert(refreshed, defaults: defaults))
+        #expect(MiSessionStore.loadAccounts(defaults: defaults) == [MiAccount(session: refreshed)])
+
+        #expect(MiSessionStore.upsert(us, defaults: defaults))
+        let loaded = MiSessionStore.loadAccounts(defaults: defaults)
+        #expect(loaded.count == 2)
+        #expect(loaded.map { $0.session.serviceToken } == ["new-token", "us-token"])
+    }
+
+    @Test("Removing one account keeps the other, and removing the last one clears the slot")
+    func removeAccountKeepsTheRest() throws {
+        let suite = "com.jryang1997.MenuBarMijia.remove-account.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let cn = MiSession(userId: "11112222", cUserId: "c1", ssecurity: "s1", serviceToken: "cn-token", region: "cn")
+        let de = MiSession(userId: "33334444", cUserId: "c2", ssecurity: "s2", serviceToken: "de-token", region: "de")
+        #expect(MiSessionStore.saveAccounts([MiAccount(session: cn), MiAccount(session: de)], defaults: defaults))
+
+        #expect(MiSessionStore.remove(accountID: MiAccount(session: cn).id, defaults: defaults))
+        #expect(MiSessionStore.loadAccounts(defaults: defaults) == [MiAccount(session: de)])
+
+        #expect(MiSessionStore.remove(accountID: MiAccount(session: de).id, defaults: defaults))
+        #expect(MiSessionStore.loadAccounts(defaults: defaults).isEmpty)
+        #expect(defaults.object(forKey: MiSessionStore.fallbackDefaultsKey) == nil)
+    }
+
+    @Test("An empty region and cn are the same account, so upsert adds no duplicate")
+    func emptyRegionNormalizesToChinaMainland() throws {
+        let suite = "com.jryang1997.MenuBarMijia.region-normalize.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let blank = Data(#"{"userId":"77778888","cUserId":"c","ssecurity":"c2VjcmV0","serviceToken":"blank-token","region":""}"#.utf8)
+        let cn = Data(#"{"userId":"77778888","cUserId":"c","ssecurity":"c2VjcmV0","serviceToken":"cn-token","region":"cn"}"#.utf8)
+
+        defaults.set(blank, forKey: MiSessionStore.fallbackDefaultsKey)
+        let blankAccount = try #require(MiSessionStore.loadAccounts(defaults: defaults).first)
+        #expect(blankAccount.region == .cn)
+
+        defaults.set(cn, forKey: MiSessionStore.fallbackDefaultsKey)
+        let cnAccount = try #require(MiSessionStore.loadAccounts(defaults: defaults).first)
+        #expect(cnAccount.id == blankAccount.id)
+
+        // Both ids normalize to `cn`, so logging in again replaces the account instead of adding one.
+        defaults.set(blank, forKey: MiSessionStore.fallbackDefaultsKey)
+        #expect(MiSessionStore.upsert(cnAccount.session, defaults: defaults))
+        #expect(MiSessionStore.loadAccounts(defaults: defaults) == [cnAccount])
     }
 
     @Test("A session created by a new login never encodes a passToken")
@@ -254,5 +346,28 @@ struct KeychainCredentialTests {
         #expect(object["passToken"] == nil)
         let decoded = try JSONDecoder().decode(MiSession.self, from: data)
         #expect(decoded == session)
+    }
+
+    @Test("Upsert and remove refuse to overwrite existing accounts when the Keychain is unreadable")
+    func unreadableKeychainRefusesUpsertAndRemove() throws {
+        let storage = MemoryVaultStorage()
+        let vault = memoryVault(storage)
+        let cn = MiSession(userId: "11112222", cUserId: "c1", ssecurity: "s1", serviceToken: "cn-token", region: "cn")
+        let de = MiSession(userId: "33334444", cUserId: "c2", ssecurity: "s2", serviceToken: "de-token", region: "de")
+        #expect(MiSessionStore.upsert(cn, defaults: .standard, vault: vault))
+        let savedBlob = try #require(storage.rawBlob)
+
+        // Simulate a new process where the user declines the Keychain read prompt.
+        let unreadable = MemoryVaultStorage(blob: savedBlob)
+        unreadable.readResult = .unavailable
+        let lockedVault = memoryVault(unreadable)
+
+        #expect(!MiSessionStore.upsert(de, defaults: .standard, vault: lockedVault))
+        #expect(unreadable.writes == 0)
+        #expect(unreadable.rawBlob == savedBlob)
+
+        #expect(!MiSessionStore.remove(accountID: MiAccount(session: cn).id, defaults: .standard, vault: lockedVault))
+        #expect(unreadable.writes == 0)
+        #expect(unreadable.rawBlob == savedBlob)
     }
 }

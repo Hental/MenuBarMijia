@@ -117,7 +117,16 @@ public enum DeviceLayoutPrefs {
     }
 
     public static func lookup(_ sizes: [String: TileSize], id: String, scope: String) -> TileSize {
-        sizes[scopedKey(id: id, scope: scope)] ?? sizes[id] ?? .auto
+        if let exact = sizes[scopedKey(id: id, scope: scope)] {
+            return exact
+        }
+        if let slash = scope.firstIndex(of: "/") {
+            let rawRoomId = String(scope[scope.index(after: slash)...])
+            if let legacyRoomScoped = sizes[scopedKey(id: id, scope: rawRoomId)] {
+                return legacyRoomScoped
+            }
+        }
+        return sizes[id] ?? .auto
     }
 
     public static func scopedKey(id: String, scope: String) -> String { "\(scope)|\(id)" }

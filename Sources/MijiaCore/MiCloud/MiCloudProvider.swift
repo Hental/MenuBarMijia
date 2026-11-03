@@ -7,6 +7,8 @@ public actor MiCloudProvider: HomeProvider {
     public typealias APIFactory = @Sendable (MiSession) -> any MiCloudAPI
 
     private let logger = Logger(subsystem: "com.jryang1997.MenuBarMijia", category: "MiCloudProvider")
+    /// The one account this provider polls; nil keeps the legacy single-session behaviour.
+    private let account: MiAccount?
     private let sessionLoader: @Sendable () -> MiSession?
     private let apiFactory: APIFactory
     private let specSource: any MiotSpecSource
@@ -43,7 +45,8 @@ public actor MiCloudProvider: HomeProvider {
     private var pollRequested = false
 
     public init(
-        sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.load() },
+        account: MiAccount? = nil,
+        sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.loadAccounts().first?.session },
         apiFactory: @escaping APIFactory = { MiCloudClient(session: $0) },
         specSource: any MiotSpecSource = MiotSpecStore(),
         cameraBridge: any XiaomiCameraBridging = XiaomiCameraBridge.shared,
@@ -54,6 +57,7 @@ public actor MiCloudProvider: HomeProvider {
         cameraSessionReleaseDelay: Duration = .milliseconds(2500),
         selectedHomeLoader: @escaping @Sendable () -> String? = { UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey) }
     ) {
+        self.account = account
         self.sessionLoader = sessionLoader
         self.apiFactory = apiFactory
         self.specSource = specSource
@@ -109,7 +113,7 @@ public actor MiCloudProvider: HomeProvider {
     }
 
     private func runLoop() async {
-        guard let session = sessionLoader() else {
+        guard let session = account?.session ?? sessionLoader() else {
             api = nil
             continuation?.yield(.statusChanged(.disconnected(MiCloudError.notLoggedIn.localizedDescription)))
             return
@@ -142,6 +146,13 @@ public actor MiCloudProvider: HomeProvider {
                 return
             } catch MiCloudError.sessionExpired {
                 self.api = nil
+                if account != nil {
+                    // An expired account must not keep showing stale devices in the merged panel.
+                    devices = []
+                    rooms = []
+                    values = [:]
+                    emitSnapshot()
+                }
                 report(MiCloudError.sessionExpired)
                 return
             } catch {
@@ -377,8 +388,13 @@ public actor MiCloudProvider: HomeProvider {
     /// The selected home's rooms and devices, plus parents of included split keys so their spec and
     /// values stay available. Everything when no (known) home is selected.
     private func scopedDevicesAndRooms() -> (devices: [MiDeviceRecord], rooms: [MiRoom]) {
-        guard let selected = selectedHomeLoader(),
-              Self.homeOptions(from: rooms).contains(where: { $0.id == selected }) else {
+        guard let selected = selectedHomeLoader() else {
+            return (devices, rooms)
+        }
+        if selected == Self.otherAccountHomeSentinel {
+            return ([], [])
+        }
+        guard Self.homeOptions(from: rooms).contains(where: { $0.id == selected }) else {
             return (devices, rooms)
         }
         let visibleRooms = rooms.filter { $0.homeId == selected }
@@ -392,6 +408,8 @@ public actor MiCloudProvider: HomeProvider {
 
     /// UserDefaults key for the selected Mi Home id; absent or unknown means every home.
     public static let selectedHomeKey = "mi_selected_home_id"
+    /// Returned to child providers when the user picked a home that belongs to another signed-in account.
+    static let otherAccountHomeSentinel = "__other_account_home__"
     /// MIoT per-item code for "property not supported by this device".
     static let propertyUnsupportedCode = -704002000
 
@@ -407,7 +425,30 @@ public actor MiCloudProvider: HomeProvider {
             spec.availableEffects = []
             home.devices[i].kind = .light(spec)
         }
-        continuation?.yield(.snapshotUpdated(home))
+        continuation?.yield(.snapshotUpdated(stamp(home)))
+    }
+
+    /// Namespaces room/home ids and tags devices with the account, so several accounts can be merged
+    /// into one panel without id collisions. Device ids stay raw: MIoT calls address the did.
+    private func stamp(_ home: SynthesizedHome) -> SynthesizedHome {
+        guard let account else { return home }
+        let prefix = "\(account.id)/"
+        var stamped = home
+        for i in stamped.rooms.indices {
+            let room = stamped.rooms[i]
+            stamped.rooms[i] = RoomArea(id: prefix + room.id, name: room.name, sortOrder: room.sortOrder)
+        }
+        for i in stamped.devices.indices {
+            stamped.devices[i].roomId = prefix + stamped.devices[i].roomId
+            stamped.devices[i].accountId = account.id
+            stamped.devices[i].accountLabel = account.maskedUserId
+        }
+        for i in stamped.homes.indices {
+            stamped.homes[i].id = prefix + stamped.homes[i].id
+            stamped.homes[i].accountId = account.id
+            stamped.homes[i].accountLabel = account.maskedUserId
+        }
+        return stamped
     }
 
     static func homeOptions(from rooms: [MiRoom]) -> [HomeOption] {

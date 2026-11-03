@@ -193,6 +193,25 @@ enum MiotFixtures {
         "xiaomi.aircondition.mt0": decode(airConditionerMt0),
         "cuco.plug.v3": decode(outletCucoV3),
         "lumi.gateway.mgl03": decode(gateway),
+        "lemesh.switch.sw2f12": MiotDeviceSpec(
+            type: "urn:miot-spec-v2:device:switch:0000A003:lemesh-sw2f12:1",
+            services: [
+                MiotService(
+                    iid: 2,
+                    type: "urn:miot-spec-v2:service:switch:0000780C:lemesh-sw2f12:1",
+                    properties: [
+                        MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:on:00000006:lemesh-sw2f12:1", format: "bool", access: ["read", "write", "notify"]),
+                    ]
+                ),
+                MiotService(
+                    iid: 3,
+                    type: "urn:miot-spec-v2:service:switch:0000780C:lemesh-sw2f12:1",
+                    properties: [
+                        MiotProperty(iid: 1, type: "urn:miot-spec-v2:property:on:00000006:lemesh-sw2f12:1", format: "bool", access: ["read", "write", "notify"]),
+                    ]
+                ),
+            ]
+        ),
     ]
 
     static func key(_ did: String, _ siid: Int, _ piid: Int) -> MiotPropKey {
@@ -874,10 +893,16 @@ actor StubMiCloudAPI: MiCloudAPI {
     }
 
     private var getPropsFailure: MiCloudError?
+    var getPropsHook: (@Sendable () async -> Void)?
 
     func setGetPropsFailure(_ failure: MiCloudError?) { getPropsFailure = failure }
 
+    func setGetPropsHook(_ hook: (@Sendable () async -> Void)?) {
+        getPropsHook = hook
+    }
+
     func getProps(_ keys: [MiotPropKey]) async throws -> [MiotPropKey: JSONValue] {
+        if let hook = getPropsHook { await hook() }
         getPropsCalls.append(keys)
         if let getPropsFailure { throw getPropsFailure }
         return values.filter { keys.contains($0.key) }
@@ -995,7 +1020,7 @@ actor EventLog {
     }
 }
 
-private func consume(_ provider: some HomeProvider) -> (EventLog, Task<Void, Never>) {
+func consume(_ provider: some HomeProvider) -> (EventLog, Task<Void, Never>) {
     let log = EventLog()
     let stream = provider.events()
     let task = Task { for await e in stream { await log.append(e) } }

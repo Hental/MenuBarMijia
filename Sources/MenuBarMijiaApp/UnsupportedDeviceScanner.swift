@@ -70,7 +70,7 @@ final class UnsupportedDeviceScanner {
     // MARK: Mi Cloud
 
     private nonisolated static func scanMiCloud() async throws -> [UnsupportedDevice] {
-        guard let session = MiSessionStore.load() else {
+        guard let session = MiSessionStore.loadAccounts().first?.session else {
             throw UnsupportedDeviceScanError.notSignedIn
         }
         let api = MiCloudClient(session: session)

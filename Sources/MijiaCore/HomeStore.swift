@@ -205,7 +205,7 @@ public final class HomeStore {
         if isShowingOnboarding { return true }
         guard !hasCompletedOnboarding, devices.isEmpty else { return false }
         if case .connected = connectionStatus { return false }
-        let hasMiSession = (miSessionMaskedUserId != nil)
+        let hasMiSession = !miAccounts.isEmpty
         let hasHAToken = !KeychainHelper.loadToken(defaults: userDefaults).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return !hasMiSession && !hasHAToken
     }
@@ -236,6 +236,12 @@ public final class HomeStore {
     }
 
     public internal(set) var miSessionMaskedUserId: String?
+    /// Every signed-in Mi account, primary (first) first. The panel groups by account when there is
+    /// more than one, and adding an account never replaces the ones already signed in.
+    public internal(set) var miAccounts: [MiAccount] = []
+    /// Per-account connection state reported by `MiAccountsProvider` so Settings can flag an
+    /// expired/disconnected account even while another account keeps `connectionStatus == .connected`.
+    public internal(set) var miAccountStatuses: [String: ConnectionStatus] = [:]
     var miSessionScopeIdentifier: String? {
         didSet { syncSensorHistoryScope() }
     }
@@ -348,7 +354,9 @@ public final class HomeStore {
             L10n.currentLanguage = initialEffective
         }
 
-        let initialMiSession = MiSessionStore.load(defaults: ud)
+        let initialAccounts = MiSessionStore.loadAccounts(defaults: ud)
+        self.miAccounts = initialAccounts
+        let initialMiSession = initialAccounts.first?.session
         let savedRegion = ud.string(forKey: "mi_cloud_region").flatMap(MiCloudRegion.init(rawValue:))
             ?? initialMiSession.flatMap { MiCloudRegion(rawValue: $0.region.lowercased()) }
             ?? .cn
@@ -360,7 +368,20 @@ public final class HomeStore {
         self.homeBackend = initialBackend
         self.miSessionMaskedUserId = initialMiSession?.maskedUserId
         self.miSessionScopeIdentifier = initialMiSession?.historyScopeIdentifier
-        self.selectedMiHomeId = ud.string(forKey: MiCloudProvider.selectedHomeKey)
+        // A home id saved before multi-account has no account prefix. The only account owns it; with
+        // zero or several accounts a bare id is ambiguous, so it is dropped rather than guessed.
+        var initialSelectedHomeId = ud.string(forKey: MiCloudProvider.selectedHomeKey)
+        if let selection = initialSelectedHomeId, !selection.contains("/") {
+            if initialAccounts.count == 1, let onlyAccount = initialAccounts.first {
+                let scoped = "\(onlyAccount.id)/\(selection)"
+                initialSelectedHomeId = scoped
+                ud.set(scoped, forKey: MiCloudProvider.selectedHomeKey)
+            } else {
+                initialSelectedHomeId = nil
+                ud.removeObject(forKey: MiCloudProvider.selectedHomeKey)
+            }
+        }
+        self.selectedMiHomeId = initialSelectedHomeId
         self.lgConfig = LGWebOSConfig.load(from: ud)
         self.homeName = ud.string(forKey: "home_name") ?? KeychainHelper.localizedDefaultHomeName
         self.isHabitLearningEnabled = boolOrDefaultTrue("assistant_habit_learning_enabled")
@@ -432,8 +453,7 @@ public final class HomeStore {
         if let provider {
             self.provider = provider
         } else if initialBackend == .xiaomiCloud {
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.load(defaults: ud) })
+            self.provider = Self.makeMiAccountsProvider(accounts: initialAccounts, defaults: ud)
         } else if initialBackend == .demo {
             self.provider = DemoHomeProvider()
         } else {
@@ -452,6 +472,23 @@ public final class HomeStore {
                 _ = await self?.discoverHomeAssistantOnLAN(autoApplyIfDefault: true)
             }
         }
+    }
+
+    /// One `MiCloudProvider` per account behind a single `HomeProvider`, so a second sign-in merges
+    /// into the panel instead of replacing the first account.
+    private static func makeMiAccountsProvider(accounts: [MiAccount], defaults: UserDefaults) -> MiAccountsProvider {
+        nonisolated(unsafe) let ud = defaults
+        return MiAccountsProvider(
+            accounts: accounts,
+            selectedHomeLoader: { ud.string(forKey: MiCloudProvider.selectedHomeKey) }
+        )
+    }
+
+    /// Re-reads the stored accounts (a login, a removal or a sign-out changed them) and rebuilds the
+    /// provider around the current list.
+    func makeMiAccountsProvider() -> MiAccountsProvider {
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        return Self.makeMiAccountsProvider(accounts: miAccounts, defaults: userDefaults)
     }
 
     /// Re-resolves `effectiveLanguage` and pushes it to `L10n`; also called from the language
