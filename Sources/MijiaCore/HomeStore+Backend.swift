@@ -10,6 +10,12 @@ extension HomeStore {
             return L10n.tr("演示模式（虚拟设备）", "Demo Mode (Virtual Devices)")
         }
         if homeBackend == .xiaomiCloud {
+            if miAccounts.count > 1 {
+                return L10n.tr(
+                    "米家云端 (\(miAccounts.count) 个账号)",
+                    "Xiaomi Cloud (\(miAccounts.count) accounts)"
+                )
+            }
             return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
                 ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
         }
@@ -379,7 +385,7 @@ extension HomeStore {
     public func switchBackend(_ backend: HomeBackend) {
         let matches: Bool = switch backend {
         case .homeAssistant: provider is HAWebSocketProvider
-        case .xiaomiCloud: provider is MiCloudProvider
+        case .xiaomiCloud: provider is MiAccountsProvider
         case .demo: provider is DemoHomeProvider
         }
         guard homeBackend != backend || !matches else { return }
@@ -394,8 +400,7 @@ extension HomeStore {
         case .homeAssistant:
             self.provider = makeHAProvider(baseURLString: serverURLString, token: KeychainHelper.loadToken(defaults: userDefaults))
         case .xiaomiCloud:
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
+            self.provider = makeMiAccountsProvider()
         case .demo:
             // Strictly offline: stop any LAN TV and update work started by the previous backend (#47).
             if let lgClient = lgWebOSClient {
@@ -422,8 +427,11 @@ extension HomeStore {
     public func completeMiLogin(_ session: MiSession) {
         invalidateUndoContext()
         MiSessionStore.upsert(session, defaults: userDefaults)
-        self.miSessionMaskedUserId = session.maskedUserId
-        self.miSessionScopeIdentifier = session.historyScopeIdentifier
+        // The primary (first) account drives the summary and the history scope, so signing in a
+        // second account must not relabel the panel with the newcomer.
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
@@ -431,16 +439,19 @@ extension HomeStore {
         self.completeOnboarding()
         eventTask?.cancel()
         shutdownCurrentProvider()
-        nonisolated(unsafe) let ud = userDefaults
-        self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
+        self.provider = makeMiAccountsProvider()
         startListening()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
     }
 
     public func logoutMiAccount() {
         MiSessionStore.clear(defaults: userDefaults)
+        miAccounts = []
         self.miSessionMaskedUserId = nil
         self.miSessionScopeIdentifier = nil
+        self.homes = []
+        self.selectedMiHomeId = nil
+        userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         if homeBackend == .xiaomiCloud {
             invalidateUndoContext()
             self.devices = []
@@ -449,15 +460,49 @@ extension HomeStore {
             self.scenes = []
             eventTask?.cancel()
             shutdownCurrentProvider()
-            nonisolated(unsafe) let ud = userDefaults
-            self.provider = MiCloudProvider(sessionLoader: { MiSessionStore.loadAccounts(defaults: ud).first?.session })
+            self.provider = makeMiAccountsProvider()
             startListening()
         }
         showToast(L10n.tr("已退出米家账号", "Signed out of Xiaomi Home"))
     }
 
+    /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel
+    /// right away instead of waiting for the next merged snapshot.
+    public func logoutMiAccount(id: String) {
+        invalidateUndoContext()
+        MiSessionStore.remove(accountID: id, defaults: userDefaults)
+        miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
+        self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
+        if selectedMiHomeId?.hasPrefix(id + "/") == true {
+            selectedMiHomeId = nil
+            userDefaults.removeObject(forKey: MiCloudProvider.selectedHomeKey)
+        }
+        if homeBackend == .xiaomiCloud {
+            let removedDeviceIds = Set(devices.filter { $0.accountId == id }.map(\.id))
+            devices.removeAll { $0.accountId == id }
+            environmentReadings.removeAll { removedDeviceIds.contains($0.id) }
+            rooms.removeAll { $0.id.hasPrefix(id + "/") }
+            // Its homes leave too, so the home menu cannot offer a home nobody owns any more.
+            homes.removeAll { $0.accountId == id }
+            // A room pill pointing at the removed account would show an empty panel.
+            if let roomId = selectedRoomId, roomId.hasPrefix(id + "/") {
+                selectRoom(nil)
+            }
+            eventTask?.cancel()
+            shutdownCurrentProvider()
+            self.provider = makeMiAccountsProvider()
+            startListening()
+        }
+        showToast(miAccounts.isEmpty
+            ? L10n.tr("已退出米家账号", "Signed out of Xiaomi Home")
+            : L10n.tr("已移除米家账号", "Removed Xiaomi account"))
+    }
+
     private func shutdownCurrentProvider() {
-        if let old = provider as? MiCloudProvider {
+        if let old = provider as? MiAccountsProvider {
+            Task { await old.shutdown() }
+        } else if let old = provider as? MiCloudProvider {
             Task { await old.shutdown() }
         } else if let old = provider as? HAWebSocketProvider {
             Task { await old.shutdown() }

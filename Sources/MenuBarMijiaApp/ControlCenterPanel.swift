@@ -476,11 +476,36 @@ public struct ControlCenterPanel: View {
         }
         let rest = DeviceLayoutPrefs.apply(order: order, to: pool.filter { map[$0.id] == nil })
         if !rest.isEmpty {
-            let titled = !sections.isEmpty
-            let title: String? = store.selectedRoomId == nil
-                ? (sections.isEmpty ? L10n.tr("全屋设备", "All Devices") : L10n.tr("更多设备", "More Devices"))
-                : (titled ? L10n.tr("其他", "Other") : nil)
-            sections.append(PageSection(id: "rest", title: title, devices: rest, groupId: nil))
+            // Several Mi Cloud accounts in one panel: devices stay grouped under the account that
+            // owns them. Other backends have no account to group by, even when Mi accounts remain
+            // signed in.
+            if store.miAccounts.count > 1, store.selectedRoomId == nil, store.homeBackend == .xiaomiCloud {
+                let accountIds = Set(store.miAccounts.map(\.id))
+                for account in store.miAccounts {
+                    let members = rest.filter { $0.accountId == account.id }
+                    if !members.isEmpty {
+                        sections.append(PageSection(
+                            id: "account:\(account.id)",
+                            title: account.displayName,
+                            devices: members,
+                            groupId: nil
+                        ))
+                    }
+                }
+                let unowned = rest.filter { device in
+                    guard let accountId = device.accountId else { return true }
+                    return !accountIds.contains(accountId)
+                }
+                if !unowned.isEmpty {
+                    sections.append(PageSection(id: "rest", title: L10n.tr("其他", "Other"), devices: unowned, groupId: nil))
+                }
+            } else {
+                let titled = !sections.isEmpty
+                let title: String? = store.selectedRoomId == nil
+                    ? (sections.isEmpty ? L10n.tr("全屋设备", "All Devices") : L10n.tr("更多设备", "More Devices"))
+                    : (titled ? L10n.tr("其他", "Other") : nil)
+                sections.append(PageSection(id: "rest", title: title, devices: rest, groupId: nil))
+            }
         }
         return sections
     }
@@ -1111,7 +1136,8 @@ public struct ControlCenterPanel: View {
         }
     }
 
-    /// Dashboard title; with several Mi Homes it becomes a menu that switches between them.
+    /// Dashboard title; with several Mi Homes it becomes a menu that switches between them. Several
+    /// signed-in accounts list their homes under the account that owns them.
     @ViewBuilder
     private var homeTitle: some View {
         if store.homes.count > 1 {
@@ -1122,14 +1148,22 @@ public struct ControlCenterPanel: View {
                     Label(L10n.tr("全部家庭", "All Homes"), systemImage: store.selectedMiHomeId == nil ? "checkmark" : "")
                 }
                 Divider()
-                ForEach(store.homes) { home in
-                    Button {
-                        store.selectMiHome(home.id)
-                    } label: {
-                        Label(
-                            "\(home.name)  \(home.deviceCount)",
-                            systemImage: store.selectedMiHomeId == home.id ? "checkmark" : ""
-                        )
+                if store.miAccounts.count > 1 {
+                    ForEach(store.miAccounts) { account in
+                        let accountHomes = store.homes.filter { $0.accountId == account.id }
+                        if !accountHomes.isEmpty {
+                            Section {
+                                ForEach(accountHomes) { home in
+                                    homeMenuButton(home)
+                                }
+                            } header: {
+                                Text(account.displayName)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(store.homes) { home in
+                        homeMenuButton(home)
                     }
                 }
             } label: {
@@ -1151,6 +1185,17 @@ public struct ControlCenterPanel: View {
             Text(store.homeName)
                 .font(.system(size: DesignTokens.TypeSize.title, weight: .bold))
                 .tracking(-0.2)
+        }
+    }
+
+    private func homeMenuButton(_ home: HomeOption) -> some View {
+        Button {
+            store.selectMiHome(home.id)
+        } label: {
+            Label(
+                "\(home.name)  \(home.deviceCount)",
+                systemImage: store.selectedMiHomeId == home.id ? "checkmark" : ""
+            )
         }
     }
 
