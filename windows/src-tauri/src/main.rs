@@ -854,8 +854,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::*;
-    use crate::update::*;
 
     #[test]
     fn sidecar_reserves_the_complete_expanded_footprint_at_each_scale() {

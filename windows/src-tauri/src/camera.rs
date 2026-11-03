@@ -844,7 +844,7 @@ pub(crate) fn terminate_pid(pid: u32) {
     }
 }
 
-struct OwnedApiProbe {
+pub(crate) struct OwnedApiProbe {
     reachable: bool,
     authenticated: bool,
     nonce_matches: bool,
@@ -1060,7 +1060,7 @@ pub(crate) async fn ensure_go2rtc_running(app: &AppHandle) -> Result<(), String>
 }
 
 #[derive(Serialize)]
-struct Go2RtcEndpoint {
+pub(crate) struct Go2RtcEndpoint {
     origin: String,
     authorization: String,
 }
