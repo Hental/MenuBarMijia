@@ -1211,8 +1211,14 @@ public struct ControlCenterPanel: View {
     private var environmentStatusLine: some View {
         // One representative reading keeps the line quiet: the selected room's reading first,
         // then the user's preferred menu-bar temperature source (#103).
-        let selectedRoomName = store.rooms.first { $0.id == store.selectedRoomId }?.name
+        let selectedRoomId = store.selectedRoomId
+        let selectedRoomName = store.rooms.first { $0.id == selectedRoomId }?.name
+        let roomDeviceIds = selectedRoomId.map { roomId in
+            Set(store.devices.filter { $0.roomId == roomId }.map(\.id))
+        }
         let reading = store.environmentReadings.first { env in
+            roomDeviceIds?.contains(env.id) == true
+        } ?? store.environmentReadings.first { env in
             selectedRoomName != nil && env.roomName == selectedRoomName
         } ?? store.preferredEnvironmentReading
         let watts = store.totalPowerWatts

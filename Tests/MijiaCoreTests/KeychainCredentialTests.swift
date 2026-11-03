@@ -347,4 +347,27 @@ struct KeychainCredentialTests {
         let decoded = try JSONDecoder().decode(MiSession.self, from: data)
         #expect(decoded == session)
     }
+
+    @Test("Upsert and remove refuse to overwrite existing accounts when the Keychain is unreadable")
+    func unreadableKeychainRefusesUpsertAndRemove() throws {
+        let storage = MemoryVaultStorage()
+        let vault = memoryVault(storage)
+        let cn = MiSession(userId: "11112222", cUserId: "c1", ssecurity: "s1", serviceToken: "cn-token", region: "cn")
+        let de = MiSession(userId: "33334444", cUserId: "c2", ssecurity: "s2", serviceToken: "de-token", region: "de")
+        #expect(MiSessionStore.upsert(cn, defaults: .standard, vault: vault))
+        let savedBlob = try #require(storage.rawBlob)
+
+        // Simulate a new process where the user declines the Keychain read prompt.
+        let unreadable = MemoryVaultStorage(blob: savedBlob)
+        unreadable.readResult = .unavailable
+        let lockedVault = memoryVault(unreadable)
+
+        #expect(!MiSessionStore.upsert(de, defaults: .standard, vault: lockedVault))
+        #expect(unreadable.writes == 0)
+        #expect(unreadable.rawBlob == savedBlob)
+
+        #expect(!MiSessionStore.remove(accountID: MiAccount(session: cn).id, defaults: .standard, vault: lockedVault))
+        #expect(unreadable.writes == 0)
+        #expect(unreadable.rawBlob == savedBlob)
+    }
 }

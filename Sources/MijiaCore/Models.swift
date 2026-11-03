@@ -594,6 +594,32 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
     /// Whether this device can be toggled on/off with a single primary click
     public var isPrimaryToggleable: Bool { kind.canTogglePower }
 
+    /// Underlying MIoT `did`s addressed by this card's entity IDs (differs from `id` on split-key
+    /// devices whose card `id` is `<parentDid>.s<N>` while commands target `<parentDid>`).
+    var miotCommandDids: [String] {
+        let entityIds: [String?] = switch kind {
+        case .light(let s): [s.entityId]
+        case .climate(let s): [s.entityId]
+        case .fan(let s): [s.entityId]
+        case .plug(let s): [s.switchEntityId, s.childLockEntityId]
+        case .fridge(let s): [s.modeEntityId, s.fridgeTargetEntityId, s.freezerTargetEntityId]
+        case .vacuum(let s): [s.entityId, s.modeEntityId]
+        case .speaker(let s):
+            [
+                s.mediaEntityId, s.muteSwitchEntityId, s.sleepModeEntityId,
+                s.ttsNotifyEntityId, s.directiveNotifyEntityId,
+                s.playMusicButtonId, s.stopAlarmButtonId,
+            ]
+        case .tv(let s): [s.mediaEntityId]
+        case .camera(let s): [s.entityId, s.motionDetectionEntityId, s.streamEntityId]
+        case .sensor: []
+        }
+        return entityIds.compactMap { id in
+            guard let id else { return nil }
+            return MiotAddress.parseAction(id)?.did ?? MiotAddress.parse(id)?.did
+        }
+    }
+
     /// Whether this device represents a stateless momentary action button (e.g. Home Assistant `button.*` / Wake on LAN, #100).
     public var isMomentaryButton: Bool {
         if case .plug(let s) = kind {

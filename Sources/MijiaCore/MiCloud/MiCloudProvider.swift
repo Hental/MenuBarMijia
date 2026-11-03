@@ -388,8 +388,13 @@ public actor MiCloudProvider: HomeProvider {
     /// The selected home's rooms and devices, plus parents of included split keys so their spec and
     /// values stay available. Everything when no (known) home is selected.
     private func scopedDevicesAndRooms() -> (devices: [MiDeviceRecord], rooms: [MiRoom]) {
-        guard let selected = selectedHomeLoader(),
-              Self.homeOptions(from: rooms).contains(where: { $0.id == selected }) else {
+        guard let selected = selectedHomeLoader() else {
+            return (devices, rooms)
+        }
+        if selected == Self.otherAccountHomeSentinel {
+            return ([], [])
+        }
+        guard Self.homeOptions(from: rooms).contains(where: { $0.id == selected }) else {
             return (devices, rooms)
         }
         let visibleRooms = rooms.filter { $0.homeId == selected }
@@ -403,6 +408,8 @@ public actor MiCloudProvider: HomeProvider {
 
     /// UserDefaults key for the selected Mi Home id; absent or unknown means every home.
     public static let selectedHomeKey = "mi_selected_home_id"
+    /// Returned to child providers when the user picked a home that belongs to another signed-in account.
+    static let otherAccountHomeSentinel = "__other_account_home__"
     /// MIoT per-item code for "property not supported by this device".
     static let propertyUnsupportedCode = -704002000
 

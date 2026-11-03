@@ -190,15 +190,128 @@ struct MiAccountsProviderTests {
         defer { task.cancel() }
 
         let filtered = await log.wait { events in
+            guard await cnApi.deviceListCalls > 0, await deApi.deviceListCalls > 0 else { return false }
             guard let latest = await events.snapshots.last else { return false }
             let ids = latest.devices.map(\.id)
-            return ids.contains("cn-light") && ids.contains("de-in") && !ids.contains("de-out")
+            return latest.homes.count == 3 && ids == ["de-in"]
         }
         #expect(filtered)
         let snapshots = await log.snapshots
         let snapshot = try #require(snapshots.last)
-        let otherHomeHidden = snapshot.devices.allSatisfy { $0.id != "de-out" }
-        #expect(otherHomeHidden)
+        #expect(snapshot.devices.map(\.id) == ["de-in"])
+        #expect(snapshot.rooms.map(\.id) == [Self.de.id + "/wo_shi"])
+        #expect(snapshot.homes.map(\.id) == [
+            Self.cn.id + "/home-cn",
+            Self.de.id + "/home-de",
+            Self.de.id + "/home-other",
+        ])
+        await provider.shutdown()
+    }
+
+    @Test("Split-key switch command routes by parent did to the owning account")
+    func splitKeyCommandRoutesToOwningAccount() async throws {
+        let cnApi = StubMiCloudAPI(
+            devices: [MiDeviceRecord(did: "cn-light", name: "客厅灯", model: "yeelink.light.ceiling22", isOnline: true)],
+            rooms: [MiRoom(id: "r-cn", name: "客厅", dids: ["cn-light"], homeId: "home-cn", homeName: "国内家")],
+            values: [MiotFixtures.key("cn-light", 2, 1): .bool(true)]
+        )
+        let deApi = StubMiCloudAPI(
+            devices: [
+                MiDeviceRecord(did: "100", name: "双键开关", model: "lemesh.switch.sw2f12", isOnline: true),
+                MiDeviceRecord(
+                    did: "100.s2",
+                    name: "筒灯",
+                    model: "lemesh.switch.sw2f12",
+                    isOnline: true,
+                    splitParentDid: "100",
+                    splitSiid: 2
+                ),
+                MiDeviceRecord(
+                    did: "100.s3",
+                    name: "氛围灯",
+                    model: "lemesh.switch.sw2f12",
+                    isOnline: true,
+                    splitParentDid: "100",
+                    splitSiid: 3
+                ),
+            ],
+            rooms: [MiRoom(id: "r-de", name: "卧室", dids: ["100", "100.s2", "100.s3"], homeId: "home-de", homeName: "海外家")],
+            values: [
+                MiotFixtures.key("100", 2, 1): .bool(false),
+                MiotFixtures.key("100", 3, 1): .bool(true),
+            ]
+        )
+        let provider = Self.makeProvider([Self.cn, Self.de], cnAPI: cnApi, deAPI: deApi)
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        let merged = await log.wait { events in
+            await events.snapshots.contains { snap in
+                let ids = Set(snap.devices.map(\.id))
+                return ids.contains("100.s2") && ids.contains("100.s3") && !ids.contains("100")
+            }
+        }
+        #expect(merged)
+
+        try await provider.execute(.setSwitch(entityId: "miot:100:3", isOn: false))
+        #expect(await deApi.setPropsCalls == [
+            [MiotPropWrite(did: "100", siid: 3, piid: 1, value: .bool(false))],
+        ])
+        #expect(await cnApi.setPropsCalls.isEmpty)
+        await provider.shutdown()
+    }
+
+    @Test("Waking from sleep keeps closesAwayGap false until every active account polls")
+    func wakeFromSleepWaitsForAllAccountsBeforeClosingAwayGap() async throws {
+        let cnApi = StubMiCloudAPI(
+            devices: [MiDeviceRecord(did: "cn-light", name: "客厅灯", model: "yeelink.light.ceiling22", isOnline: true)],
+            rooms: [MiRoom(id: "r-cn", name: "客厅", dids: ["cn-light"], homeId: "home-cn", homeName: "国内家")],
+            values: [MiotFixtures.key("cn-light", 2, 1): .bool(true)]
+        )
+        let deApi = StubMiCloudAPI(
+            devices: [MiDeviceRecord(did: "de-plug", name: "卧室插座", model: "cuco.plug.v3", isOnline: true)],
+            rooms: [MiRoom(id: "r-de", name: "卧室", dids: ["de-plug"], homeId: "home-de", homeName: "海外家")],
+            values: [MiotFixtures.key("de-plug", 2, 1): .bool(false)]
+        )
+        let provider = Self.makeProvider([Self.cn, Self.de], cnAPI: cnApi, deAPI: deApi)
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+
+        let initialReady = await log.wait { events in
+            await events.snapshots.contains { $0.devices.count == 2 && $0.closesAwayGap }
+        }
+        #expect(initialReady)
+
+        // Pause polling (Mac sleeps), then hold DE's wake poll until CN has already reported.
+        await provider.setPollingContext(PollingContext(panelVisible: false, systemActive: false, lowPower: false))
+        let (deStream, deCont) = AsyncStream<Void>.makeStream()
+        await deApi.setGetPropsHook {
+            var iter = deStream.makeAsyncIterator()
+            _ = await iter.next()
+        }
+        let cnCallsBeforeWake = await cnApi.getPropsCalls.count
+        await provider.setPollingContext(PollingContext(panelVisible: true, systemActive: true, lowPower: false))
+
+        let cnReportedAfterWake = await log.wait { _ in
+            await cnApi.getPropsCalls.count > cnCallsBeforeWake
+        }
+        #expect(cnReportedAfterWake)
+        // Give the merged snapshot from CN's wake poll a turn to arrive; DE is still blocked.
+        let partialWakeSnapshot = await log.wait { events in
+            guard let latest = await events.snapshots.last else { return false }
+            return !latest.closesAwayGap
+        }
+        #expect(partialWakeSnapshot)
+
+        await deApi.setGetPropsHook(nil)
+        deCont.yield(())
+        deCont.finish()
+
+        let bothReportedAfterWake = await log.wait { events in
+            guard let latest = await events.snapshots.last else { return false }
+            return latest.closesAwayGap
+        }
+        #expect(bothReportedAfterWake)
         await provider.shutdown()
     }
 }

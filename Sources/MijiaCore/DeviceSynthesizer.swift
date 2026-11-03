@@ -192,6 +192,8 @@ public struct SynthesizedHome: Equatable, Sendable {
     public var scenes: [HomeScene]
     /// Homes on the account (empty for backends without the concept).
     public var homes: [HomeOption] = []
+    /// Per-account connection status when merged across several Mi accounts.
+    public var accountStatuses: [String: ConnectionStatus] = [:]
     /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
     /// close the away gap, because the door may have opened while polling was paused.
     public var closesAwayGap: Bool = true

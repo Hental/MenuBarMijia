@@ -64,6 +64,10 @@ extension HomeStore {
             devices.removeAll { $0.id == dev.id }
             return
         }
+        var dev = dev
+        if let matchedRoom = rooms.first(where: { $0.id == dev.roomId || $0.name == dev.roomName }) {
+            dev.roomId = matchedRoom.id
+        }
         latestLGDevice = dev
         rawDeviceNames[dev.id] = dev.name
         let now = ContinuousClock.now
@@ -165,10 +169,17 @@ extension HomeStore {
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
+            if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
+                miAccountStatuses = snapshot.accountStatuses
+            }
             var nextRooms = snapshot.rooms
-            if let lgDev = latestLGDevice, lgConfig.isEnabled,
-               !nextRooms.contains(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
-                nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+            if var lgDev = latestLGDevice, lgConfig.isEnabled {
+                if let matchedRoom = nextRooms.first(where: { $0.id == lgDev.roomId || $0.name == lgDev.roomName }) {
+                    lgDev.roomId = matchedRoom.id
+                    latestLGDevice = lgDev
+                } else {
+                    nextRooms.append(RoomArea(id: lgDev.roomId, name: lgDev.roomName, sortOrder: 1))
+                }
             }
             if rooms != nextRooms { rooms = nextRooms }
             if homes != snapshot.homes { homes = snapshot.homes }
@@ -425,8 +436,14 @@ extension HomeStore {
     }
 
     public func completeMiLogin(_ session: MiSession) {
+        guard MiSessionStore.upsert(session, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法写入钥匙串，请授权钥匙串访问后重试", "Could not save to Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
         invalidateUndoContext()
-        MiSessionStore.upsert(session, defaults: userDefaults)
         // The primary (first) account drives the summary and the history scope, so signing in a
         // second account must not relabel the panel with the newcomer.
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
@@ -447,6 +464,7 @@ extension HomeStore {
     public func logoutMiAccount() {
         MiSessionStore.clear(defaults: userDefaults)
         miAccounts = []
+        miAccountStatuses = [:]
         self.miSessionMaskedUserId = nil
         self.miSessionScopeIdentifier = nil
         self.homes = []
@@ -470,9 +488,16 @@ extension HomeStore {
     /// Removes one account and keeps the rest: its devices, readings, rooms and homes leave the panel
     /// right away instead of waiting for the next merged snapshot.
     public func logoutMiAccount(id: String) {
+        guard MiSessionStore.remove(accountID: id, defaults: userDefaults) else {
+            showToast(
+                L10n.tr("无法更新钥匙串，请授权钥匙串访问后重试", "Could not update Keychain; allow Keychain access and try again"),
+                isError: true
+            )
+            return
+        }
         invalidateUndoContext()
-        MiSessionStore.remove(accountID: id, defaults: userDefaults)
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
+        miAccountStatuses.removeValue(forKey: id)
         self.miSessionMaskedUserId = miAccounts.first?.maskedUserId
         self.miSessionScopeIdentifier = miAccounts.first?.session.historyScopeIdentifier
         if selectedMiHomeId?.hasPrefix(id + "/") == true {

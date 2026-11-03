@@ -21,7 +21,7 @@ ADR-0003 让 `MijiaCore` 保持能在 Linux 编译，理由之一是"将来做 W
 1. 修订 ADR-0003 的措辞：`MijiaCore` 保持 Linux 可编译的理由是**核心逻辑可脱离 macOS 测试**（Linux CI 全量单测），不再是"为 Windows 复用做准备"。
 2. 一致性靠以下硬约束维持，并写入 `CODING_STANDARDS.md` 第 6 条：
    - 共享 golden 语料：`Tests/Fixtures/intent_golden.json`、`miot_golden.json`、`provider_golden.json`，两端测试分别断言同一份行为；
-   - 两端 CI 都跑（`linux-core` + `macos` 跑 Swift 侧，`windows-core` 跑 TS 侧），新增能力必须双端同 PR 落地；
+   - 两端 CI 都跑（`linux-core` + `macos` 跑 Swift 侧，`windows-core` 跑 TS 侧），新增共享能力原则上双端同 PR 落地（平台特定或分阶段落地的能力须在对应 ADR 与 README 中明确标注，如 ADR-0008 双源合并与 ADR-0010 多小米账号先落地 macOS）；
    - 审计发现的已知漂移（#37 地区选择、#38 AI 请求结构、#39 更新检查）在同一 PR 内补齐。
 3. 如果未来 Windows 用户规模或漂移成本证明值得，再升级为方案 1/2——届时本 ADR 标记被取代。
 

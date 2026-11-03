@@ -19,6 +19,8 @@ public actor MiAccountsProvider: HomeProvider {
     private var forwardTasks: [Task<Void, Never>] = []
     private var snapshots: [String: SynthesizedHome] = [:]
     private var statuses: [String: ConnectionStatus] = [:]
+    /// Accounts that delivered a post-poll snapshot (`closesAwayGap == true`) in the current wake cycle.
+    private var freshAccounts: Set<String> = []
     /// did → owning accounts in account order; a did shared by two accounts keeps its first owner first.
     private var deviceOwners: [String: [String]] = [:]
     private var lastStatus: ConnectionStatus?
@@ -91,17 +93,23 @@ public actor MiAccountsProvider: HomeProvider {
     }
 
     /// The child provider only understands raw home ids, while the app stores `"<accountID>/<homeID>"`.
-    /// A bare id from before multi-account belongs to the first account.
+    /// A bare id from before multi-account belongs to the first account. When another signed-in account's
+    /// home is selected, this child hides its devices/rooms while still reporting its home options.
     private func scopedSelection(for account: MiAccount) -> @Sendable () -> String? {
         let loader = selectedHomeLoader
         let accountId = account.id
         let isFirst = accounts.first?.id == accountId
+        let knownAccountIds = Set(accounts.map(\.id))
         return {
             guard let selection = loader(), !selection.isEmpty else { return nil }
             guard let slash = selection.firstIndex(of: "/") else {
-                return isFirst ? selection : nil
+                if isFirst { return selection }
+                return knownAccountIds.count > 1 ? MiCloudProvider.otherAccountHomeSentinel : nil
             }
-            guard String(selection[..<slash]) == accountId else { return nil }
+            let ownerId = String(selection[..<slash])
+            guard ownerId == accountId else {
+                return knownAccountIds.contains(ownerId) ? MiCloudProvider.otherAccountHomeSentinel : nil
+            }
             let raw = String(selection[selection.index(after: slash)...])
             return raw.isEmpty ? nil : raw
         }
@@ -126,6 +134,9 @@ public actor MiAccountsProvider: HomeProvider {
     }
 
     public func setPollingContext(_ context: PollingContext) async {
+        if context.systemActive && !pollingContext.systemActive {
+            freshAccounts.removeAll()
+        }
         pollingContext = context
         await applyPollingContext()
     }
@@ -147,8 +158,16 @@ public actor MiAccountsProvider: HomeProvider {
         case .statusChanged(let status):
             statuses[accountId] = status
             publishStatus()
+            if !snapshots.isEmpty {
+                publishSnapshot()
+            }
         case .snapshotUpdated(let home):
             snapshots[accountId] = home
+            if home.closesAwayGap {
+                freshAccounts.insert(accountId)
+            } else {
+                freshAccounts.remove(accountId)
+            }
             rebuildDeviceOwners()
             publishSnapshot()
         }
@@ -180,11 +199,22 @@ public actor MiAccountsProvider: HomeProvider {
         for account in accounts {
             guard let home = snapshots[account.id] else { continue }
             for device in home.devices {
-                if owners[device.id]?.contains(account.id) == true { continue }
-                owners[device.id, default: []].append(account.id)
+                for key in [device.id] + device.miotCommandDids {
+                    if owners[key]?.contains(account.id) == true { continue }
+                    owners[key, default: []].append(account.id)
+                }
             }
         }
         deviceOwners = owners
+    }
+
+    private func isDisconnectedWithNoDevices(_ accountId: String) -> Bool {
+        guard case .disconnected = statuses[accountId],
+              let home = snapshots[accountId],
+              home.devices.isEmpty else {
+            return false
+        }
+        return true
     }
 
     /// Account order first, first occurrence per id: a did shared by two accounts reaches the panel once.
@@ -214,9 +244,13 @@ public actor MiAccountsProvider: HomeProvider {
         }
         var merged = SynthesizedHome(rooms: rooms, devices: devices, environmentReadings: readings, scenes: scenes)
         merged.homes = homes
-        // A partially reported panel must not close an away gap: the missing account may hold the
-        // door sensor that changed while polling was paused.
-        merged.closesAwayGap = closesAwayGap && accounts.allSatisfy { snapshots[$0.id] != nil }
+        merged.accountStatuses = statuses
+        // A partially reported panel or a pre-sleep cached snapshot from another account must not
+        // close an away gap: the missing account may hold the door sensor that changed while asleep.
+        let allFreshAfterWake = accounts.allSatisfy {
+            freshAccounts.contains($0.id) || isDisconnectedWithNoDevices($0.id)
+        }
+        merged.closesAwayGap = closesAwayGap && allFreshAfterWake
         continuation?.yield(.snapshotUpdated(merged))
     }
 
@@ -246,6 +280,12 @@ public actor MiAccountsProvider: HomeProvider {
             }
         }
         throw expired ? MiCloudError.sessionExpired : MiCloudError.notLoggedIn
+    }
+
+    public func readBack(deviceId: String) async -> ControlReadBack {
+        guard let ownerId = deviceOwners[deviceId]?.first,
+              let child = childProvider(for: ownerId) else { return .failed }
+        return await child.readBack(deviceId: deviceId)
     }
 
     public func fetchSensorHistory(

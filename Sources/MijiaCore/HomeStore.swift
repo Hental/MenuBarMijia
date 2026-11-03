@@ -239,6 +239,9 @@ public final class HomeStore {
     /// Every signed-in Mi account, primary (first) first. The panel groups by account when there is
     /// more than one, and adding an account never replaces the ones already signed in.
     public internal(set) var miAccounts: [MiAccount] = []
+    /// Per-account connection state reported by `MiAccountsProvider` so Settings can flag an
+    /// expired/disconnected account even while another account keeps `connectionStatus == .connected`.
+    public internal(set) var miAccountStatuses: [String: ConnectionStatus] = [:]
     var miSessionScopeIdentifier: String? {
         didSet { syncSensorHistoryScope() }
     }

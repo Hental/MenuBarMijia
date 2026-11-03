@@ -159,17 +159,32 @@ public struct MiAccountSection: View {
     private var multiAccountView: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(store.miAccounts) { account in
-                HStack(spacing: 6) {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                        .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
-                        .foregroundStyle(.green)
-                    Text(account.displayName)
-                        .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
-                    Spacer()
-                    Button(L10n.tr("移除", "Remove")) {
-                        store.logoutMiAccount(id: account.id)
+                let disconnectReason: String? = {
+                    if case .disconnected(let reason) = store.miAccountStatuses[account.id], !reason.isEmpty {
+                        return reason
                     }
-                    .buttonStyle(PillActionButtonStyle())
+                    return nil
+                }()
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: disconnectReason == nil
+                            ? "person.crop.circle.badge.checkmark"
+                            : "exclamationmark.triangle.fill")
+                            .font(.system(size: DesignTokens.TypeSize.body, weight: .semibold))
+                            .foregroundStyle(disconnectReason == nil ? .green : .orange)
+                        Text(account.displayName)
+                            .font(.system(size: DesignTokens.TypeSize.caption, weight: .medium))
+                        Spacer()
+                        Button(L10n.tr("移除", "Remove")) {
+                            store.logoutMiAccount(id: account.id)
+                        }
+                        .buttonStyle(PillActionButtonStyle())
+                    }
+                    if let reason = disconnectReason {
+                        Text(reason)
+                            .font(.system(size: DesignTokens.TypeSize.caption))
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
