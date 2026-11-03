@@ -1,5 +1,4 @@
-import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand, parseCachedHAHome } from "../core/homeAssistant.js";
-import type { SynthesizedHome } from "../core/models.js";
+import { HomeAssistantClient, homeAssistantIdentity, homeAssistantCommand } from "../core/homeAssistant.js";
 import { GrokBallView } from "./grokBall.js";
 import {
   ASSISTANT_PROVIDER_PRESETS,
@@ -27,18 +26,14 @@ import {
   type HttpRequest,
   type HttpResponse,
   type HttpTransport,
-  MI_CLOUD_REGIONS,
   MiAccountLogin,
   MiCloudClient,
-  MiCloudError,
   type MiDeviceRecord,
   type MiRoom,
   MiotCommandMapper,
   propKeyString,
   type MiotDeviceSpec,
-  type MiotPropKey,
   MiotSpecResolver,
-  MiotSynthesizer,
   type MiSession,
   type QRLoginTicket,
   maskedMiUserId,
@@ -94,7 +89,6 @@ import {
   PANEL_ANCHORS,
   PANEL_HEIGHTS,
   SKINS,
-  TILE_SIZES,
   applyOrder,
   targetSize,
   releaseVelocity,
@@ -102,7 +96,6 @@ import {
   chosenSize,
   comfort,
   emptyLayoutPrefs,
-  homeOptions,
   localizeEffect,
   localizeFanMode,
   moveInOrder,
@@ -134,9 +127,7 @@ import {
 import {
   KIND_CHIP,
   filterByListCut,
-  foldGroupedLights,
   kindChips,
-  memberGroupOwners,
   showsKindRow,
   type DeviceKindTag,
   type DeviceListCut,
@@ -149,27 +140,19 @@ import { createTransport, invokeTauriVoid } from "./transport.js";
 import { loadSettings, upgradeCachedDevices } from "./settings.js";
 import { CameraLiveController } from "./cameraLive.js";
 import { renderDeviceTile as renderDeviceTileView, renderEnvironmentStrip as renderEnvironmentStripView } from "./deviceViews.js";
-import { renderSettingsModal } from "./settingsViews.js";
+import { renderContextMenu, renderHomeMenu, renderOnboardingModal, renderPrompt, renderSettingsModal } from "./menuViews.js";
 import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
 import { applyGlobalHotkey, applyInterfaceLanguage, applyTemperatureSetting, bindGlobalKeys, checkForAppUpdate, hydrateCredentials, initializeCredentials, openSettingsSheet, openUpdatePage, osLanguages, persistCredentials, restoreUpdateState, saveSettings, saveUpdateState, startTimerLoop, startUpdateInstall, submitServiceEndpoints } from "./appLifecycle.js";
 import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
+import { currentProactiveSuggestions, invalidateSourceControl, isIntentReversibleOnDevice, maybeRefreshProactiveInBackground, proactiveSignature, renderGrokBallSidebar, renderGrokBallStage, setGrokBallStageExpanded, syncGrokBallEmotion } from "./proactive.js";
+import { applyCommand, dispatchCloudCommand, markCloudValuesFresh, markCloudValuesStale } from "./commandDispatch.js";
+import { cloudPanelStructureFingerprint, cloudPresentationFingerprint, cloudSnapshotIsStale, filterBySelectedHome, foldGrouped, patchCloudPresentation, refreshDevices, refreshHADevices, withSharedHomeDevices } from "./cloudRefresh.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
 export { waitForCameraFrameGap } from "./dom.js";
-function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
-  switch (command.kind) {
-    case "setLightPower":
-    case "setClimatePower":
-    case "setFanPower":
-    case "setSwitch":
-      return { ...command, isOn };
-    default:
-      return command;
-  }
-}
 
 export class MenuMijiaWindowsApp {
   public readonly loadedSettings: LoadedSettings = loadSettings();
@@ -231,22 +214,22 @@ export class MenuMijiaWindowsApp {
   /** AI-ranked proactive suggestions for the current ambient signature (#113). */
   public aiProactiveSuggestions: AssistantSuggestion[] | null = null;
   public aiProactiveSignature: string | null = null;
-  private isRefreshingProactive = false;
+  public isRefreshingProactive = false;
   public isGrokBallStageExpanded = false;
-  private readonly grokBall = new GrokBallView();
+  public readonly grokBall = new GrokBallView();
   public grokBallCelebrationUntil = 0;
-  private grokBallPointerUntil = 0;
+  public grokBallPointerUntil = 0;
   public grokBallOnLeft = false;
-  private panelGeometryUpdates: Promise<void> = Promise.resolve();
+  public panelGeometryUpdates: Promise<void> = Promise.resolve();
   /** Panel anchor the backend persists (#204); the window position itself is owned by Rust. */
   public panelAnchor: PanelAnchor = "auto";
   /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
-  private proactiveRetryAfterMs: number | null = null;
+  public proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
   private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   public isResolvingIntent = false;
   public isSyncingCloud = false;
-  private syncGeneration = 0;
+  public syncGeneration = 0;
   public lastCloudRefreshAt: number | null = null;
   public localControlRevision = 0;
   public sourceRevision = 0;
@@ -284,7 +267,7 @@ export class MenuMijiaWindowsApp {
   public dragPointer: { x: number; y: number; grabX: number; grabY: number } | null = null;
   public lastSwap: { slot: string; at: number } | null = null;
   public ctxMenu: { x: number; y: number; deviceId?: string; groupId?: string } | null = null;
-  private prompt: { kind: "newGroup"; deviceId: string } | { kind: "renameGroup"; groupId: string } | { kind: "renameDevice"; deviceId: string } | null = null;
+  public prompt: { kind: "newGroup"; deviceId: string } | { kind: "renameGroup"; groupId: string } | { kind: "renameDevice"; deviceId: string } | null = null;
   public animateEntrance = false;
   public poppedDeviceId: string | null = null;
   public dimPreview: { id: string; percent: number } | null = null;
@@ -432,7 +415,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Applies a background result only when it cannot clear focus or cancel a pointer gesture. */
-  private queueBackgroundRender(): void {
+  public queueBackgroundRender(): void {
     if (this.hasBlockingPanelInteraction()) {
       this.pendingCloudRender = true;
       return;
@@ -450,17 +433,15 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Cards on screen: the list cut, plus folding member lights into a visible group card (#214). */
-  private get presentationDevices(): SmartDevice[] {
+  public get presentationDevices(): SmartDevice[] {
     return this.foldGrouped(this.filteredDevices);
   }
 
   private foldGrouped(devices: readonly SmartDevice[]): SmartDevice[] {
-    return this.settings.hideGroupedLights
-      ? foldGroupedLights(devices, this.groupOwnerByMemberDid)
-      : [...devices];
+    return foldGrouped(this, devices);
   }
 
-  private get activeDeviceCount(): number {
+  public get activeDeviceCount(): number {
     return this.devices.filter((d) => isDeviceActiveOn(d)).length;
   }
 
@@ -508,396 +489,46 @@ export class MenuMijiaWindowsApp {
    * up by did (#134). Dids the lookup cannot resolve (IR remotes, removed devices) are skipped on
    * silent refreshes so polling does not spend a request on them every time.
    */
-  private unresolvedRoomDids = new Set<string>();
+  public unresolvedRoomDids = new Set<string>();
 
   private async withSharedHomeDevices(
     client: MiCloudClient,
     listed: MiDeviceRecord[],
     rooms: MiRoom[],
-    retryUnresolved: boolean,
+    includeShared: boolean,
   ): Promise<MiDeviceRecord[]> {
-    if (retryUnresolved) this.unresolvedRoomDids.clear();
-    const listedDids = new Set(listed.map((d) => d.did));
-    const missing = [...new Set(rooms.flatMap((r) => r.dids))]
-      .filter((did) => !listedDids.has(did) && !this.unresolvedRoomDids.has(did))
-      .sort();
-    if (missing.length === 0) return listed;
-    try {
-      const extra = (await client.devicesByDids(missing)).filter((d) => !listedDids.has(d.did));
-      const found = new Set(extra.map((d) => d.did));
-      for (const did of missing) if (!found.has(did)) this.unresolvedRoomDids.add(did);
-      return [...listed, ...extra];
-    } catch (err) {
-      if (err instanceof MiCloudError && err.kind === "sessionExpired") throw err;
-      return listed;
-    }
+    return withSharedHomeDevices(this, client, listed, rooms, includeShared);
   }
 
   public async refreshDevices(silent = false): Promise<void> {
-    if (this.settings.connectionMode === "homeAssistant") return this.refreshHADevices(silent);
-    if (!this.settings.miSession || this.settings.connectionMode !== "xiaomiCloud" || this.isSyncingCloud) return;
-    const session = this.settings.miSession;
-    const previousPresentation = this.cloudPresentationFingerprint();
-    const previousStructure = this.cloudPanelStructureFingerprint();
-    const staleBefore = this.cloudValuesStale;
-    const stateRevisionAtStart = this.localControlRevision;
-    const syncGen = ++this.syncGeneration;
-    let presentationChanged = false;
-    this.isSyncingCloud = true;
-    this.lastCloudRefreshAt = Date.now();
-    if (!silent) {
-      this.render();
-    }
-
-    try {
-      const client = new MiCloudClient(session, this.transport);
-      const [listedDevices, allRooms] = await Promise.all([
-        client.deviceList(),
-        client.homeRooms().catch(() => []),
-      ]);
-      const allDevices = await this.withSharedHomeDevices(client, listedDevices, allRooms, !silent);
-      const nextHomes = homeOptions(allRooms);
-      if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
-      this.homes = applyOrder(this.homes.map((home) => home.id), nextHomes);
-      const { devices: rawDevices, rooms } = this.filterBySelectedHome(allDevices, allRooms);
-      const groupDids = rawDevices.map((device) => device.did).filter((did) => did.startsWith("group."));
-      const membershipByGroup = groupDids.length > 0
-        ? client.lightGroupMembers(groupDids).catch(() => new Map<string, string[]>())
-        : Promise.resolve(new Map<string, string[]>());
-
-      // Stage 1: Instant synthesis with cached/fallback specs so user sees their real devices immediately
-      const stage1Specs = this.specResolver.exportCachedSpecs();
-      const stage1Home = MiotSynthesizer.synthesize(
-        rawDevices,
-        rooms,
-        stage1Specs,
-        new Map<string, unknown>(),
-      );
-      if (stage1Home.devices.length > 0 && this.devices.length === 0) {
-        this.devices = stage1Home.devices;
-        presentationChanged = true;
-        this.render();
-      }
-
-      // Stage 2: Resolve exact MIoT specs + fetch live device properties
-      const specs = await this.specResolver.resolveForDevices(rawDevices);
-      const propKeys: MiotPropKey[] = [];
-      for (const dev of rawDevices) {
-        const spec = specs[dev.model];
-        if (spec) {
-          propKeys.push(...MiotSynthesizer.requiredProps(dev, spec));
-        }
-      }
-
-      let values: Map<string, unknown>;
-      try {
-        values =
-          propKeys.length > 0
-            ? await client.getProps(propKeys)
-            : new Map<string, unknown>();
-      } catch (error) {
-        // A failed property read must not rebuild every device from defaults.
-        if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
-          this.markCloudValuesStale();
-        }
-        throw error;
-      }
-
-      const home = MiotSynthesizer.synthesize(rawDevices, rooms, specs, values);
-      const membersByGroup = await membershipByGroup;
-      // An old refresh must not clear or set freshness for the connection that replaced it.
-      if (this.cloudSnapshotIsStale(session, stateRevisionAtStart)) return;
-      this.markCloudValuesFresh();
-      this.groupOwnerByMemberDid = memberGroupOwners(membersByGroup);
-      // Cloud list order is not a layout preference. Keep known devices in their
-      // displayed order, use fresh values, drop removed ids and append new ones.
-      this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
-      const readingPriorityById = new Map(
-        home.devices.map((device) => [device.id, environmentReadingPriority(device.kind)]),
-      );
-      this.environmentReadings = applyOrder(
-        this.environmentReadings.map((reading) => reading.id),
-        home.environmentReadings,
-      ).sort(
-        (a, b) => (readingPriorityById.get(a.id) ?? 0) - (readingPriorityById.get(b.id) ?? 0),
-      );
-      presentationChanged =
-        presentationChanged || this.cloudPresentationFingerprint() !== previousPresentation;
-
-      this.settings.cachedXiaomiDevices = this.devices;
-      const knownModelTypes = this.specResolver.exportKnownModelTypes(
-        rawDevices.map((d) => d.model),
-      );
-      const cacheChanged =
-        JSON.stringify(knownModelTypes) !== JSON.stringify(this.settings.cachedModelTypes);
-      this.settings.cachedModelTypes = knownModelTypes;
-      if (presentationChanged || cacheChanged) {
-        this.saveSettings();
-      }
-
-      if (!silent) {
-        this.replyBanner = {
-          text:
-            home.devices.length > 0
-              ? t("已同步 {count} 台真实米家设备", { count: home.devices.length })
-              : t("当前小米账号下暂未发现米家设备"),
-          source: t("米家云直连"),
-        };
-      }
-    } catch (err) {
-      if (!this.cloudSnapshotIsStale(session, stateRevisionAtStart)) {
-        this.markCloudValuesStale();
-      }
-      if (!silent) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.replyBanner = {
-          text: t("米家云同步失败：{message}", { message: msg }),
-          source: t("连接异常"),
-          isError: true,
-        };
-      }
-    } finally {
-      if (this.syncGeneration === syncGen) {
-        this.isSyncingCloud = false;
-        const staleChanged = staleBefore !== this.cloudValuesStale;
-        if (!silent || staleChanged) {
-          this.render();
-        } else if (presentationChanged) {
-          if (
-            this.cloudPanelStructureFingerprint() !== previousStructure ||
-            !this.patchCloudPresentation()
-          ) {
-            this.queueBackgroundRender();
-          }
-        }
-      }
-    }
+    return refreshDevices(this, silent);
   }
 
   public async refreshHADevices(silent = false): Promise<void> {
-    if (this.settings.connectionMode !== "homeAssistant" || this.isSyncingCloud) return;
-    const endpoint = this.settings.haBaseURL;
-    const token = this.settings.haToken;
-    const revision = this.localControlRevision;
-    const syncGen = ++this.syncGeneration;
-    const previousPresentation = this.cloudPresentationFingerprint();
-    const previousStructure = this.cloudPanelStructureFingerprint();
-    let failed = false;
-    let shouldUpdateView = false;
-    this.isSyncingCloud = true;
-    this.lastCloudRefreshAt = Date.now();
-    if (!silent && this.devices.length === 0) this.render();
-    try {
-      await this.endpointSubmission;
-      const home = await new HomeAssistantClient(endpoint, token).snapshot();
-      const identity = homeAssistantIdentity(endpoint, token);
-      if (!identity) throw new Error("Invalid Home Assistant URL");
-      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
-      this.devices = applyOrder(this.devices.map((device) => device.id), home.devices);
-      this.scenes = home.scenes;
-      const readingPriorityById = new Map(
-        home.devices.map((device) => [device.id, environmentReadingPriority(device.kind)]),
-      );
-      this.environmentReadings = applyOrder(
-        this.environmentReadings.map((reading) => reading.id),
-        home.environmentReadings,
-      ).sort(
-        (a, b) => (readingPriorityById.get(a.id) ?? 0) - (readingPriorityById.get(b.id) ?? 0),
-      );
-      const hadValidCache = this.settings.cachedHAHome?.identity === identity;
-      const presentationChanged =
-        this.cloudPresentationFingerprint() !== previousPresentation || this.haConnectionError !== null;
-      this.settings.cachedHAHome = {identity,home:{...home,devices:this.devices,environmentReadings:this.environmentReadings}};
-      if (this.haConnectionError !== null) failed = true;
-      this.haConnectionError = null;
-      if (presentationChanged || !hadValidCache) this.saveSettings();
-      shouldUpdateView = !silent || presentationChanged;
-    } catch (error) {
-      if (this.settings.connectionMode !== "homeAssistant" || this.settings.haBaseURL !== endpoint || this.settings.haToken !== token || this.localControlRevision !== revision || this.syncGeneration !== syncGen) return;
-      failed = true;
-      shouldUpdateView = true;
-      this.haConnectionError = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (this.syncGeneration === syncGen) {
-        this.isSyncingCloud = false;
-        if (shouldUpdateView) {
-          if (failed || this.devices.length === 0 || this.cloudPanelStructureFingerprint() !== previousStructure || !this.patchCloudPresentation()) this.queueBackgroundRender();
-        }
-      }
-    }
+    return refreshHADevices(this, silent);
   }
 
-  /** Cloud state that affects the rendered panel; polling a matching snapshot is a visual no-op. */
   private cloudPresentationFingerprint(): string {
-    return JSON.stringify({
-      homes: this.homes,
-      devices: this.devices,
-      scenes: this.scenes,
-      environmentReadings: this.environmentReadings,
-      groupOwners: [...this.groupOwnerByMemberDid],
-    });
+    return cloudPresentationFingerprint(this);
   }
 
   private cloudSnapshotIsStale(session: MiSession, revision: number): boolean {
-    return (
-      this.settings.connectionMode !== "xiaomiCloud" ||
-      this.settings.miSession !== session ||
-      this.localControlRevision !== revision
-    );
+    return cloudSnapshotIsStale(this, session, revision);
   }
 
   private cloudPanelStructureFingerprint(): string {
-    const kindChipsForPanel = kindChips(
-      this.devices,
-      this.listCut,
-      this.settings.hideOfflineDevices,
-    );
-    return JSON.stringify({
-      homes: this.homes,
-      scenes: this.scenes,
-      kindChips: kindChipsForPanel,
-      kindRowVisible: showsKindRow(kindChipsForPanel, this.listCut),
-      groupOwners: [...this.groupOwnerByMemberDid],
-      allOffTargets: this.settings.connectionMode === "homeAssistant" ? null : this.allOffTargets.map((device) => device.id),
-      devices: this.devices.map((device) => {
-        const kind = device.kind;
-        const capabilities =
-          kind.kind === "light"
-            ? [kind.availableEffects, kind.minKelvin, kind.maxKelvin]
-            : kind.kind === "climate"
-              ? [kind.availableModes, kind.availableFanModes, kind.minTemp, kind.maxTemp, kind.step]
-              : kind.kind === "fan"
-                ? [kind.availablePresetModes]
-                : kind.kind === "vacuum"
-                  ? [kind.availableModes]
-                  : kind.kind === "camera"
-                    ? [kind.availableNightShots, kind.motionDetectionEntityId]
-                    : [];
-        return {
-          id: device.id,
-          name: device.name,
-          roomId: device.roomId,
-          roomName: device.roomName,
-          model: device.model,
-          category: kind.kind,
-          capabilities,
-          sensorShape:
-            kind.kind === "sensor"
-              ? [kind.temperature !== null, kind.humidity !== null, kind.battery !== null]
-              : null,
-        };
-      }),
-    });
+    return cloudPanelStructureFingerprint(this);
   }
 
   private patchCloudPresentation(): boolean {
-    if (
-      this.isEditingLayout ||
-      this.activeSheet !== "none" ||
-      this.pointerIsDown ||
-      this.draggingId !== null
-    ) {
-      return false;
-    }
-
-    const isAll = this.selectedRoom === "全部";
-    const ordered = withAliases(this.layout, applyOrder(this.layout.order, this.presentationDevices));
-    const sections = pageSections(this.layout, ordered, isAll);
-    const desiredHeaders = sections.filter((section) => section.title !== null);
-    const domHeaders = Array.from(this.root.querySelectorAll<HTMLElement>(".cc-group-header"));
-    if (domHeaders.length !== desiredHeaders.length) return false;
-    for (const section of desiredHeaders) {
-      const header = domHeaders.find((element) => element.dataset.collapse === section.id);
-      const count = header?.querySelector(".cc-group-count")?.textContent ?? "";
-      if (!header || count !== String(section.devices.length)) return false;
-    }
-    const bento = this.skin === "bento" && this.settings.isCompactGridMode;
-    const tilePatches: Array<{ current: HTMLElement; desired: Element }> = [];
-    const unmatchedTileIds = new Set(
-      Array.from(this.root.querySelectorAll<HTMLElement>("[data-tile-id]"), (element) => element.dataset.tileId ?? ""),
-    );
-    let index = 0;
-    for (const section of sections) {
-      if (this.layout.collapsed.includes(scopedKey(this.pageKey, section.id))) continue;
-      const spanMap = spans(
-        section.devices,
-        (device) => (this.expandedDeviceId === device.id ? "full" : this.tileSize(device)),
-        bento,
-      );
-      for (const device of section.devices) {
-        unmatchedTileIds.delete(device.id);
-        const current = Array.from(
-          this.root.querySelectorAll<HTMLElement>("[data-tile-id]"),
-        ).find((element) => element.dataset.tileId === device.id);
-        const desired = parseSingleElement(
-          this.renderDeviceTile(device, spanMap.get(device.id) ?? 6, index++),
-        );
-        if (!current || !desired || !hasMatchingDomShape(current, desired)) return false;
-        tilePatches.push({ current, desired });
-      }
-    }
-    if (unmatchedTileIds.size > 0) return false;
-    for (const patch of tilePatches) morphMatchingDom(patch.current, patch.desired);
-    if (this.settings.connectionMode === "homeAssistant") {
-      const current = this.root.querySelector<HTMLElement>("#btn-all-off");
-      const desired = parseSingleElement(this.renderAllOffControl());
-      if (current && desired) {
-        morphMatchingDom(current, desired);
-      } else if (current) {
-        current.remove();
-      } else if (desired) {
-        this.root.querySelector("#btn-hide-panel")?.before(desired);
-        this.bindAllOffControl();
-      }
-    }
-
-    const envHTML = this.renderEnvironmentStrip();
-    const currentEnv = this.root.querySelector<HTMLElement>(".cc-env-strip");
-    if (currentEnv) {
-      const desiredEnv = parseSingleElement(envHTML);
-      if (!desiredEnv) {
-        currentEnv.remove();
-      } else if (hasMatchingDomShape(currentEnv, desiredEnv)) {
-        morphMatchingDom(currentEnv, desiredEnv);
-      } else {
-        currentEnv.replaceWith(desiredEnv);
-      }
-    } else if (envHTML) {
-      this.root.querySelector(".cc-header-top")?.insertAdjacentHTML("afterend", envHTML);
-    }
-
-    const subtitle = this.root.querySelector<HTMLElement>(".cc-subtitle");
-    if (subtitle) subtitle.textContent = this.statusSummaryText;
-    this.root
-      .querySelector<HTMLElement>(".cc-home-badge")
-      ?.classList.toggle("is-active", this.activeDeviceCount > 0);
-    const footerLabel = this.root.querySelector<HTMLElement>(".cc-footer-label");
-    if (footerLabel) {
-      footerLabel.textContent =
-        this.settings.connectionMode === "xiaomiCloud" && this.settings.miSession
-          ? t("米家账号 {user} · {count} 台设备", {
-              user: maskedMiUserId(this.settings.miSession.userId),
-              count: this.devices.length,
-            })
-          : this.settings.connectionMode === "homeAssistant" ? `Home Assistant · ${this.devices.length}` : t("演示模式 · 未连接米家云");
-    }
-    this.syncGrokBallEmotion();
-    return true;
+    return patchCloudPresentation(this);
   }
 
-  /** Narrows cloud records and rooms to the selected Mi Home; split keys bring their parent panel along. */
   private filterBySelectedHome<D extends { readonly did: string; readonly splitParentDid?: string | null }, R extends { readonly homeId?: string; readonly dids: readonly string[] }>(
     devices: readonly D[],
     rooms: readonly R[],
   ): { devices: D[]; rooms: R[] } {
-    const selected = this.settings.selectedHomeId;
-    if (!selected || !this.homes.some((h) => h.id === selected)) return { devices: [...devices], rooms: [...rooms] };
-    const homeRooms = rooms.filter((r) => r.homeId === selected);
-    const dids = new Set(homeRooms.flatMap((r) => r.dids));
-    const kept = devices.filter((d) => dids.has(d.did) || (d.splitParentDid ? dids.has(d.splitParentDid) : false));
-    const parents = new Set(kept.map((d) => d.splitParentDid).filter((x): x is string => !!x));
-    const withParents = devices.filter((d) => kept.includes(d) || parents.has(d.did));
-    return { devices: withParents, rooms: homeRooms };
+    return filterBySelectedHome(this, devices, rooms);
   }
 
   public selectHome(id: string | null): void {
@@ -923,7 +554,7 @@ export class MenuMijiaWindowsApp {
   }
 
   /** Devices 全关 would switch off: on screen (current room), on, and taking part (#23). */
-  private get allOffTargets(): SmartDevice[] {
+  public get allOffTargets(): SmartDevice[] {
     return allOffTargets(this.filteredDevices, this.settings.allOffOverrides);
   }
 
@@ -1062,233 +693,39 @@ export class MenuMijiaWindowsApp {
 
   /** Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient signature (#113). */
   private proactiveSignature(): string {
-    const bucket = timeBucketLabel(new Date().getHours());
-    const readings = this.computedEnvironmentReadings
-      .map(
-        (reading) =>
-          `${reading.temperature !== null ? Math.round(reading.temperature) : "-"}|${
-            reading.humidity !== null ? Math.round(reading.humidity / 5) * 5 : "-"
-          }`,
-      )
-      .join(",");
-    return `${bucket}|${readings}`;
+    return proactiveSignature(this);
   }
 
   private isIntentReversibleOnDevice(intent: DeviceIntent, device: SmartDevice): { reversible: boolean; nextDevice: SmartDevice } {
-    if (!device.isOnline || (device.kind.kind === "plug" && device.kind.switchEntityId.startsWith("button."))) {
-      return { reversible: false, nextDevice: device };
-    }
-    const normalized = IntentValidator.normalize(intent.operation, device);
-    if (!normalized) return { reversible: false, nextDevice: device };
-    if (
-      this.settings.connectionMode === "homeAssistant" &&
-      normalized.kind === "power" &&
-      normalized.isOn &&
-      device.kind.kind === "climate" &&
-      !device.kind.availableModes.some((mode) => mode !== "off" && mode !== "unknown" && mode !== "unavailable")
-    ) {
-      return { reversible: false, nextDevice: device };
-    }
-    const normalizedIntent: DeviceIntent = { targetId: intent.targetId, operation: normalized };
-    const commands = IntentValidator.commandsForIntent(normalizedIntent, device);
-    if (commands.length === 0 || !commands.every((command) => this.buildInverseCommand(device, command).length > 0)) {
-      return { reversible: false, nextDevice: device };
-    }
-    const k = device.kind;
-    let nextKind = k;
-    if (k.kind === "light") {
-      if (normalized.kind === "power") nextKind = { ...k, isOn: normalized.isOn };
-      else if (normalized.kind === "brightness") nextKind = { ...k, isOn: true, brightnessPercent: normalized.percent };
-      else if (normalized.kind === "colorTemperature") nextKind = { ...k, isOn: true, colorTempKelvin: normalized.kelvin, currentEffect: null };
-      else if (normalized.kind === "lightEffect") nextKind = { ...k, isOn: true, currentEffect: normalized.effect };
-    } else if (k.kind === "climate") {
-      if (normalized.kind === "power") {
-        const resumeMode = k.hvacMode === "off" ? (k.availableModes.find((m) => m !== "off") ?? "cool") : k.hvacMode;
-        nextKind = { ...k, isOn: normalized.isOn, hvacMode: normalized.isOn ? resumeMode : "off" };
-      } else if (normalized.kind === "hvacMode") {
-        nextKind = { ...k, isOn: normalized.mode !== "off", hvacMode: normalized.mode };
-      } else if (normalized.kind === "targetTemperature") {
-        nextKind = { ...k, targetTemperature: normalized.celsius };
-      } else if (normalized.kind === "fanSpeed") {
-        nextKind = { ...k, fanMode: normalized.speed };
-      }
-    }
-    return { reversible: true, nextDevice: { ...device, kind: nextKind } };
+    return isIntentReversibleOnDevice(this, intent, device);
   }
 
-  /** The Top-4 zero-delay suggestions: the AI cache when fresh, otherwise ranked locally (#113). */
   public currentProactiveSuggestions(): AssistantSuggestion[] {
-    if (this.pendingSuggestions.length > 0 && !this.isGrokBallStageExpanded) return [];
-    const signature = this.proactiveSignature();
-    const aliasedDevices = withAliases(this.layout, this.devices);
-    const local = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
-      devices: aliasedDevices,
-      scenes: this.isGrokBallStageExpanded ? [] : this.scenes,
-      environmentReadings: this.computedEnvironmentReadings,
-    });
-    const cached = this.aiProactiveSignature === signature ? this.aiProactiveSuggestions ?? [] : [];
-    const fallback = this.isGrokBallStageExpanded
-      ? new UserHabitMemory([]).topSuggestions({ devices: aliasedDevices, scenes: [], limit: aliasedDevices.length + 4 })
-      : [];
-    const result: AssistantSuggestion[] = [];
-    for (const item of [...cached, ...local, ...fallback]) {
-      if (this.isGrokBallStageExpanded && item.intents.some((intent) => intent.operation.kind === "activateScene")) continue;
-      const actionableIntents = item.intents.filter((intent) => habitActionable(intent, aliasedDevices, this.scenes));
-      if (actionableIntents.length === 0) continue;
-      if (this.isGrokBallStageExpanded) {
-        if (!item.intents.every((intent) => aliasedDevices.some((entry) => entry.id === intent.targetId && entry.isOnline))) continue;
-        const stateByTarget = new Map<string, SmartDevice>();
-        let allReversible = true;
-        for (const intent of actionableIntents) {
-          const current = stateByTarget.get(intent.targetId) ?? aliasedDevices.find((entry) => entry.id === intent.targetId);
-          if (!current) {
-            allReversible = false;
-            break;
-          }
-          const check = this.isIntentReversibleOnDevice(intent, current);
-          if (!check.reversible) {
-            allReversible = false;
-            break;
-          }
-          stateByTarget.set(intent.targetId, check.nextDevice);
-        }
-        if (!allReversible) continue;
-      }
-      const candidate: AssistantSuggestion = { ...item, intents: actionableIntents };
-      if (result.some((existing) => JSON.stringify(existing.intents) === JSON.stringify(candidate.intents))) continue;
-      result.push(candidate);
-      if (result.length === 4) break;
-    }
-    return result;
+    return currentProactiveSuggestions(this);
   }
 
   public syncGrokBallEmotion(): void {
-    const now = Date.now();
-    this.grokBall.setEmotion(resolveGrokBallEmotion({
-      timeBucket: timeBucketLabel(new Date(now).getHours()),
-      activeDeviceCount: this.activeDeviceCount,
-      speechListening: this.isListeningVoice,
-      assistantState: this.isResolvingIntent ? "thinking" : this.pendingSuggestions.length > 0 ? "awaitingChoice" : "idle",
-      isRecommending: this.isRefreshingProactive,
-      hasErrorToast: this.replyBanner?.isError === true || Boolean(this.haConnectionError),
-      isStageExpanded: this.isGrokBallStageExpanded,
-      isPointerTracking: now < this.grokBallPointerUntil,
-      hasRecentCelebration: now < this.grokBallCelebrationUntil,
-    }));
+    syncGrokBallEmotion(this);
   }
 
   private renderGrokBallStage(): string {
-    if (!this.isGrokBallStageExpanded) return "";
-    return `<section class="cc-grok-stage" aria-label="${t("猜你想控")}">
-      ${this.currentProactiveSuggestions().slice(0, 4).map((item) => `
-        <button class="cc-grok-pill" data-proactive-id="${this.escapeHtml(item.id)}" title="${this.escapeHtml(item.title)}">
-          ${this.escapeHtml(item.title)}</button>`).join("")}
-    </section>`;
+    return renderGrokBallStage(this);
   }
 
   public renderGrokBallSidebar(): string {
-    if (!this.settings.enableGrokBall) return "";
-    return `<aside class="cc-grok-sidebar" aria-label="${t("猜你想控")}">
-      <button class="cc-grok-toggle" id="btn-grok-ball" data-grok-toggle aria-label="${t("猜你想控")}" aria-expanded="${this.isGrokBallStageExpanded}"><span data-grok-slot></span></button>
-      ${this.renderGrokBallStage()}
-    </aside>`;
+    return renderGrokBallSidebar(this);
   }
 
   public setGrokBallStageExpanded(expanded: boolean): void {
-    if (this.isGrokBallStageExpanded === expanded) return;
-    this.isGrokBallStageExpanded = expanded;
-    this.applyPanelHeight();
-    if (window.__TAURI_INTERNALS__) {
-      void this.panelGeometryUpdates.then(() => this.render());
-    } else {
-      this.render();
-    }
+    setGrokBallStageExpanded(this, expanded);
   }
 
-  /**
-   * Silent background AI refresh for proactive suggestions (#113): fires only when the
-   * time bucket or room climate changed, never blocks the panel, never asks for consent,
-   * and keeps the previous cache when the request fails.
-   */
   public maybeRefreshProactiveInBackground(): void {
-    if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
-    if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
-    const signature = this.proactiveSignature();
-    if (signature === this.aiProactiveSignature) return;
-    const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
-    if (!endpointAllowsSendingSecrets(baseURL)) return;
-    const apiKey = this.apiKeyFor(baseURL);
-    const isLoopback = isLocalAssistantEndpoint(baseURL);
-    if (!apiKey && !isLoopback) return;
-    if (!isLoopback) {
-      const endpoint = assistantEndpointIdentity(baseURL);
-      if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
-    }
-    const sourceRevision = this.sourceRevision;
-    const selectedHomeId = this.settings.selectedHomeId;
-    this.isRefreshingProactive = true;
-    const resolver = new ModelIntentResolver(
-      { baseURL, model: this.settings.assistantModel, apiKey },
-      this.transport,
-    );
-    resolver
-      .recommendProactiveSuggestions(
-        this.devices,
-        this.scenes,
-        buildAssistantContext({
-          now: new Date(),
-          readings: this.computedEnvironmentReadings,
-          devices: this.devices,
-          scenes: this.scenes,
-          sharing: this.settings.habitShareEnabled ? "on" : "off",
-          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
-            phrase: shortcut.phrase,
-            intents: shortcut.intents,
-          })),
-          mention: { kind: "none" },
-        }),
-      )
-      .then((suggestions) => {
-        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
-        this.isRefreshingProactive = false;
-        if (this.proactiveSignature() === signature) {
-          // The context counts as served only once a usable result landed (Codex #116 review).
-          this.aiProactiveSignature = signature;
-          if (suggestions.length > 0) {
-            this.aiProactiveSuggestions = suggestions;
-          } else {
-            // An empty result is a valid "home is ideal" answer: drop any older cache so the
-            // local ranking takes over instead of stale suggestions (Codex #116 re-review).
-            this.aiProactiveSuggestions = null;
-          }
-          if (!this.hasBlockingPanelInteraction()) this.render();
-        }
-      })
-      .catch(() => {
-        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
-        // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
-        this.isRefreshingProactive = false;
-        this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
-      });
+    maybeRefreshProactiveInBackground(this);
   }
 
   public invalidateSourceControl(): void {
-    this.sourceRevision += 1;
-    this.syncGeneration += 1;
-    this.isSyncingCloud = false;
-    this.isResolvingIntent = false;
-    this.aiProactiveSuggestions = null;
-    this.aiProactiveSignature = null;
-    this.isRefreshingProactive = false;
-    this.proactiveRetryAfterMs = null;
-    this.isGrokBallStageExpanded = false;
-    this.grokBallCelebrationUntil = 0;
-    this.applyPanelHeight();
-    this.haConnectionError = null;
-    this.lastUndoAction = null;
-    this.pendingCloudConsent = null;
-    this.pendingSuggestions = [];
+    invalidateSourceControl(this);
   }
 
   public async performUndo(): Promise<void> {
@@ -1349,227 +786,19 @@ export class MenuMijiaWindowsApp {
   }
 
   public async applyCommand(command: DeviceCommand, readBackPower = false): Promise<boolean> {
-    const sourceRevision = this.sourceRevision;
-    try {
-      if (this.settings.connectionMode === "homeAssistant") command = homeAssistantCommand(command, this.devices);
-      const readPower = await this.dispatchCloudCommand(command, readBackPower);
-      if (typeof readPower === "boolean") command = withReadPower(command, readPower);
-    } catch (error) {
-      if (sourceRevision !== this.sourceRevision) return false;
-      this.replyBanner = {
-        text: error instanceof Error ? error.message : String(error),
-        source: t("控制失败"),
-        isError: true,
-      };
-      this.render();
-      return false;
-    }
-    if (sourceRevision !== this.sourceRevision) return false;
-    this.localControlRevision += 1;
-    for (const dev of this.devices) {
-      const k = dev.kind;
-      switch (command.kind) {
-        case "setLightPower":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-          }
-          break;
-        case "setLightBrightness":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = command.percent > 0;
-            k.brightnessPercent = command.percent;
-          }
-          break;
-        case "setLightColorTemp":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.colorTempKelvin = command.kelvin;
-            k.currentEffect = null;
-          }
-          break;
-        case "setLightEffect":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.currentEffect = command.effect;
-          }
-          break;
-        case "setClimatePower":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-            k.hvacMode = command.isOn ? command.resumeMode : "off";
-          }
-          break;
-        case "setClimateMode":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.isOn = command.hvacMode !== "off";
-            k.hvacMode = command.hvacMode;
-          }
-          break;
-        case "setClimateTemperature":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            if (this.settings.connectionMode !== "homeAssistant" || k.hvacMode !== "off") {
-              k.isOn = true;
-            }
-            k.targetTemperature = command.temperature;
-          }
-          break;
-        case "setClimateFanMode":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.fanMode = command.fanMode;
-          }
-          break;
-        case "setFanPower":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-          }
-          break;
-        case "setFanPercentage":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = command.percent > 0;
-            k.percentage = command.percent;
-            const fav = k.availablePresetModes.find((m) => m.toLowerCase() === "favorite");
-            if (fav) k.presetMode = fav;
-          }
-          break;
-        case "setFanPresetMode":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.presetMode = command.presetMode;
-          }
-          break;
-        case "setFanOscillating":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.isOscillating = command.oscillating;
-          }
-          break;
-        case "setSwitch":
-          if (k.kind === "plug" && k.switchEntityId === command.entityId && !command.entityId.startsWith("button.")) {
-            k.isOn = command.isOn;
-          } else if (k.kind === "camera") {
-            if (k.entityId === command.entityId) {
-              k.isOn = command.isOn;
-              if (this.cameraLive.activeLiveCameraId === dev.id && !this.cameraLive.liveCameraHidden) {
-                if (command.isOn) {
-                  this.cameraLive.reconnectCameraLiveView();
-                } else {
-                  this.cameraLive.stopLiveTransport();
-                  this.cameraLive.liveCameraLoading = false;
-                }
-              }
-            } else if (k.motionDetectionEntityId === command.entityId) {
-              k.isMotionDetectionOn = command.isOn;
-            }
-          }
-          break;
-        case "setSelectOption":
-          if (k.kind === "camera" && k.entityId === command.entityId) {
-            k.nightShot = command.option;
-          } else if (k.kind === "fridge" && k.modeEntityId === command.entityId) {
-            k.currentMode = command.option;
-          }
-          break;
-        case "setNumberValue":
-          if (k.kind === "fridge") {
-            if (k.fridgeTargetEntityId === command.entityId) {
-              k.fridgeTargetTemp = command.value;
-            } else if (k.freezerTargetEntityId === command.entityId) {
-              k.freezerTargetTemp = command.value;
-            }
-          }
-          break;
-        case "vacuumAction":
-          if (k.kind === "vacuum" && k.entityId === command.entityId) {
-            k.status =
-              command.action === "start"
-                ? "cleaning"
-                : command.action === "pause"
-                  ? "paused"
-                  : "returning";
-          }
-          break;
-        case "activateScene":
-          break;
-      }
-    }
-
-    return true;
+    return applyCommand(this, command, readBackPower);
   }
 
   private async dispatchCloudCommand(command: DeviceCommand, readBackPower = false): Promise<boolean | null> {
-    const sourceRevision = this.sourceRevision;
-    if (this.settings.connectionMode === "demo") return null;
-    if (this.settings.connectionMode === "homeAssistant") {
-      const client = new HomeAssistantClient(this.settings.haBaseURL, this.settings.haToken);
-      await this.endpointSubmission;
-      if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
-      await client.execute(command);
-      return null;
-    }
-    if (!this.settings.miSession) throw new Error(t("请先扫码登录米家"));
-    const session = this.settings.miSession;
-    const dev = this.devices.find((d) => {
-      const k = d.kind;
-      if (k.kind === "plug") return k.switchEntityId === command.entityId || k.childLockEntityId === command.entityId;
-      if (k.kind === "camera") return k.entityId === command.entityId || k.motionDetectionEntityId === command.entityId;
-      if (k.kind === "fridge") {
-        return (
-          k.modeEntityId === command.entityId ||
-          k.fridgeTargetEntityId === command.entityId ||
-          k.freezerTargetEntityId === command.entityId
-        );
-      }
-      if (k.kind === "sensor") return false;
-      return k.entityId === command.entityId;
-    });
-    if (!dev) throw new Error(t("无法找到指令对应的设备"));
-
-    const spec = await this.specResolver.resolve({
-      did: dev.id,
-      name: dev.name,
-      model: dev.model,
-      isOnline: dev.isOnline,
-      specType: null,
-    });
-    const mapped = MiotCommandMapper.map(command, spec);
-    if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
-    const client = new MiCloudClient(session, this.transport);
-    if (mapped.kind === "setProps") {
-      await client.setProps(mapped.writes);
-      if (readBackPower) {
-        const power = mapped.writes.find((write) => typeof write.value === "boolean");
-        if (power) {
-          let read: Map<string, unknown>;
-          try {
-            read = await client.getProps([power]);
-          } catch (error) {
-            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
-            throw error;
-          }
-          const value = read.get(propKeyString(power));
-          const isOn = readMiotPower(value);
-          if (isOn === null) {
-            // The write may have landed; the old row is no longer a trusted reading.
-            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
-            throw new Error(t("未能读回设备状态"));
-          }
-          return isOn;
-        }
-      }
-    } else {
-      await client.action(mapped.call);
-    }
-    return null;
+    return dispatchCloudCommand(this, command, readBackPower);
   }
 
-  private markCloudValuesStale(): void {
-    if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
-      this.cloudValuesStale = true;
-    }
+  public markCloudValuesStale(): void {
+    markCloudValuesStale(this);
   }
 
-  private markCloudValuesFresh(): void {
-    if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
+  public markCloudValuesFresh(): void {
+    markCloudValuesFresh(this);
   }
 
   private get valuesAreStale(): boolean {
@@ -1910,7 +1139,7 @@ export class MenuMijiaWindowsApp {
       .join("");
   }
 
-  private renderDeviceTile(dev: SmartDevice, span: number, index: number): string {
+  public renderDeviceTile(dev: SmartDevice, span: number, index: number): string {
     return renderDeviceTileView(dev, {
       span,
       index,
@@ -1931,174 +1160,23 @@ export class MenuMijiaWindowsApp {
   }
 
   public renderHomeMenu(): string {
-    if (!this.isHomeMenuOpen || this.homes.length < 2) return "";
-    const item = (id: string | null, label: string, count?: number) => `
-      <button class="cc-menu-item ${this.settings.selectedHomeId === id ? "is-checked" : ""}" data-home="${id ?? ""}">
-        <span>${this.escapeHtml(label)}</span>${count !== undefined ? `<small>${count}</small>` : ""}
-      </button>`;
-    return `
-      <div class="cc-menu-scrim" data-close-menus></div>
-      <div class="cc-menu cc-home-menu">
-        ${item(null, t("全部家庭"))}
-        <div class="cc-menu-sep"></div>
-        ${this.homes.map((h) => item(h.id, h.name, h.deviceCount)).join("")}
-      </div>`;
+    return renderHomeMenu(this);
   }
 
   public renderContextMenu(): string {
-    const m = this.ctxMenu;
-    if (!m) return "";
-    const pos = `left:${Math.min(m.x, window.innerWidth - 230)}px; top:${Math.min(m.y, window.innerHeight - 260)}px`;
-    if (m.groupId) {
-      const g = this.layout.groups.find((x) => x.id === m.groupId);
-      if (!g) return "";
-      const gid = this.escapeHtml(g.id);
-      return `
-        <div class="cc-menu-scrim" data-close-menus></div>
-        <div class="cc-menu" style="${pos}">
-          <div class="cc-menu-title">${this.escapeHtml(g.name)}</div>
-          <button class="cc-menu-item" data-group-action="rename:${gid}">重命名</button>
-          <button class="cc-menu-item" data-group-action="up:${gid}">上移分组</button>
-          <button class="cc-menu-item" data-group-action="down:${gid}">下移分组</button>
-          <div class="cc-menu-sep"></div>
-          <button class="cc-menu-item is-danger" data-group-action="delete:${gid}">删除分组</button>
-        </div>`;
-    }
-    const dev = this.devices.find((d) => d.id === m.deviceId);
-    if (!dev) return "";
-    const id = this.escapeHtml(dev.id);
-    const size = chosenSize(this.layout, this.pageKey, dev.id);
-    const current = this.layout.groupMap[dev.id];
-    return `
-      <div class="cc-menu-scrim" data-close-menus></div>
-      <div class="cc-menu" style="${pos}">
-        <div class="cc-menu-title">${this.escapeHtml(this.layout.aliases[dev.id] ?? dev.name)}</div>
-        <div class="cc-menu-label">${t("卡片大小（本页）")}</div>
-        <div class="cc-menu-chips">
-          ${TILE_SIZES.map((t) => `<button class="cc-menu-chip ${size === t.id ? "is-active" : ""}" data-set-size="${id}:${t.id}">${t.title}</button>`).join("")}
-        </div>
-        <div class="cc-menu-label">${t("移到分组")}</div>
-        <div class="cc-menu-chips">
-          ${this.layout.groups.map((g) => `<button class="cc-menu-chip ${current === g.id ? "is-active" : ""}" data-set-group="${id}:${this.escapeHtml(g.id)}">${this.escapeHtml(g.name)}</button>`).join("")}
-          ${current ? `<button class="cc-menu-chip" data-set-group="${id}:">不分组</button>` : ""}
-          <button class="cc-menu-chip is-add" data-new-group="${id}">＋ 新建</button>
-        </div>
-        <div class="cc-menu-sep"></div>
-        <button class="cc-menu-item" data-rename-device="${id}">重命名…</button>
-        <button class="cc-menu-item" data-start-editing>${t("编辑布局")}</button>
-      </div>`;
+    return renderContextMenu(this);
   }
 
   public renderPrompt(): string {
-    const p = this.prompt;
-    if (!p) return "";
-    let title = t("新建分组");
-    let value = "";
-    let placeholder = t("例如：灯光、电器、环境");
-    if (p.kind === "renameGroup") {
-      title = t("重命名分组");
-      value = this.layout.groups.find((g) => g.id === p.groupId)?.name ?? "";
-    } else if (p.kind === "renameDevice") {
-      title = t("重命名设备");
-      const dev = this.devices.find((d) => d.id === p.deviceId);
-      placeholder = dev?.name ?? "";
-      value = this.layout.aliases[p.deviceId] ?? dev?.name ?? "";
-    }
-    const hasAlias = p.kind === "renameDevice" && Boolean(this.layout.aliases[p.deviceId]);
-    return `
-      <div class="cc-prompt-backdrop" data-prompt-cancel></div>
-      <div class="cc-prompt">
-        <strong>${title}</strong>
-        <input id="prompt-input" class="cc-prompt-input" type="text" value="${this.escapeHtml(value)}" placeholder="${this.escapeHtml(placeholder)}" />
-        ${p.kind === "renameDevice" ? `<small>${t("只在本 App 显示，不会修改米家里的名字")}</small>` : ""}
-        <div class="cc-prompt-actions">
-          ${hasAlias ? `<button class="cc-btn-secondary" id="btn-prompt-reset">${t("恢复原名")}</button>` : ""}
-          <button class="cc-btn-secondary" data-prompt-cancel>${t("取消")}</button>
-          <button class="cc-btn-primary" id="btn-prompt-save">${t("保存")}</button>
-        </div>
-      </div>`;
+    return renderPrompt(this);
   }
 
   public renderOnboardingModal(): string {
-    return `
-      <div class="cc-sheet-backdrop">
-        <div class="cc-sheet" role="dialog" aria-modal="true" aria-label="${t("首次设置")}">
-          <div class="cc-sheet-header">
-            <div class="cc-sheet-badge">${t("MenuBarMijia 控制中心")}</div>
-            <button class="cc-circle-btn is-small" id="btn-close-onboarding" title="${t("关闭引导")}" aria-label="${t("关闭引导")}">
-              ${SF_ICONS.xmark}
-            </button>
-          </div>
-
-          <h2 class="cc-sheet-title">${t("扫码直连你的真实米家设备")}</h2>
-          <p class="cc-sheet-desc">
-            ${t("手机打开「米家 App → 扫一扫」即可直接同步全屋真实设备；常驻 Windows 右下角系统托盘，点击图标或按 Alt+M 随时弹出，点击外部自动收起。")}
-          </p>
-
-          <div class="cc-field">
-            <label>${t("云端服务器地区")}</label>
-            <select class="cc-input" data-mi-region>
-              ${MI_CLOUD_REGIONS.map(
-                (region) => `<option value="${region.code}" ${normalizeMiCloudRegion(this.settings.miCloudRegion) === region.code ? "selected" : ""}>${this.escapeHtml(region.label)}</option>`,
-              ).join("")}
-            </select>
-            <p class="cc-field-hint">${t("欧洲、印度、俄罗斯、新加坡、美区的米家账号请先选择对应地区，再扫码登录。")}</p>
-          </div>
-
-          <div class="cc-qr-box">
-            <button class="cc-btn-primary is-full" id="btn-start-qr" ${this.isPollingQR ? "disabled" : ""}>
-              ${SF_ICONS.qrcode}
-              <span>${this.isPollingQR ? t("正在等待手机米家扫码确认...") : t("获取米家登录二维码")}</span>
-            </button>
-            <div class="cc-qr-status">${this.escapeHtml(this.qrStatusText)}</div>
-            ${
-              this.qrTicket
-                ? `<div class="cc-qr-frame">
-                    <img src="${this.escapeHtml(this.qrTicket.qrImageURL)}" alt="Xiaomi QR" />
-                  </div>`
-                : ""
-            }
-          </div>
-
-          <div class="cc-field">
-            <label>${t("OpenRouter API Key（可选，用于 Jev SystemOne 模糊意图决策）")}</label>
-            <input
-              id="onboarding-api-key"
-              class="cc-input"
-              type="password"
-              placeholder="sk-or-v1-..."
-              value="${this.escapeHtml(this.apiKeyFor(this.settings.assistantBaseURL))}"
-            />
-          </div>
-
-          <div class="cc-sheet-footer">
-            <button class="cc-btn-secondary" id="btn-close-onboarding-alt">${t("先看演示预览")}</button>
-            <button class="cc-btn-primary" id="btn-finish-onboarding">${t("进入控制中心")}</button>
-          </div>
-        </div>
-      </div>
-    `;
+    return renderOnboardingModal(this);
   }
 
   public renderSettingsModal(): string {
-    return renderSettingsModal({
-      settings: this.settings,
-      devices: this.devices,
-      availableUpdate: this.availableUpdate,
-      apiKeyFor: (baseURL) => this.apiKeyFor(baseURL),
-      habitSequences: () => this.habitSequences(),
-      hotkeyNeedsHint: this.hotkeyNeedsHint,
-      hotkeyRegistrationError: this.hotkeyRegistrationError,
-      isPollingQR: this.isPollingQR,
-      isRecordingHotkey: this.isRecordingHotkey,
-      panelAnchor: this.panelAnchor,
-      qrStatusText: this.qrStatusText,
-      qrTicket: this.qrTicket,
-      isCheckingUpdate: this.isCheckingUpdate,
-      isInstallingUpdate: this.isInstallingUpdate,
-      updateStatusMessage: this.updateStatusMessage,
-      escapeHtml: (value) => this.escapeHtml(value),
-    });
+    return renderSettingsModal(this);
   }
 
   public bindEvents(): void {
