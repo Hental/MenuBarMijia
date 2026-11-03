@@ -1,5 +1,6 @@
 import type { MiDeviceRecord } from "./client.js";
 import type { HttpTransport } from "./session.js";
+import fallbackSpecs from "./fallbackSpecs.json";
 
 export interface MiotValueListItem {
   readonly value: number;
@@ -198,368 +199,33 @@ export function parseMiotInstanceIndex(raw: unknown): Record<string, string> {
   return out;
 }
 
+interface FallbackSpecRule {
+  readonly id: string;
+  readonly modelAny?: readonly string[];
+  readonly modelSuffix?: readonly string[];
+  readonly nameAny?: readonly string[];
+  readonly spec: MiotDeviceSpec;
+}
+
+const FALLBACK_SPEC_DOCUMENT = fallbackSpecs as {
+  readonly rules: readonly FallbackSpecRule[];
+  readonly fallback: { readonly id: string; readonly spec: MiotDeviceSpec };
+};
+
+/**
+ * Guessed specs are read-only until a released model spec replaces them (#154).
+ * The model/name table lives in `fallbackSpecs.json` so adding a pattern is data.
+ */
 export function inferFallbackSpec(record: Pick<MiDeviceRecord, "model" | "name">): MiotDeviceSpec {
-  const m = record.model.toLowerCase();
-  const n = record.name.toLowerCase();
-
-  // A guessed (siid, piid) can hit the wrong attribute. Unverified fallbacks stay
-  // read-only until a released model spec replaces them (#154). Fridge fallback
-  // writes stay with #152 so this change does not redo that migration.
-  if (m.includes("light") || m.includes("lamp") || m.includes("bulb") || n.includes("灯")) {
-    return {
-      type: "urn:miot-spec-v2:device:light:0000A001:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:light:00007802:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
-            {
-              iid: 2,
-              type: "urn:miot-spec-v2:property:brightness:0000000D:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueRange: [1, 100, 1],
-            },
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:color-temperature:0000000F:fallback:1",
-              format: "uint32",
-              access: ["read"],
-              valueRange: [2700, 6500, 100],
-            },
-          ],
-          actions: [],
-        },
-      ],
-    };
+  const model = record.model.toLowerCase();
+  const name = record.name.toLowerCase();
+  for (const rule of FALLBACK_SPEC_DOCUMENT.rules) {
+    const matchesModel = rule.modelAny?.some((token) => model.includes(token)) ?? false;
+    const matchesSuffix = rule.modelSuffix?.some((token) => model.endsWith(token)) ?? false;
+    const matchesName = rule.nameAny?.some((token) => name.includes(token)) ?? false;
+    if (matchesModel || matchesSuffix || matchesName) return structuredClone(rule.spec);
   }
-
-  if (
-    m.includes("aircondition") ||
-    m.includes("acpartner") ||
-    m.includes("heater") ||
-    n.includes("空调") ||
-    n.includes("取暖") ||
-    n.includes("地暖")
-  ) {
-    return {
-      type: "urn:miot-spec-v2:device:air-conditioner:0000A004:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:air-conditioner:0000780F:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
-            {
-              iid: 2,
-              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 2, description: "Cool" },
-                { value: 5, description: "Heat" },
-                { value: 3, description: "Dry" },
-                { value: 4, description: "Fan" },
-                { value: 1, description: "Auto" },
-              ],
-            },
-            {
-              iid: 4,
-              type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1",
-              format: "float",
-              access: ["read"],
-              valueRange: [16, 30, 0.5],
-            },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (m.includes(".fan.") || m.endsWith(".fan") || n.includes("风扇") || n.includes("循环扇")) {
-    return {
-      type: "urn:miot-spec-v2:device:fan:0000A005:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:fan:00007808:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
-            {
-              iid: 2,
-              type: "urn:miot-spec-v2:property:fan-level:00000016:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 1, description: "Level 1" },
-                { value: 2, description: "Level 2" },
-                { value: 3, description: "Level 3" },
-                { value: 4, description: "Level 4" },
-              ],
-            },
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:horizontal-swing:00000017:fallback:1",
-              format: "bool",
-              access: ["read"],
-            },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (
-    m.includes("airp") ||
-    m.includes("airpurifier") ||
-    m.includes("airfresh") ||
-    m.includes("humidifier") ||
-    n.includes("净化器") ||
-    n.includes("空净") ||
-    n.includes("新风") ||
-    n.includes("加湿")
-  ) {
-    return {
-      type: "urn:miot-spec-v2:device:air-purifier:0000A007:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:air-purifier:00007811:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
-            {
-              iid: 4,
-              type: "urn:miot-spec-v2:property:mode:00000008:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 0, description: "Auto" },
-                { value: 1, description: "Sleep" },
-                { value: 2, description: "Favorite" },
-              ],
-            },
-          ],
-          actions: [],
-        },
-        {
-          iid: 3,
-          type: "urn:miot-spec-v2:service:environment:0000780A:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", format: "uint8", access: ["read"], valueRange: [0, 100, 1] },
-            { iid: 4, type: "urn:miot-spec-v2:property:pm2.5-density:00000034:fallback:1", format: "uint16", access: ["read"], valueRange: [0, 1000, 1] },
-            { iid: 7, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "float", access: ["read"], valueRange: [-30, 100, 1] },
-          ],
-          actions: [],
-        },
-        {
-          iid: 4,
-          type: "urn:miot-spec-v2:service:filter:0000780B:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:filter-life-level:0000001E:fallback:1", format: "uint8", access: ["read"], valueRange: [0, 100, 1] },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (m.includes("vacuum") || n.includes("扫地") || n.includes("扫拖")) {
-    return {
-      type: "urn:miot-spec-v2:device:vacuum:0000A006:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:vacuum:00007810:fallback:1",
-          properties: [
-            {
-              iid: 1,
-              type: "urn:miot-spec-v2:property:status:00000007:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 1, description: "Idle" },
-                { value: 2, description: "Sweeping" },
-                { value: 3, description: "Charging" },
-                { value: 4, description: "Paused" },
-                { value: 5, description: "Go Charging" },
-              ],
-            },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (
-    m.includes("camera") ||
-    m.includes("cateye") ||
-    m.includes("doorbell") ||
-    n.includes("摄像") ||
-    n.includes("监控") ||
-    n.includes("猫眼")
-  ) {
-    return {
-      type: "urn:miot-spec-v2:device:camera:0000A01C:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:camera-control:0000782F:fallback:1",
-          properties: [
-            {
-              iid: 1,
-              type: "urn:miot-spec-v2:property:on:00000006:fallback:1",
-              format: "bool",
-              access: ["read"],
-            },
-            {
-              iid: 3,
-              type: "urn:miot-spec-v2:property:night-shot:00000057:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 0, description: "Off" },
-                { value: 1, description: "On" },
-                { value: 2, description: "Auto" },
-              ],
-            },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (
-    m.includes("sensor_ht") ||
-    m.includes("temphum") ||
-    m.includes("weather") ||
-    n.includes("温湿度") ||
-    n.includes("温度计")
-  ) {
-    return {
-      type: "urn:miot-spec-v2:device:temperature-humidity-sensor:0000A00A:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:temperature-humidity-sensor:00007814:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "float", access: ["read"] },
-            { iid: 2, type: "urn:miot-spec-v2:property:relative-humidity:0000000C:fallback:1", format: "uint8", access: ["read"] },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (m.includes(".kettle.") || m.includes(".waterdispenser.") || n.includes("水壶") || n.includes("饮水")) {
-    return {
-      type: "urn:miot-spec-v2:device:kettle:0000A009:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:kettle:00007813:fallback:1",
-          properties: [
-            {
-              iid: 1,
-              type: "urn:miot-spec-v2:property:status:00000007:fallback:1",
-              format: "uint8",
-              access: ["read"],
-              valueList: [
-                { value: 1, description: "Idle" },
-                { value: 2, description: "Heating" },
-                { value: 3, description: "Keep Warm" },
-              ],
-            },
-            { iid: 2, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "float", access: ["read"] },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (m.includes("sensor_motion") || n.includes("人体")) {
-    return {
-      type: "urn:miot-spec-v2:device:motion-sensor:0000A014:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:motion-sensor:00007825:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:motion-state:0000007D:fallback:1", format: "bool", access: ["read"] },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  if (m.includes(".lock.") || n.includes("门锁")) {
-    return {
-      type: "urn:miot-spec-v2:device:lock:0000A038:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:lock:00007855:fallback:1",
-          properties: [],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  // A guessed (siid, piid) can hit the wrong attribute, so this fallback is read-only
-  // until a verified model-specific spec replaces it (#148).
-  if (m.includes(".fridge.") || n.includes("冰箱")) {
-    return {
-      type: "urn:miot-spec-v2:device:fridge:0000A00F:fallback:1",
-      services: [
-        {
-          iid: 2,
-          type: "urn:miot-spec-v2:service:fridge:00007819:fallback:1",
-          properties: [],
-          actions: [],
-        },
-        {
-          iid: 3,
-          type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-30, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [2, 8, 1] },
-          ],
-          actions: [],
-        },
-        {
-          iid: 4,
-          type: "urn:miot-spec-v2:service:fridge-chamber:0000781A:fallback:1",
-          properties: [
-            { iid: 1, type: "urn:miot-spec-v2:property:temperature:00000020:fallback:1", format: "int8", access: ["read"], valueRange: [-50, 100, 1] },
-            { iid: 2, type: "urn:miot-spec-v2:property:target-temperature:00000021:fallback:1", format: "int8", access: ["read"], valueRange: [-24, -15, 1] },
-          ],
-          actions: [],
-        },
-      ],
-    };
-  }
-
-  return {
-    type: "urn:miot-spec-v2:device:outlet:0000A002:fallback:1",
-    services: [
-      {
-        iid: 2,
-        type: "urn:miot-spec-v2:service:switch:0000780C:fallback:1",
-        properties: [
-          { iid: 1, type: "urn:miot-spec-v2:property:on:00000006:fallback:1", format: "bool", access: ["read"] },
-        ],
-        actions: [],
-      },
-    ],
-  };
+  return structuredClone(FALLBACK_SPEC_DOCUMENT.fallback.spec);
 }
 
 export class MiotSpecResolver {
