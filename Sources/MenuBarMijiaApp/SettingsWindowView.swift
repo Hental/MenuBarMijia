@@ -388,6 +388,30 @@ private struct GeneralSettingsTab: View {
                         )
                     )
 
+                    ForEach(SensorAlertKind.allCases) { kind in
+                        SettingsToggleRow(
+                            title: kind.settingsTitle,
+                            isOn: Binding(
+                                get: { store.isSensorAlertEnabled(kind) },
+                                set: { enabled in
+                                    store.setSensorAlertEnabled(kind, enabled)
+                                    if enabled { askForNotificationsIfNeeded() }
+                                }
+                            )
+                        )
+                    }
+
+                    SettingsToggleRow(
+                        title: L10n.tr(
+                            "门窗和移动只在这台 Mac 锁屏、睡眠或切换走时提醒",
+                            "Door and motion only when this Mac is locked, asleep, or switched away"
+                        ),
+                        isOn: Binding(
+                            get: { store.sensorAlertsOnlyWhenAway },
+                            set: { store.sensorAlertsOnlyWhenAway = $0 }
+                        )
+                    )
+
                     NotificationPermissionRow()
 
                     if showNotificationRationale {
