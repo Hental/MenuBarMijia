@@ -148,6 +148,7 @@ import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
 import { applyGlobalHotkey, applyInterfaceLanguage, applyTemperatureSetting, bindGlobalKeys, checkForAppUpdate, hydrateCredentials, initializeCredentials, openSettingsSheet, openUpdatePage, osLanguages, persistCredentials, restoreUpdateState, saveSettings, saveUpdateState, startTimerLoop, startUpdateInstall, submitServiceEndpoints } from "./appLifecycle.js";
 import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
+import { currentProactiveSuggestions, invalidateSourceControl, isIntentReversibleOnDevice, maybeRefreshProactiveInBackground, proactiveSignature, renderGrokBallSidebar, renderGrokBallStage, setGrokBallStageExpanded, syncGrokBallEmotion } from "./proactive.js";
 import { applyCommand, dispatchCloudCommand, markCloudValuesFresh, markCloudValuesStale } from "./commandDispatch.js";
 import { cloudPanelStructureFingerprint, cloudPresentationFingerprint, cloudSnapshotIsStale, filterBySelectedHome, foldGrouped, patchCloudPresentation, refreshDevices, refreshHADevices, withSharedHomeDevices } from "./cloudRefresh.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
@@ -216,17 +217,17 @@ export class MenuMijiaWindowsApp {
   /** AI-ranked proactive suggestions for the current ambient signature (#113). */
   public aiProactiveSuggestions: AssistantSuggestion[] | null = null;
   public aiProactiveSignature: string | null = null;
-  private isRefreshingProactive = false;
+  public isRefreshingProactive = false;
   public isGrokBallStageExpanded = false;
-  private readonly grokBall = new GrokBallView();
+  public readonly grokBall = new GrokBallView();
   public grokBallCelebrationUntil = 0;
-  private grokBallPointerUntil = 0;
+  public grokBallPointerUntil = 0;
   public grokBallOnLeft = false;
-  private panelGeometryUpdates: Promise<void> = Promise.resolve();
+  public panelGeometryUpdates: Promise<void> = Promise.resolve();
   /** Panel anchor the backend persists (#204); the window position itself is owned by Rust. */
   public panelAnchor: PanelAnchor = "auto";
   /** Earliest timestamp a failed background refresh may retry (Codex #116 review). */
-  private proactiveRetryAfterMs: number | null = null;
+  public proactiveRetryAfterMs: number | null = null;
   /** Cooldown before a failed background refresh retries (Codex #116 review). */
   private static readonly PROACTIVE_RETRY_COOLDOWN_MS = 5 * 60_000;
   public isResolvingIntent = false;
@@ -695,233 +696,39 @@ export class MenuMijiaWindowsApp {
 
   /** Time bucket + per-room temperature (1 °C steps) and humidity (5 % steps): the ambient signature (#113). */
   private proactiveSignature(): string {
-    const bucket = timeBucketLabel(new Date().getHours());
-    const readings = this.computedEnvironmentReadings
-      .map(
-        (reading) =>
-          `${reading.temperature !== null ? Math.round(reading.temperature) : "-"}|${
-            reading.humidity !== null ? Math.round(reading.humidity / 5) * 5 : "-"
-          }`,
-      )
-      .join(",");
-    return `${bucket}|${readings}`;
+    return proactiveSignature(this);
   }
 
   private isIntentReversibleOnDevice(intent: DeviceIntent, device: SmartDevice): { reversible: boolean; nextDevice: SmartDevice } {
-    if (!device.isOnline || (device.kind.kind === "plug" && device.kind.switchEntityId.startsWith("button."))) {
-      return { reversible: false, nextDevice: device };
-    }
-    const normalized = IntentValidator.normalize(intent.operation, device);
-    if (!normalized) return { reversible: false, nextDevice: device };
-    if (
-      this.settings.connectionMode === "homeAssistant" &&
-      normalized.kind === "power" &&
-      normalized.isOn &&
-      device.kind.kind === "climate" &&
-      !device.kind.availableModes.some((mode) => mode !== "off" && mode !== "unknown" && mode !== "unavailable")
-    ) {
-      return { reversible: false, nextDevice: device };
-    }
-    const normalizedIntent: DeviceIntent = { targetId: intent.targetId, operation: normalized };
-    const commands = IntentValidator.commandsForIntent(normalizedIntent, device);
-    if (commands.length === 0 || !commands.every((command) => this.buildInverseCommand(device, command).length > 0)) {
-      return { reversible: false, nextDevice: device };
-    }
-    const k = device.kind;
-    let nextKind = k;
-    if (k.kind === "light") {
-      if (normalized.kind === "power") nextKind = { ...k, isOn: normalized.isOn };
-      else if (normalized.kind === "brightness") nextKind = { ...k, isOn: true, brightnessPercent: normalized.percent };
-      else if (normalized.kind === "colorTemperature") nextKind = { ...k, isOn: true, colorTempKelvin: normalized.kelvin, currentEffect: null };
-      else if (normalized.kind === "lightEffect") nextKind = { ...k, isOn: true, currentEffect: normalized.effect };
-    } else if (k.kind === "climate") {
-      if (normalized.kind === "power") {
-        const resumeMode = k.hvacMode === "off" ? (k.availableModes.find((m) => m !== "off") ?? "cool") : k.hvacMode;
-        nextKind = { ...k, isOn: normalized.isOn, hvacMode: normalized.isOn ? resumeMode : "off" };
-      } else if (normalized.kind === "hvacMode") {
-        nextKind = { ...k, isOn: normalized.mode !== "off", hvacMode: normalized.mode };
-      } else if (normalized.kind === "targetTemperature") {
-        nextKind = { ...k, targetTemperature: normalized.celsius };
-      } else if (normalized.kind === "fanSpeed") {
-        nextKind = { ...k, fanMode: normalized.speed };
-      }
-    }
-    return { reversible: true, nextDevice: { ...device, kind: nextKind } };
+    return isIntentReversibleOnDevice(this, intent, device);
   }
 
-  /** The Top-4 zero-delay suggestions: the AI cache when fresh, otherwise ranked locally (#113). */
   public currentProactiveSuggestions(): AssistantSuggestion[] {
-    if (this.pendingSuggestions.length > 0 && !this.isGrokBallStageExpanded) return [];
-    const signature = this.proactiveSignature();
-    const aliasedDevices = withAliases(this.layout, this.devices);
-    const local = new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()).topSuggestions({
-      devices: aliasedDevices,
-      scenes: this.isGrokBallStageExpanded ? [] : this.scenes,
-      environmentReadings: this.computedEnvironmentReadings,
-    });
-    const cached = this.aiProactiveSignature === signature ? this.aiProactiveSuggestions ?? [] : [];
-    const fallback = this.isGrokBallStageExpanded
-      ? new UserHabitMemory([]).topSuggestions({ devices: aliasedDevices, scenes: [], limit: aliasedDevices.length + 4 })
-      : [];
-    const result: AssistantSuggestion[] = [];
-    for (const item of [...cached, ...local, ...fallback]) {
-      if (this.isGrokBallStageExpanded && item.intents.some((intent) => intent.operation.kind === "activateScene")) continue;
-      const actionableIntents = item.intents.filter((intent) => habitActionable(intent, aliasedDevices, this.scenes));
-      if (actionableIntents.length === 0) continue;
-      if (this.isGrokBallStageExpanded) {
-        if (!item.intents.every((intent) => aliasedDevices.some((entry) => entry.id === intent.targetId && entry.isOnline))) continue;
-        const stateByTarget = new Map<string, SmartDevice>();
-        let allReversible = true;
-        for (const intent of actionableIntents) {
-          const current = stateByTarget.get(intent.targetId) ?? aliasedDevices.find((entry) => entry.id === intent.targetId);
-          if (!current) {
-            allReversible = false;
-            break;
-          }
-          const check = this.isIntentReversibleOnDevice(intent, current);
-          if (!check.reversible) {
-            allReversible = false;
-            break;
-          }
-          stateByTarget.set(intent.targetId, check.nextDevice);
-        }
-        if (!allReversible) continue;
-      }
-      const candidate: AssistantSuggestion = { ...item, intents: actionableIntents };
-      if (result.some((existing) => JSON.stringify(existing.intents) === JSON.stringify(candidate.intents))) continue;
-      result.push(candidate);
-      if (result.length === 4) break;
-    }
-    return result;
+    return currentProactiveSuggestions(this);
   }
 
   public syncGrokBallEmotion(): void {
-    const now = Date.now();
-    this.grokBall.setEmotion(resolveGrokBallEmotion({
-      timeBucket: timeBucketLabel(new Date(now).getHours()),
-      activeDeviceCount: this.activeDeviceCount,
-      speechListening: this.isListeningVoice,
-      assistantState: this.isResolvingIntent ? "thinking" : this.pendingSuggestions.length > 0 ? "awaitingChoice" : "idle",
-      isRecommending: this.isRefreshingProactive,
-      hasErrorToast: this.replyBanner?.isError === true || Boolean(this.haConnectionError),
-      isStageExpanded: this.isGrokBallStageExpanded,
-      isPointerTracking: now < this.grokBallPointerUntil,
-      hasRecentCelebration: now < this.grokBallCelebrationUntil,
-    }));
+    syncGrokBallEmotion(this);
   }
 
   private renderGrokBallStage(): string {
-    if (!this.isGrokBallStageExpanded) return "";
-    return `<section class="cc-grok-stage" aria-label="${t("猜你想控")}">
-      ${this.currentProactiveSuggestions().slice(0, 4).map((item) => `
-        <button class="cc-grok-pill" data-proactive-id="${this.escapeHtml(item.id)}" title="${this.escapeHtml(item.title)}">
-          ${this.escapeHtml(item.title)}</button>`).join("")}
-    </section>`;
+    return renderGrokBallStage(this);
   }
 
   public renderGrokBallSidebar(): string {
-    if (!this.settings.enableGrokBall) return "";
-    return `<aside class="cc-grok-sidebar" aria-label="${t("猜你想控")}">
-      <button class="cc-grok-toggle" id="btn-grok-ball" data-grok-toggle aria-label="${t("猜你想控")}" aria-expanded="${this.isGrokBallStageExpanded}"><span data-grok-slot></span></button>
-      ${this.renderGrokBallStage()}
-    </aside>`;
+    return renderGrokBallSidebar(this);
   }
 
   public setGrokBallStageExpanded(expanded: boolean): void {
-    if (this.isGrokBallStageExpanded === expanded) return;
-    this.isGrokBallStageExpanded = expanded;
-    this.applyPanelHeight();
-    if (window.__TAURI_INTERNALS__) {
-      void this.panelGeometryUpdates.then(() => this.render());
-    } else {
-      this.render();
-    }
+    setGrokBallStageExpanded(this, expanded);
   }
 
-  /**
-   * Silent background AI refresh for proactive suggestions (#113): fires only when the
-   * time bucket or room climate changed, never blocks the panel, never asks for consent,
-   * and keeps the previous cache when the request fails.
-   */
   public maybeRefreshProactiveInBackground(): void {
-    if (this.isRefreshingProactive || this.settings.connectionMode === "demo") return;
-    if (this.proactiveRetryAfterMs !== null && Date.now() < this.proactiveRetryAfterMs) return;
-    const signature = this.proactiveSignature();
-    if (signature === this.aiProactiveSignature) return;
-    const baseURL = this.settings.assistantBaseURL.trim() || "https://openrouter.ai/api/v1";
-    if (!endpointAllowsSendingSecrets(baseURL)) return;
-    const apiKey = this.apiKeyFor(baseURL);
-    const isLoopback = isLocalAssistantEndpoint(baseURL);
-    if (!apiKey && !isLoopback) return;
-    if (!isLoopback) {
-      const endpoint = assistantEndpointIdentity(baseURL);
-      if (!endpoint || !this.settings.cloudConsentEndpoints.includes(endpoint)) return;
-    }
-    const sourceRevision = this.sourceRevision;
-    const selectedHomeId = this.settings.selectedHomeId;
-    this.isRefreshingProactive = true;
-    const resolver = new ModelIntentResolver(
-      { baseURL, model: this.settings.assistantModel, apiKey },
-      this.transport,
-    );
-    resolver
-      .recommendProactiveSuggestions(
-        this.devices,
-        this.scenes,
-        buildAssistantContext({
-          now: new Date(),
-          readings: this.computedEnvironmentReadings,
-          devices: this.devices,
-          scenes: this.scenes,
-          sharing: this.settings.habitShareEnabled ? "on" : "off",
-          memory: new UserHabitMemory(this.settings.habitEntries, this.habitSequences(), this.lastHabitAction()),
-          phrases: this.settings.learnedShortcuts.map((shortcut) => ({
-            phrase: shortcut.phrase,
-            intents: shortcut.intents,
-          })),
-          mention: { kind: "none" },
-        }),
-      )
-      .then((suggestions) => {
-        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
-        this.isRefreshingProactive = false;
-        if (this.proactiveSignature() === signature) {
-          // The context counts as served only once a usable result landed (Codex #116 review).
-          this.aiProactiveSignature = signature;
-          if (suggestions.length > 0) {
-            this.aiProactiveSuggestions = suggestions;
-          } else {
-            // An empty result is a valid "home is ideal" answer: drop any older cache so the
-            // local ranking takes over instead of stale suggestions (Codex #116 re-review).
-            this.aiProactiveSuggestions = null;
-          }
-          if (!this.hasBlockingPanelInteraction()) this.render();
-        }
-      })
-      .catch(() => {
-        if (sourceRevision !== this.sourceRevision || this.settings.selectedHomeId !== selectedHomeId) return;
-        // Silent: the previous cache keeps showing; retry after a cooldown (Codex #116 review).
-        this.isRefreshingProactive = false;
-        this.proactiveRetryAfterMs = Date.now() + MenuMijiaWindowsApp.PROACTIVE_RETRY_COOLDOWN_MS;
-      });
+    maybeRefreshProactiveInBackground(this);
   }
 
   public invalidateSourceControl(): void {
-    this.sourceRevision += 1;
-    this.syncGeneration += 1;
-    this.isSyncingCloud = false;
-    this.isResolvingIntent = false;
-    this.aiProactiveSuggestions = null;
-    this.aiProactiveSignature = null;
-    this.isRefreshingProactive = false;
-    this.proactiveRetryAfterMs = null;
-    this.isGrokBallStageExpanded = false;
-    this.grokBallCelebrationUntil = 0;
-    this.applyPanelHeight();
-    this.haConnectionError = null;
-    this.lastUndoAction = null;
-    this.pendingCloudConsent = null;
-    this.pendingSuggestions = [];
+    invalidateSourceControl(this);
   }
 
   public async performUndo(): Promise<void> {
