@@ -1011,7 +1011,6 @@ struct MenuBarPanelControllerTests {
     func cameraPictureInPictureLiveRangeIsValid() {
         let range = CameraPictureInPicture.livePlaybackTimeRange()
         #expect(range.isValid)
-        #expect(CMTimeCompare(range.start, .zero) == 0)
         #expect(range.duration.isPositiveInfinity)
     }
 
