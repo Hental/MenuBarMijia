@@ -123,7 +123,6 @@ extension HomeStore {
     }
 
     func finishPresenceSnapshot() {
-        // The 60s safety timer also calls evaluateSafetyAlerts, so it must not close this gap on a stale device list.
         guard pollingContext.systemActive, awayGap.includesAway else { return }
         awayGap.includesAway = false
         userDefaults.set(false, forKey: MacAwayGap.storageKey)
