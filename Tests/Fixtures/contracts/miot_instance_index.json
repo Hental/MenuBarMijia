@@ -1,0 +1,14 @@
+{
+  "_fixture": {
+    "endpoint": "GET https://miot-spec.org/miot-spec-v2/instances?status=released",
+    "captured": "2026-11-03",
+    "sanitised": "models and type urns replaced with synthetic values; duplicate-model version ordering preserved",
+    "shape": "MIoT instance index decoded by MiotSpecSource.parseInstanceIndex"
+  },
+  "instances": [
+    {"model": "contract.light.ceiling", "version": 1, "type": "urn:miot-spec-v2:device:light:0000A001:contract-light:1"},
+    {"model": "contract.light.ceiling", "version": 3, "type": "urn:miot-spec-v2:device:light:0000A001:contract-light:3"},
+    {"model": "contract.plug.v1", "version": 2, "type": "urn:miot-spec-v2:device:outlet:0000A002:contract-plug:2"},
+    {"model": "contract.light.ceiling", "version": 2, "type": "urn:miot-spec-v2:device:light:0000A001:contract-light:2"}
+  ]
+}

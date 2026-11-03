@@ -1,0 +1,46 @@
+{
+  "_fixture": {
+    "endpoint": "POST /app/v2/homeroom/gethome_merged",
+    "captured": "2026-11-03",
+    "sanitised": "home, room and device ids replaced with synthetic values; room and home names replaced",
+    "shape": "decrypted response envelope {code, message, result}; result.homelist and result.share_home_list"
+  },
+  "code": 0,
+  "message": "ok",
+  "result": {
+    "homelist": [
+      {
+        "id": "home-1001",
+        "name": "Contract Home",
+        "dids": ["did-light-0001", "did-switch-0002"],
+        "roomlist": [
+          {"id": "room-2001", "name": "Living Room", "dids": ["did-light-0001"]},
+          {"id": "room-2002", "name": "Study", "dids": ["did-camera-0003"]}
+        ]
+      },
+      {
+        "id": "home-1002",
+        "name": "Contract Beach House",
+        "roomlist": [
+          {"id": "room-2003", "name": "Kitchen", "dids": []}
+        ]
+      }
+    ],
+    "share_home_list": [
+      {
+        "id": "home-1003",
+        "name": "Contract Shared Home",
+        "roomlist": [
+          {"id": "room-2004", "name": "Guest Room", "dids": ["did-switch-0002.s2"]}
+        ]
+      },
+      {
+        "id": "home-1001",
+        "name": "Contract Home",
+        "roomlist": [
+          {"id": "room-9999", "name": "Duplicate Attachment", "dids": []}
+        ]
+      }
+    ]
+  }
+}
