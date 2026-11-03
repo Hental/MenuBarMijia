@@ -16,6 +16,9 @@ while IFS= read -r path || [ -n "$path" ]; do
             ;;
         *.md|docs/*|LICENSE|.github/ISSUE_TEMPLATE/*)
             ;;
+        # *.md is already docs-only. This arm covers the other skill files, including scripts and licenses.
+        .cursor/skills/*)
+            ;;
         *)
             relevant=1
             ;;

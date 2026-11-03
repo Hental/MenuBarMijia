@@ -58,3 +58,8 @@ Other Linux checks:
 `npm run dev --prefix windows` serves the tray UI at port 1420 (`strictPort`). The dev server is started on boot. First launch shows onboarding; “Preview the demo” / “先看演示预览” opens the offline demo home, and clicking a device card toggles it. Mi Cloud QR login and Home Assistant need a real account and are not part of this setup.
 
 Swift's clang selects the newest GCC. This image has GCC 14, so `libstdc++-14-dev` must be installed or `swift-crypto` fails with `cstdio` file not found. The environment install script installs Swift 6.1.3 and that package. No secrets are required for the checks above.
+
+## Cursor skills
+
+Before coding, read `.cursor/skills/poteto-mode/SKILL.md` and follow its playbook. Then use any fitting `tstack-`, `mp-`, or `principle-` skill. Sources and refresh steps are in `.cursor/skills/README.md`.
+
