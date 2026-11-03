@@ -163,6 +163,8 @@ public actor MiAccountsProvider: HomeProvider {
             }
         case .sessionExpired(let session):
             continuation?.yield(.sessionExpired(session))
+        case .sourceStatusesChanged:
+            break
         case .snapshotUpdated(let home):
             snapshots[accountId] = home
             if home.closesAwayGap {

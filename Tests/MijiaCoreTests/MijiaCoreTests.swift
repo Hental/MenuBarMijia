@@ -162,6 +162,8 @@ struct MijiaCoreTests {
                 break
             case .sessionExpired:
                 break
+            case .sourceStatusesChanged:
+                break
             }
             if receivedHome != nil { break }
         }

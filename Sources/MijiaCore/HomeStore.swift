@@ -343,7 +343,11 @@ public final class HomeStore {
             return L10n.tr("HA 已连接 · 米家云连接中", "HA connected · Xiaomi Cloud connecting")
         case (.connecting, .connected):
             return L10n.tr("米家云已连接 · HA 连接中", "Xiaomi Cloud connected · HA connecting")
-        case (.connecting, .offline), (.offline, .connecting), (.connecting, .connecting):
+        case (.connecting, .offline):
+            return L10n.tr("HA 连接中 · 米家云未连接", "HA connecting · Xiaomi Cloud offline")
+        case (.offline, .connecting):
+            return L10n.tr("米家云连接中 · HA 未连接", "Xiaomi Cloud connecting · HA offline")
+        case (.connecting, .connecting):
             return L10n.tr("HA 与 米家云连接中…", "Home Assistant and Xiaomi Cloud connecting…")
         case (.offline, .offline):
             return L10n.tr("HA 与 米家云均未连接", "Home Assistant and Xiaomi Cloud are both offline")

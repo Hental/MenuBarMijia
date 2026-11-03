@@ -75,6 +75,7 @@ public actor DualSourceHomeProvider: HomeProvider {
             })
         }
         emitStatus(force: true)
+        emitSourceStatuses()
     }
 
     private func handle(_ event: HomeProviderEvent, from backend: HomeBackend) {
@@ -88,10 +89,14 @@ public actor DualSourceHomeProvider: HomeProvider {
                 if case .disconnected = status { miSnapshot = nil }
             }
             emitStatus()
+            emitSourceStatuses()
             recompute()
 
         case .sessionExpired(let session):
             continuation?.yield(.sessionExpired(session))
+
+        case .sourceStatusesChanged:
+            break
 
         case .snapshotUpdated(let home):
             if backend == .homeAssistant {
@@ -115,6 +120,7 @@ public actor DualSourceHomeProvider: HomeProvider {
             miSnapshot = nil
         }
         emitStatus()
+        emitSourceStatuses()
         recompute()
     }
 
@@ -123,6 +129,12 @@ public actor DualSourceHomeProvider: HomeProvider {
         guard force || status != lastStatus else { return }
         lastStatus = status
         continuation?.yield(.statusChanged(status))
+    }
+
+    private func emitSourceStatuses() {
+        let statuses = configuredSourceStatuses()
+        guard !statuses.isEmpty else { return }
+        continuation?.yield(.sourceStatusesChanged(statuses))
     }
 
     private func aggregateStatus() -> ConnectionStatus? {

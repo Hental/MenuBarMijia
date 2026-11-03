@@ -184,6 +184,9 @@ extension HomeStore {
                 connectedBackends = homeBackend == .demo ? [.demo] : [homeBackend]
             }
 
+        case .sourceStatusesChanged(let statuses):
+            if sourceStatuses != statuses { sourceStatuses = statuses }
+
         case .sessionExpired(let rejected):
             if let updated = MiSessionStore.markRejected(rejected, defaults: userDefaults) {
                 if let idx = miAccounts.firstIndex(where: {
