@@ -117,6 +117,72 @@ struct AssistantLocalModelTests {
         #expect(!prompt.contains("设备299"))
     }
 
+    @Test("A named device outranks room-only matches even when the room is mentioned")
+    func promptRanksNamedDeviceAboveRoom() throws {
+        let devices = (1...100).map { index in
+            SmartDevice(
+                id: "dev_\(index)",
+                name: "设备\(index)",
+                roomId: "room_1",
+                roomName: "房间1",
+                model: "yeelink.light.ceiling20",
+                isOnline: true,
+                kind: .light(LightSpec(entityId: "light.dev_\(index)", isOn: false))
+            )
+        }
+        let catalog = IntentCatalog(devices: devices, scenes: [])
+        let prompt = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: AssistantContext(),
+            mention: "打开房间1的设备100"
+        )
+
+        #expect(PromptText.estimatedTokens(prompt) <= AssistantLocalPrompt.maximumPromptTokens)
+        let targetAlias = try #require(
+            catalog.aliasDevices.first { $0.device.id == "dev_100" }?.alias
+        )
+        #expect(prompt.contains("设备100"))
+        #expect(prompt.contains("\"id\":\"\(targetAlias)\""))
+    }
+
+    @Test("A room name embedded in a named device does not promote the whole room")
+    func promptDoesNotPromoteEmbeddedRoomName() throws {
+        let roomLamps = (1...100).map { index in
+            SmartDevice(
+                id: "dev_lamp_\(index)",
+                name: "书房台灯\(index)",
+                roomId: "shu_fang",
+                roomName: "书房",
+                model: "yeelink.light.lamp4",
+                isOnline: true,
+                kind: .light(LightSpec(entityId: "light.lamp_\(index)", isOn: false))
+            )
+        }
+        let target = SmartDevice(
+            id: "dev_study_ceiling",
+            name: "书房吸顶灯",
+            roomId: "shu_fang",
+            roomName: "书房",
+            model: "yeelink.light.ceiling20",
+            isOnline: true,
+            kind: .light(LightSpec(entityId: "light.study_ceiling", isOn: false))
+        )
+        let catalog = IntentCatalog(devices: roomLamps + [target], scenes: [])
+        let prompt = AssistantLocalPrompt.instructions(
+            catalog: catalog,
+            context: AssistantContext(),
+            mention: "打开书房吸顶灯"
+        )
+
+        let targetAlias = try #require(
+            catalog.aliasDevices.first { $0.device.id == "dev_study_ceiling" }?.alias
+        )
+        // The named device ranks above the 100 room-only rows and survives the budget.
+        #expect(prompt.contains("\"id\":\"\(targetAlias)\""))
+        #expect(prompt.contains("书房吸顶灯"))
+        #expect(!prompt.contains("书房台灯100"))
+    }
+
     @Test("Favorites and active devices win the remaining budget")
     func promptPrefersFavorites() {
         let catalog = Self.largeCatalog()

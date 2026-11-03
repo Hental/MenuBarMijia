@@ -574,14 +574,30 @@ public struct IntentCatalog: Sendable {
         let preferredAliases = Set(deviceEntries.filter {
             preferredDeviceIds.contains($0.deviceId)
         }.map(\.alias))
-        let matchedDeviceNames = Self.matchedNames(in: cleanMention, names: deviceEntries.map(\.name))
-        let matchedRoomNames = Self.matchedNames(in: cleanMention, names: deviceEntries.map(\.roomName))
-        let matchedSceneNames = Self.matchedNames(in: cleanMention, names: sceneEntries.map(\.name))
-        let mentionedDeviceAliases = Set(deviceEntries.compactMap { entry -> String? in
-            let matchesName = matchedDeviceNames.contains(entry.name)
-            let matchesRoom = !entry.roomName.isEmpty && matchedRoomNames.contains(entry.roomName)
-            return matchesName || matchesRoom ? entry.alias : nil
-        })
+
+        // Match exact names first and hand their claimed ranges to the room/scene matchers, so a
+        // room name embedded in a device name ("书房" in "书房吸顶灯") cannot promote the whole
+        // room, while the explicitly named device still wins.
+        let deviceMatch = Self.matchedNames(in: cleanMention, names: deviceEntries.map(\.name))
+        let sceneMatch = Self.matchedNames(
+            in: cleanMention,
+            names: sceneEntries.map(\.name),
+            excluding: deviceMatch.ranges
+        )
+        let roomMatch = Self.matchedNames(
+            in: cleanMention,
+            names: deviceEntries.map(\.roomName),
+            excluding: deviceMatch.ranges + sceneMatch.ranges
+        )
+        let deviceNameMatchedAliases = Set(deviceEntries.filter {
+            deviceMatch.names.contains($0.name)
+        }.map(\.alias))
+        let roomMatchedAliases = Set(deviceEntries.filter {
+            !$0.roomName.isEmpty && roomMatch.names.contains($0.roomName)
+        }.map(\.alias))
+        let sceneNameMatchedAliases = Set(sceneEntries.filter {
+            sceneMatch.names.contains($0.name)
+        }.map(\.alias))
 
         struct Candidate {
             let row: String
@@ -592,33 +608,36 @@ public struct IntentCatalog: Sendable {
         var order = 0
         for entry in deviceEntries {
             let priority: Int
-            if mentionedDeviceAliases.contains(entry.alias) {
+            if deviceNameMatchedAliases.contains(entry.alias) {
                 priority = 0
-            } else if preferredAliases.contains(entry.alias) {
+            } else if roomMatchedAliases.contains(entry.alias) {
                 priority = 1
-            } else {
+            } else if preferredAliases.contains(entry.alias) {
                 priority = 2
+            } else {
+                priority = 3
             }
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
         }
         for entry in groupEntries {
-            let mentionsRoom = !entry.roomName.isEmpty && matchedRoomNames.contains(entry.roomName)
-            let containsMentioned = entry.memberAliases.contains(where: mentionedDeviceAliases.contains)
+            let mentionsRoom = !entry.roomName.isEmpty && roomMatch.names.contains(entry.roomName)
+            let containsNamed = entry.memberAliases.contains(where: deviceNameMatchedAliases.contains)
+            let containsRoomMatched = entry.memberAliases.contains(where: roomMatchedAliases.contains)
             let containsPreferred = entry.memberDeviceIds.contains(where: preferredDeviceIds.contains)
             let priority: Int
-            if mentionsRoom || containsMentioned {
-                priority = 0
-            } else if containsPreferred {
+            if mentionsRoom || containsNamed || containsRoomMatched {
                 priority = 1
-            } else {
+            } else if containsPreferred {
                 priority = 2
+            } else {
+                priority = 3
             }
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
         }
         for entry in sceneEntries {
-            let priority = matchedSceneNames.contains(entry.name) ? 0 : 2
+            let priority = sceneNameMatchedAliases.contains(entry.alias) ? 0 : 3
             candidates.append(Candidate(row: entry.row, priority: priority, order: order))
             order += 1
         }
@@ -645,10 +664,16 @@ public struct IntentCatalog: Sendable {
 
     /// Finds the longest catalog names that occur in `mention`, claiming their ranges first so
     /// prefix collisions ("设备1" vs "设备127", "房间7" vs "房间70") only keep the exact target.
-    private static func matchedNames(in mention: String, names: [String]) -> Set<String> {
-        guard !mention.isEmpty else { return [] }
+    /// Ranges already claimed by a higher-priority match (for example a room name inside an
+    /// explicitly named device) are excluded.
+    private static func matchedNames(
+        in mention: String,
+        names: [String],
+        excluding claimedRanges: [Range<String.Index>] = []
+    ) -> (names: Set<String>, ranges: [Range<String.Index>]) {
+        guard !mention.isEmpty else { return ([], claimedRanges) }
         let uniqueNames = Set(names.filter { !$0.isEmpty })
-        var claimed: [Range<String.Index>] = []
+        var claimed = claimedRanges
         var matched: Set<String> = []
         for name in uniqueNames.sorted(by: { $0.count > $1.count }) {
             var searchStart = mention.startIndex
@@ -665,7 +690,7 @@ public struct IntentCatalog: Sendable {
                 searchStart = range.upperBound
             }
         }
-        return matched
+        return (matched, claimed)
     }
 
     static func stateSummary(_ device: SmartDevice) -> String {
