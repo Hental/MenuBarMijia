@@ -148,23 +148,13 @@ import { bindEvents as bindEventsImpl } from "./bindEvents.js";
 import { renderPanel } from "./panelView.js";
 import { applyGlobalHotkey, applyInterfaceLanguage, applyTemperatureSetting, bindGlobalKeys, checkForAppUpdate, hydrateCredentials, initializeCredentials, openSettingsSheet, openUpdatePage, osLanguages, persistCredentials, restoreUpdateState, saveSettings, saveUpdateState, startTimerLoop, startUpdateInstall, submitServiceEndpoints } from "./appLifecycle.js";
 import { handleNaturalCommand, learnShortcut } from "./naturalCommand.js";
+import { applyCommand, dispatchCloudCommand, markCloudValuesFresh, markCloudValuesStale } from "./commandDispatch.js";
 import { cloudPanelStructureFingerprint, cloudPresentationFingerprint, cloudSnapshotIsStale, filterBySelectedHome, foldGrouped, patchCloudPresentation, refreshDevices, refreshHADevices, withSharedHomeDevices } from "./cloudRefresh.js";
 import { buildInverseCommand, executeIntents, executeSingleCommand, habitSequences, lastHabitAction, readBackMatches, recordHabits, saveHabitMemory, unrecordHabits } from "./intentExecution.js";
 import { bindLayoutGestures } from "./layoutGestures.js";
 import { bindSettingsEvents } from "./settingsEvents.js";
 import { hasMatchingDomShape, inputKeepsDraft, morphMatchingDom, parseSingleElement, waitForCameraFrameGap } from "./dom.js";
 export { waitForCameraFrameGap } from "./dom.js";
-function withReadPower(command: DeviceCommand, isOn: boolean): DeviceCommand {
-  switch (command.kind) {
-    case "setLightPower":
-    case "setClimatePower":
-    case "setFanPower":
-    case "setSwitch":
-      return { ...command, isOn };
-    default:
-      return command;
-  }
-}
 
 export class MenuMijiaWindowsApp {
   public readonly loadedSettings: LoadedSettings = loadSettings();
@@ -992,227 +982,19 @@ export class MenuMijiaWindowsApp {
   }
 
   public async applyCommand(command: DeviceCommand, readBackPower = false): Promise<boolean> {
-    const sourceRevision = this.sourceRevision;
-    try {
-      if (this.settings.connectionMode === "homeAssistant") command = homeAssistantCommand(command, this.devices);
-      const readPower = await this.dispatchCloudCommand(command, readBackPower);
-      if (typeof readPower === "boolean") command = withReadPower(command, readPower);
-    } catch (error) {
-      if (sourceRevision !== this.sourceRevision) return false;
-      this.replyBanner = {
-        text: error instanceof Error ? error.message : String(error),
-        source: t("控制失败"),
-        isError: true,
-      };
-      this.render();
-      return false;
-    }
-    if (sourceRevision !== this.sourceRevision) return false;
-    this.localControlRevision += 1;
-    for (const dev of this.devices) {
-      const k = dev.kind;
-      switch (command.kind) {
-        case "setLightPower":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-          }
-          break;
-        case "setLightBrightness":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = command.percent > 0;
-            k.brightnessPercent = command.percent;
-          }
-          break;
-        case "setLightColorTemp":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.colorTempKelvin = command.kelvin;
-            k.currentEffect = null;
-          }
-          break;
-        case "setLightEffect":
-          if (k.kind === "light" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.currentEffect = command.effect;
-          }
-          break;
-        case "setClimatePower":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-            k.hvacMode = command.isOn ? command.resumeMode : "off";
-          }
-          break;
-        case "setClimateMode":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.isOn = command.hvacMode !== "off";
-            k.hvacMode = command.hvacMode;
-          }
-          break;
-        case "setClimateTemperature":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            if (this.settings.connectionMode !== "homeAssistant" || k.hvacMode !== "off") {
-              k.isOn = true;
-            }
-            k.targetTemperature = command.temperature;
-          }
-          break;
-        case "setClimateFanMode":
-          if (k.kind === "climate" && k.entityId === command.entityId) {
-            k.fanMode = command.fanMode;
-          }
-          break;
-        case "setFanPower":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = command.isOn;
-          }
-          break;
-        case "setFanPercentage":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = command.percent > 0;
-            k.percentage = command.percent;
-            const fav = k.availablePresetModes.find((m) => m.toLowerCase() === "favorite");
-            if (fav) k.presetMode = fav;
-          }
-          break;
-        case "setFanPresetMode":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.presetMode = command.presetMode;
-          }
-          break;
-        case "setFanOscillating":
-          if (k.kind === "fan" && k.entityId === command.entityId) {
-            k.isOn = true;
-            k.isOscillating = command.oscillating;
-          }
-          break;
-        case "setSwitch":
-          if (k.kind === "plug" && k.switchEntityId === command.entityId && !command.entityId.startsWith("button.")) {
-            k.isOn = command.isOn;
-          } else if (k.kind === "camera") {
-            if (k.entityId === command.entityId) {
-              k.isOn = command.isOn;
-              if (this.cameraLive.activeLiveCameraId === dev.id && !this.cameraLive.liveCameraHidden) {
-                if (command.isOn) {
-                  this.cameraLive.reconnectCameraLiveView();
-                } else {
-                  this.cameraLive.stopLiveTransport();
-                  this.cameraLive.liveCameraLoading = false;
-                }
-              }
-            } else if (k.motionDetectionEntityId === command.entityId) {
-              k.isMotionDetectionOn = command.isOn;
-            }
-          }
-          break;
-        case "setSelectOption":
-          if (k.kind === "camera" && k.entityId === command.entityId) {
-            k.nightShot = command.option;
-          } else if (k.kind === "fridge" && k.modeEntityId === command.entityId) {
-            k.currentMode = command.option;
-          }
-          break;
-        case "setNumberValue":
-          if (k.kind === "fridge") {
-            if (k.fridgeTargetEntityId === command.entityId) {
-              k.fridgeTargetTemp = command.value;
-            } else if (k.freezerTargetEntityId === command.entityId) {
-              k.freezerTargetTemp = command.value;
-            }
-          }
-          break;
-        case "vacuumAction":
-          if (k.kind === "vacuum" && k.entityId === command.entityId) {
-            k.status =
-              command.action === "start"
-                ? "cleaning"
-                : command.action === "pause"
-                  ? "paused"
-                  : "returning";
-          }
-          break;
-        case "activateScene":
-          break;
-      }
-    }
-
-    return true;
+    return applyCommand(this, command, readBackPower);
   }
 
   private async dispatchCloudCommand(command: DeviceCommand, readBackPower = false): Promise<boolean | null> {
-    const sourceRevision = this.sourceRevision;
-    if (this.settings.connectionMode === "demo") return null;
-    if (this.settings.connectionMode === "homeAssistant") {
-      const client = new HomeAssistantClient(this.settings.haBaseURL, this.settings.haToken);
-      await this.endpointSubmission;
-      if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
-      await client.execute(command);
-      return null;
-    }
-    if (!this.settings.miSession) throw new Error(t("请先扫码登录米家"));
-    const session = this.settings.miSession;
-    const dev = this.devices.find((d) => {
-      const k = d.kind;
-      if (k.kind === "plug") return k.switchEntityId === command.entityId || k.childLockEntityId === command.entityId;
-      if (k.kind === "camera") return k.entityId === command.entityId || k.motionDetectionEntityId === command.entityId;
-      if (k.kind === "fridge") {
-        return (
-          k.modeEntityId === command.entityId ||
-          k.fridgeTargetEntityId === command.entityId ||
-          k.freezerTargetEntityId === command.entityId
-        );
-      }
-      if (k.kind === "sensor") return false;
-      return k.entityId === command.entityId;
-    });
-    if (!dev) throw new Error(t("无法找到指令对应的设备"));
-
-    const spec = await this.specResolver.resolve({
-      did: dev.id,
-      name: dev.name,
-      model: dev.model,
-      isOnline: dev.isOnline,
-      specType: null,
-    });
-    const mapped = MiotCommandMapper.map(command, spec);
-    if (sourceRevision !== this.sourceRevision) throw new Error("Connection source changed");
-    const client = new MiCloudClient(session, this.transport);
-    if (mapped.kind === "setProps") {
-      await client.setProps(mapped.writes);
-      if (readBackPower) {
-        const power = mapped.writes.find((write) => typeof write.value === "boolean");
-        if (power) {
-          let read: Map<string, unknown>;
-          try {
-            read = await client.getProps([power]);
-          } catch (error) {
-            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
-            throw error;
-          }
-          const value = read.get(propKeyString(power));
-          const isOn = readMiotPower(value);
-          if (isOn === null) {
-            // The write may have landed; the old row is no longer a trusted reading.
-            if (sourceRevision === this.sourceRevision) this.markCloudValuesStale();
-            throw new Error(t("未能读回设备状态"));
-          }
-          return isOn;
-        }
-      }
-    } else {
-      await client.action(mapped.call);
-    }
-    return null;
+    return dispatchCloudCommand(this, command, readBackPower);
   }
 
   public markCloudValuesStale(): void {
-    if (this.settings.connectionMode === "xiaomiCloud" && this.devices.length > 0) {
-      this.cloudValuesStale = true;
-    }
+    markCloudValuesStale(this);
   }
 
   public markCloudValuesFresh(): void {
-    if (this.settings.connectionMode === "xiaomiCloud") this.cloudValuesStale = false;
+    markCloudValuesFresh(this);
   }
 
   private get valuesAreStale(): boolean {
