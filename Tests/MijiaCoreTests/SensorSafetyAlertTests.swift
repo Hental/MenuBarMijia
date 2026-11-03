@@ -4,7 +4,10 @@ import Testing
 @testable import MijiaCore
 
 private final class SensorAlertObservationFlag: @unchecked Sendable {
-    var raised = false
+    private let lock = NSLock()
+    private var value = false
+    var raised: Bool { lock.withLock { value } }
+    func raise() { lock.withLock { value = true } }
 }
 
 @MainActor
@@ -60,10 +63,13 @@ struct SensorSafetyAlertTests {
         withObservationTracking {
             _ = store.isSensorAlertEnabled(.contact)
         } onChange: {
-            flag.raised = true
+            flag.raise()
         }
 
         store.setSensorAlertEnabled(.contact, true)
+        for _ in 0..<100 where !flag.raised {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         #expect(flag.raised)
         #expect(store.isSensorAlertEnabled(.contact))
         #expect(store.userDefaults.object(forKey: SensorAlertKind.contact.defaultsKey) as? Bool == true)
