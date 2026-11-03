@@ -168,21 +168,24 @@ jobs:
   macos-test:
     needs: changes
     if: needs.changes.outputs.code == 'true' && inputs.record_only != true
-    # 全部 Swift 单测（含快照）与 App Intents 元数据生成。与 Release 通用二进制分开，两台机器并行。
+    # 全部 Swift 单测（含快照）。App Intents 与 Release 通用二进制各用一台机器，三路并行。
     runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Toolchain info
         run: xcodebuild -version && swift --version
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
-          path: |
-            .build
-            .derived
-          key: spm-debug-v1-${{ runner.os }}-${{ github.sha }}
+          path: .build
+          key: spm-debug-v2-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
+            spm-debug-v2-${{ runner.os }}-
             spm-debug-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Swift cache
+        run: bash scripts/ci_restore_mtimes.sh
       - name: Perturb baseline for the manual snapshot failure probe
         if: github.event_name == 'workflow_dispatch' && inputs.snapshot_failure_probe
         run: sips -z 1 1 Tests/MenuBarMijiaAppTests/__Snapshots__/SnapshotTests/deviceCardSnapshots.card-light-classic-zh-light.png
@@ -191,41 +194,73 @@ jobs:
           # 快照不一致时把差异图写到固定目录，便于作为 artifact 下载（#46）。
           SNAPSHOT_ARTIFACTS: "${{ github.workspace }}/snapshot-failed"
         run: swift test
-      - name: App Intents metadata
-        run: APP_INTENTS_ONLY=1 bash scripts/build_app.sh
       - name: Trim Swift build cache
         if: success()
         run: |
-          find .build .derived -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
-          rm -f .derived/appintents-build.log
-          du -sh .build .derived 2>/dev/null || true
+          find .build -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
+          du -sh .build 2>/dev/null || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: snapshot-diff
-          path: |
-            snapshot-failed
-            .derived/appintents-build.log
+          path: snapshot-failed
           if-no-files-found: ignore
           include-hidden-files: true
+
+  macos-appintents:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && inputs.record_only != true
+    # xcodebuild 提取 App Intents。和 swift test 串在一台 3 核机器上时，冷启动会把两者相加。
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .derived
+          key: appintents-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            appintents-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Xcode cache
+        run: bash scripts/ci_restore_mtimes.sh
+      - name: App Intents metadata
+        run: APP_INTENTS_ONLY=1 bash scripts/build_app.sh
+      - name: Trim Xcode derived data
+        if: success()
+        run: |
+          find .derived -type d \( -name ModuleCache -o -name Index.noindex \) -prune -exec rm -rf {} + 2>/dev/null || true
+          rm -f .derived/appintents-build.log
+          du -sh .derived 2>/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: appintents-log
+          path: .derived/appintents-build.log
+          if-no-files-found: ignore
 
   macos-release:
     needs: changes
     if: needs.changes.outputs.code == 'true' && inputs.record_only != true
     # Release -O 通用二进制（#2 这类崩溃只在 -O 下出现）以及符号表路径泄露检查。
-    # App Intents 元数据在 macos-test 上并行生成，避免和这次编译挤在同一台 3 核机器上。
     runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Toolchain info
         run: xcodebuild -version && swift --version
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: .build
-          key: spm-release-v1-${{ runner.os }}-${{ github.sha }}
+          key: spm-release-v2-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
+            spm-release-v2-${{ runner.os }}-
             spm-release-v1-${{ runner.os }}-
+      - name: Restore source mtimes for the Swift cache
+        run: bash scripts/ci_restore_mtimes.sh
       - name: Build app (release universal)
         env:
           SKIP_APP_INTENTS: "1"
@@ -238,9 +273,9 @@ jobs:
           du -sh .build 2>/dev/null || true
 
   macos:
-    # 历史 required check 的名字。文档-only 时两个 macOS job 被跳过，这里仍成功，
+    # 历史 required check 的名字。文档-only 时三个 macOS job 被跳过，这里仍成功，
     # 避免 path filter 把 `CI / macos` 卡在 Pending。任一 macOS job 失败则这里失败。
-    needs: [changes, macos-test, macos-release]
+    needs: [changes, macos-test, macos-release, macos-appintents]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -253,7 +288,8 @@ jobs:
           RECORD_ONLY: ${{ inputs.record_only }}
           TESTS: ${{ needs.macos-test.result }}
           RELEASE: ${{ needs.macos-release.result }}
-        run: bash scripts/ci_require_jobs.sh "macos-test:$TESTS" "macos-release:$RELEASE"
+          INTENTS: ${{ needs.macos-appintents.result }}
+        run: bash scripts/ci_require_jobs.sh "macos-test:$TESTS" "macos-release:$RELEASE" "macos-appintents:$INTENTS"
 
   snapshot-record:
     # 仅手动触发（workflow_dispatch）：以 record 模式渲染 UI 快照基线（#46）。
@@ -285,7 +321,7 @@ jobs:
   ci:
     # 始终运行的汇总检查。文档-only 时重型 job 全部 skipped，这里成功；
     # 任何一个实际失败（不是 skipped）则失败。适合作为唯一的 required check。
-    needs: [changes, nas-safety, linux-core, windows-core, windows-installer, macos-test, macos-release]
+    needs: [changes, nas-safety, linux-core, windows-core, windows-installer, macos-test, macos-release, macos-appintents]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -302,6 +338,7 @@ jobs:
           WINDOWS_INSTALLER: ${{ needs.windows-installer.result }}
           MACOS_TEST: ${{ needs.macos-test.result }}
           MACOS_RELEASE: ${{ needs.macos-release.result }}
+          MACOS_INTENTS: ${{ needs.macos-appintents.result }}
         run: >-
           bash scripts/ci_require_jobs.sh
           "nas-safety:$NAS"
@@ -310,3 +347,4 @@ jobs:
           "windows-installer:$WINDOWS_INSTALLER"
           "macos-test:$MACOS_TEST"
           "macos-release:$MACOS_RELEASE"
+          "macos-appintents:$MACOS_INTENTS"
