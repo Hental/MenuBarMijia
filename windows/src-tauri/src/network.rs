@@ -13,8 +13,6 @@ const BUILT_IN_HOST_SUFFIXES: &[&str] = &[
     "api.github.com",
 ];
 
-/// Windows release page opened from the tray/update row (#39).
-
 pub(crate) fn normalize_host(raw: &str) -> String {
     raw.trim()
         .trim_end_matches('.')
@@ -83,6 +81,7 @@ pub(crate) fn allowed_origins_snapshot() -> Result<HashSet<String>, String> {
 }
 
 
+#[derive(Serialize)]
 pub(crate) struct NativeHttpResponse {
     pub(crate) status: u16,
     pub(crate) headers: HashMap<String, String>,

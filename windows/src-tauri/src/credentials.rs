@@ -28,6 +28,7 @@ pub(crate) fn credential_entry(name: &str) -> Result<keyring::Entry, String> {
 }
 
 
+#[tauri::command]
 pub(crate) fn secure_store_get(name: String) -> Result<Option<String>, String> {
     let entry = credential_entry(&name)?;
     match entry.get_password() {

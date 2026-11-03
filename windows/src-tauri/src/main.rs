@@ -102,6 +102,7 @@ fn parse_global_shortcut(raw: &str) -> Result<(Shortcut, String), String> {
     Ok((shortcut, trimmed.to_string()))
 }
 
+/// Windows release page opened from the tray/update row (#39).
 const RELEASE_PAGE_URL: &str = "https://github.com/jryang1997/MenuBarMijia/releases/latest";
 
 /// Offline Ed25519 public key (32-byte raw, base64) shared with `UpdateChecker.updateSigningPublicKeyBase64` (ADR-0005).
@@ -212,7 +213,6 @@ fn set_global_shortcut(app: AppHandle, enabled: bool, shortcut: String) -> Resul
     Ok(())
 }
 
-#[derive(Serialize)]
 fn main() {
     let default_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyM);
     if let Ok(mut guard) = TRAY_AND_HOTKEY_STATE.write() {
