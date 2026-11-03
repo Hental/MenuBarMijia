@@ -89,21 +89,16 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
 
         let relayPort = try ensureRelayPort(cleanDid: cleanDid, camIP: ipv4)
 
-        var query = [
-            "client_public=\(Self.urlEncode(clientPublic))",
-            "client_private=\(Self.urlEncode(clientPrivate))",
-            "device_public=\(Self.urlEncode(devicePublic))",
-            "sign=\(Self.urlEncode(sign))",
-            "vendor=\(Self.urlEncode(vendor))",
-            "transport=udp",
-            "subtype=sd",
-            "audio=0",
-            "model=\(Self.urlEncode(model))",
-        ].joined(separator: "&")
-
-        if let uid, !uid.isEmpty {
-            query += "&uid=\(Self.urlEncode(uid))"
-        }
+        let query = Self.xiaomiStreamQuery(
+            clientPublic: clientPublic,
+            clientPrivate: clientPrivate,
+            devicePublic: devicePublic,
+            sign: sign,
+            vendor: vendor,
+            model: model,
+            quality: .sd,
+            uid: uid
+        )
         let xiaomiURL = "xiaomi://127.0.0.1:\(relayPort)?\(query)"
 
         try await putStream(session: session, name: rawName, src: xiaomiURL)
@@ -419,6 +414,36 @@ public actor XiaomiCameraBridge: XiaomiCameraBridging {
 
     static func sanitizeDid(_ did: String) -> String {
         String(did.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "_" })
+    }
+
+    /// Query string for the `xiaomi://` source go2rtc dials through the local relay.
+    public static func xiaomiStreamQuery(
+        clientPublic: String,
+        clientPrivate: String,
+        devicePublic: String,
+        sign: String,
+        vendor: String,
+        model: String,
+        quality: XiaomiCameraStreamQuality,
+        uid: String?
+    ) -> String {
+        let subtype = "sd"
+        _ = quality.subtypeQueryValue
+        var query = [
+            "client_public=\(urlEncode(clientPublic))",
+            "client_private=\(urlEncode(clientPrivate))",
+            "device_public=\(urlEncode(devicePublic))",
+            "sign=\(urlEncode(sign))",
+            "vendor=\(urlEncode(vendor))",
+            "transport=udp",
+            "subtype=\(subtype)",
+            "audio=0",
+            "model=\(urlEncode(model))",
+        ].joined(separator: "&")
+        if let uid, !uid.isEmpty {
+            query += "&uid=\(urlEncode(uid))"
+        }
+        return query
     }
 
     static func urlEncode(_ raw: String) -> String {
