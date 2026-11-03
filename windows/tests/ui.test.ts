@@ -1184,7 +1184,7 @@ describe("Smart camera support and live view (#97)", () => {
     assert.match(tile("camera.living_cam"), /侦测开/);
   });
 
-  it("persists custom camera stream URLs across restarts, rewrites local go2rtc m3u8 to mjpeg, and wakes sleeping cameras straight into the stream", async () => {
+  it("persists a custom camera URL and keeps its scheme when the host is localhost", async () => {
     localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
       connectionMode: "demo",
       hasCompletedOnboarding: true,
@@ -1193,29 +1193,27 @@ describe("Smart camera support and live view (#97)", () => {
     await click('[data-body-device="camera.living_cam"]');
     await click("#btn-toggle-camera-url");
     const input = element("#camera-stream-url-input") as HTMLInputElement;
-    input.value = "http://127.0.0.1:43123/api/stream.m3u8?src=living_custom";
+    input.value = "https://localhost:8443/live.m3u8";
     await click("#btn-save-camera-url");
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
 
-    // Re-instantiate the app to verify the saved stream URL survived in localStorage.
     document.body.innerHTML = '<div id="app"></div>';
     new MenuMijiaWindowsApp(element("#app"));
     await click('[data-body-device="camera.living_cam"]');
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
 
-    // Put the camera to sleep, then wake it from inside the modal and verify the stream resumes immediately.
     await click('.cc-camera-live-sheet .cc-segmented-pills [data-toggle-device="camera.living_cam"]');
     assert.match(document.body.textContent ?? "", /摄像机处于物理休眠状态/);
     await click('.cc-camera-stage.is-sleeping [data-toggle-device="camera.living_cam"]');
     assert.equal(
-      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
-      "http://127.0.0.1:43123/api/stream.mjpeg?src=living_custom",
+      (element("#cc-camera-video") as HTMLVideoElement).getAttribute("src"),
+      "https://127.0.0.1:8443/live.m3u8",
     );
   });
 
@@ -1294,10 +1292,13 @@ describe("Smart camera support and live view (#97)", () => {
   it("bridges a loopback HLS server that is not the owned go2rtc origin", async () => {
     const bridgedCalls: string[] = [];
     const frameCalls: string[] = [];
+    let bridgedOwnedGo2rtc = false;
     const invoke = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
       if (name === "go2rtc_endpoint") return { origin: "http://127.0.0.1:43123", authorization: "Basic aa" };
       if (name === "bridge_hls_camera_stream") {
-        bridgedCalls.push(String(args.hlsUrl));
+        const hlsUrl = String(args.hlsUrl);
+        if (hlsUrl.includes("43123")) bridgedOwnedGo2rtc = true;
+        bridgedCalls.push(hlsUrl);
         return "cam_mjpeg_living";
       }
       if (name === "go2rtc_jpeg_frame") {
@@ -1321,6 +1322,13 @@ describe("Smart camera support and live view (#97)", () => {
 
     bridgedCalls.length = 0;
     await click("#btn-toggle-camera-url");
+    (element("#camera-stream-url-input") as HTMLInputElement).value = "https://localhost:8443/live.m3u8";
+    await click("#btn-save-camera-url");
+    await waitFor(() => bridgedCalls.length === 1);
+    assert.deepEqual(bridgedCalls, ["https://127.0.0.1:8443/live.m3u8"]);
+
+    bridgedCalls.length = 0;
+    await click("#btn-toggle-camera-url");
     (element("#camera-stream-url-input") as HTMLInputElement).value = "http://127.0.0.1:43123/api/stream.m3u8?src=cam";
     await click("#btn-save-camera-url");
     await waitFor(() => frameCalls.includes("cam"));
@@ -1329,6 +1337,18 @@ describe("Smart camera support and live view (#97)", () => {
       (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
       "data:image/jpeg;base64,aGVsbG8",
     );
+
+    const framesBeforeReopen = frameCalls.length;
+    document.body.innerHTML = '<div id="app"></div>';
+    new MenuMijiaWindowsApp(element("#app"));
+    await click('[data-body-device="camera.living_cam"]');
+    await waitFor(() => frameCalls.length > framesBeforeReopen && document.querySelector("#cc-camera-live-img") !== null);
+    assert.equal(frameCalls.at(-1), "cam");
+    assert.equal(
+      (element("#cc-camera-live-img") as HTMLImageElement).getAttribute("src"),
+      "data:image/jpeg;base64,aGVsbG8",
+    );
+    assert.equal(bridgedOwnedGo2rtc, false);
   });
 
   it("does not start a bridge after the camera closes during the endpoint refresh", async () => {

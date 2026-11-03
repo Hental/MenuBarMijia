@@ -3898,12 +3898,12 @@ export class MenuMijiaWindowsApp {
       : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraLoading = false;
     invokeTauriVoid("set_pin_popover", { pin: true });
-    if (dev.kind.isOn) {
-      if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
-        void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
-      } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
-        void this.resolveCloudCameraStream(dev);
-      }
+    if (dev.kind.isOn && this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
+    } else if (dev.kind.isOn && this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+      void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
+    } else if (dev.kind.isOn && !this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
+      void this.resolveCloudCameraStream(dev);
     }
     this.render();
   }
@@ -4102,13 +4102,30 @@ export class MenuMijiaWindowsApp {
    * remote `.m3u8` playlists are transcoded to MJPEG through `bridge_hls_camera_stream`.
    */
   private normalizeWindowsCameraStreamUrl(rawUrl: string): string {
-    return rawUrl
-      .trim()
-      .replace(/^https?:\/\/localhost:(\d+)(\/|$)/i, "http://127.0.0.1:$1$2")
-      .replace(
-        /^(https?:\/\/127\.0\.0\.1:\d+\/api\/)stream\.m3u8(\?|$)/i,
-        "$1stream.mjpeg$2",
-      );
+    return rawUrl.trim().replace(/^(https?):\/\/localhost:(\d+)(\/|$)/i, "$1://127.0.0.1:$2$3");
+  }
+
+  private async playCustomCameraUrl(devId: string, playable: string): Promise<void> {
+    const token = this.liveCameraToken;
+    await this.refreshOwnedGo2rtcOrigin();
+    if (this.liveCameraToken !== token || this.activeLiveCameraId !== devId) return;
+    const normalized = this.normalizeWindowsCameraStreamUrl(playable);
+    const ownedSrc = this.ownedGo2rtcStreamName(normalized);
+    if (ownedSrc) {
+      this.liveCameraStreamURL = ownedSrc;
+      this.liveCameraError = null;
+      this.liveCameraLoading = false;
+      this.startMjpegTransport(ownedSrc);
+      this.render();
+      this.attachLiveMedia();
+      return;
+    }
+    this.liveCameraStreamURL = normalized;
+    if (this.needsHlsTranscodeBridge(normalized)) {
+      void this.bridgeHlsStreamToMjpeg(devId, normalized);
+    } else {
+      this.render();
+    }
   }
 
   private isOwnedGo2rtcApiUrl(url: string): boolean {
@@ -4197,7 +4214,9 @@ export class MenuMijiaWindowsApp {
       : this.resolveHaCameraStreamUrl(dev);
     this.liveCameraError = null;
     this.liveCameraLoading = false;
-    if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
+    if (this.liveCameraStreamURL && window.__TAURI_INTERNALS__?.invoke) {
+      void this.playCustomCameraUrl(dev.id, this.liveCameraStreamURL);
+    } else if (this.liveCameraStreamURL && this.needsHlsTranscodeBridge(this.liveCameraStreamURL)) {
       void this.bridgeHlsStreamToMjpeg(dev.id, this.liveCameraStreamURL);
     } else if (!this.liveCameraStreamURL && this.settings.connectionMode === "xiaomiCloud") {
       void this.resolveCloudCameraStream(dev);
