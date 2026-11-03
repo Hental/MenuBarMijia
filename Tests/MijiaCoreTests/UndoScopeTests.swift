@@ -41,10 +41,11 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.selectRoom("a")
         store.turnAllOff()
+        store.pauseUndoBannerCountdown()
         let other = try #require(store.devices.first { $0.id == "b" })
         let task = try #require(store.togglePrimary(other))
         _ = await task.value
-        store.undoTurnAllOff()
+        _ = try #require(store.undoTurnAllOff())
         await provider.waitForCommands(3)
         #expect(store.devices.first { $0.id == "a" }?.isActiveOn == true)
         #expect(store.devices.first { $0.id == "b" }?.isActiveOn == false)
@@ -56,10 +57,11 @@ struct UndoScopeTests {
         let (store, provider, suite) = try await makeStore()
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.turnAllOff()
+        store.pauseUndoBannerCountdown()
         await provider.waitForCommands(2)
         await provider.replace(SynthesizedHome(devices: [light("a"), light("c")]))
         await waitForDevices(store) { $0.map(\.id) == ["a", "c"] }
-        store.undoTurnAllOff()
+        _ = try #require(store.undoTurnAllOff())
         await provider.waitForCommands(3)
         #expect(store.devices.map(\.id) == ["a", "c"])
         #expect((await provider.commands).filter { $0 == .setLightPower(entityId: "light.b", isOn: true) }.isEmpty)
@@ -150,9 +152,10 @@ struct UndoScopeTests {
         let (store, provider, suite) = try await makeStore()
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.turnAllOff()
+        store.pauseUndoBannerCountdown()
         await provider.waitForCommands(2)
         await provider.pauseNext()
-        store.undoTurnAllOff()
+        _ = try #require(store.undoTurnAllOff())
         await provider.waitUntilPaused()
         store.switchBackend(.demo)
         let next = try #require(store.provider as? DemoHomeProvider)

@@ -141,9 +141,8 @@ struct DualSourceIntegrationTests {
             Issue.record("handoff lost the light card")
         }
         _ = await store.togglePrimary(miDeviceForCommand)?.value
-        store.executeQuickAction(.lightsOff)
+        await store.executeQuickAction(.lightsOff)?.value
         await store.undoTurnAllOff()?.value
-        try await Task.sleep(for: .milliseconds(80))
         let miCommands = await miMock.executedCommands
         #expect(miCommands.filter { $0.targetEntityId == "miot:\(did):2" }.count >= 2)
         #expect((await haMock.executedCommands).count == haCommands.count)
@@ -446,6 +445,7 @@ struct DualSourceIntegrationTests {
 
         store.turnAllOff()
         try await waitUntil { store.undoBanner != nil }
+        store.pauseUndoBannerCountdown()
         for _ in 0..<100 where (await haMock.executedCommands.isEmpty) {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -525,12 +525,14 @@ struct DualSourceIntegrationTests {
 
         await haMock.setShouldFail(true)
         store.setLightBrightness(canonical, percent: 45)
+        let debouncedTask = try #require(store.debounceTasks["\(canonical).brightness"])
         await haMock.sendStatus(.disconnected("HA down"))
         try await waitUntil {
             store.deviceBackend(for: canonical) == .xiaomiCloud
         }
-
-        try await Task.sleep(for: .milliseconds(200))
+        await debouncedTask.value
+        #expect(debouncedTask.isCancelled)
+        #expect(store.debounceTasks.isEmpty)
         guard case .light(let spec) = store.devices.first?.kind else {
             Issue.record("expected light device")
             return

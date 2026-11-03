@@ -887,15 +887,12 @@ extension HomeStore {
     func scheduleMiSessionExpiryTransition(now: Date = Date()) {
         miSessionExpiryTimerTask?.cancel()
         miSessionExpiryTimerTask = nil
-        guard let expiresAt = miSessionExpiresAt else { return }
-        let warnAt = expiresAt.addingTimeInterval(-MiSessionExpiryPolicy.warningLeadTime)
-        let nextBoundary: Date? = if now < warnAt {
-            warnAt
-        } else if now < expiresAt {
-            expiresAt
-        } else {
-            nil
-        }
+        let accountEnds = miAccounts.compactMap(\.session.expiresAt)
+        let candidateEnds = accountEnds.isEmpty ? [miSessionExpiresAt].compactMap { $0 } : accountEnds
+        let nextBoundary = candidateEnds
+            .flatMap { [$0.addingTimeInterval(-MiSessionExpiryPolicy.warningLeadTime), $0] }
+            .filter { $0 > now }
+            .min()
         guard let nextBoundary else { return }
         let delay = max(0.05, nextBoundary.timeIntervalSince(now) + 0.05)
         miSessionExpiryTimerTask = Task { @MainActor [weak self] in
@@ -913,6 +910,16 @@ extension HomeStore {
 
     public var miSessionShowsExpired: Bool {
         usesMiSessionLifecycle && miSessionExpiryState == .expired
+    }
+
+    /// True when Xiaomi Cloud is the only configured source and every signed-in account has expired,
+    /// so no live device can be controlled until the user scans again.
+    public var miSessionBlocksControl: Bool {
+        let _ = miSessionExpiryRevision
+        guard miSessionShowsExpired, !hasHASource else { return false }
+        guard !miAccounts.isEmpty else { return true }
+        let now = Date()
+        return miAccounts.allSatisfy { $0.session.expiryState(at: now) == .expired }
     }
 
     public var miSessionExpiringSoonDate: Date? {

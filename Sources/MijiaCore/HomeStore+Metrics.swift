@@ -116,7 +116,7 @@ extension HomeStore {
     }
 
     public var menuBarSymbolName: String {
-        if miSessionShowsExpired { return "house.slash" }
+        if miSessionBlocksControl { return "house.slash" }
         return activeDeviceCount > 0 ? "house.fill" : "house"
     }
 

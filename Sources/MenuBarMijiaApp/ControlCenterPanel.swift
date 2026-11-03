@@ -753,8 +753,15 @@ public struct ControlCenterPanel: View {
             // Several Mi Cloud accounts in one panel: devices stay grouped under the account that
             // owns them. Other backends have no account to group by, even when Mi accounts remain
             // signed in.
-            if store.miAccounts.count > 1, store.selectedRoomId == nil, store.homeBackend == .xiaomiCloud {
-                let accountIds = Set(store.miAccounts.map(\.id))
+            let accountIds = Set(store.miAccounts.map(\.id))
+            let hasAccountOwnedDevices = rest.contains { device in
+                guard let accountId = device.accountId else { return false }
+                return accountIds.contains(accountId)
+            }
+            if store.miAccounts.count > 1,
+               store.selectedRoomId == nil,
+               store.homeBackend != .demo,
+               store.homeBackend == .xiaomiCloud || hasAccountOwnedDevices {
                 for account in store.miAccounts {
                     let members = rest.filter { $0.accountId == account.id }
                     if !members.isEmpty {
@@ -1652,7 +1659,7 @@ public struct ControlCenterPanel: View {
             ForEach(QuickAction.allCases) { action in
                 Button {
                     withAnimation(AppleMotion.snappySpring) {
-                        store.executeQuickAction(action)
+                        _ = store.executeQuickAction(action)
                     }
                 } label: {
                     HStack(spacing: 4) {
