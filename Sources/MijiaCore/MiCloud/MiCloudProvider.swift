@@ -128,6 +128,10 @@ public actor MiCloudProvider: HomeProvider {
         if session.expiryState(at: Date()) == .expired {
             api = nil
             continuation?.yield(.statusChanged(.disconnected(MiCloudError.sessionExpired.localizedDescription)))
+            devices = []
+            rooms = []
+            values = [:]
+            emitSnapshot()
             return
         }
         let api = apiFactory(session)

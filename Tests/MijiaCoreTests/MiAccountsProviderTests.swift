@@ -96,6 +96,22 @@ struct MiAccountsProviderTests {
         await provider.shutdown()
     }
 
+    @Test("An account expired at startup still lets the merged snapshot close the away gap")
+    func startupExpiredAccountClosesAwayGap() async throws {
+        var expired = Self.de
+        expired.session.expiresAt = .distantPast
+        let cnApi = StubMiCloudAPI(devices: [MiotFixtures.lightRecord], rooms: [], values: MiotFixtures.lightValues)
+        let deApi = StubMiCloudAPI(devices: [], rooms: [], values: [:])
+        let provider = Self.makeProvider([Self.cn, expired], cnAPI: cnApi, deAPI: deApi)
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+        #expect(await log.wait { events in
+            await events.snapshots.contains { $0.devices.map(\.id) == ["123"] && $0.closesAwayGap }
+        })
+        #expect(await deApi.deviceListCalls == 0)
+        await provider.shutdown()
+    }
+
     @Test("One expired account does not stop the other")
     func expiredAccountDoesNotStopTheOther() async throws {
         let cnApi = StubMiCloudAPI(
