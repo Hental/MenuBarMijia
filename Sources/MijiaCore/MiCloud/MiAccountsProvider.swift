@@ -231,6 +231,11 @@ public actor MiAccountsProvider: HomeProvider {
         deviceOwners = owners
     }
 
+    private func isDisconnected(_ accountId: String) -> Bool {
+        if case .disconnected? = statuses[accountId] { return true }
+        return false
+    }
+
     private func isDisconnectedWithNoDevices(_ accountId: String) -> Bool {
         guard case .disconnected = statuses[accountId],
               let home = snapshots[accountId],
@@ -291,6 +296,9 @@ public actor MiAccountsProvider: HomeProvider {
             freshAccounts.contains($0.id) || isDisconnectedWithNoDevices($0.id)
         }
         merged.closesAwayGap = closesAwayGap && allFreshAfterWake
+        merged.isInitialLoadComplete = accounts.allSatisfy {
+            snapshots[$0.id] != nil || isDisconnected($0.id)
+        }
         continuation?.yield(.snapshotUpdated(merged))
     }
 

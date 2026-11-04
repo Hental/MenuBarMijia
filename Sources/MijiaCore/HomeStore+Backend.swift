@@ -204,7 +204,7 @@ extension HomeStore {
                 selectedMiHomeId = nil
                 selectRoom(nil)
             }
-            if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
+            if !hasReceivedInitialSnapshot, snapshot.isInitialLoadComplete { hasReceivedInitialSnapshot = true }
             if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
                 miAccountStatuses = snapshot.accountStatuses
             }
