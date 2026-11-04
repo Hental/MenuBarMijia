@@ -103,8 +103,12 @@ export class MiAccountLogin {
           await new Promise((r) => setTimeout(r, 800));
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message.toLowerCase() : "";
-        if (msg.includes("timeout") || msg.includes("timed out")) {
+        const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+        if (
+          msg.includes("timeout") ||
+          msg.includes("timed out") ||
+          msg.startsWith("error sending request for url (")
+        ) {
           continue;
         }
         throw err;

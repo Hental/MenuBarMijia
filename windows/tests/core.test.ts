@@ -297,6 +297,8 @@ describe("MiAccountLogin", () => {
       if (req.url.startsWith("https://lp.example")) {
         polls += 1;
         if (polls === 1) throw new Error("Request timed out");
+        // reqwest 0.12 Display omits `source()` ("operation timed out") when formatted bare (#256).
+        if (polls === 2) throw new Error(`error sending request for url (${req.url})`);
         return {
           status: 200,
           headers: {} as Record<string, string>,
@@ -314,6 +316,7 @@ describe("MiAccountLogin", () => {
     });
 
     const session = await login.waitForScan(ticket);
+    assert.equal(polls, 3);
     assert.equal(session.userId, "1234567890");
     assert.equal(maskedMiUserId(session.userId), "12****90");
     assert.equal(session.serviceToken, "tok123");
