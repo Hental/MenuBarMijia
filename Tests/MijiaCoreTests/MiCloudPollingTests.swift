@@ -129,6 +129,30 @@ struct MiCloudPollingTests {
         await provider.shutdown()
     }
 
+    @Test("Read-back requires fresh power but does not require brightness")
+    func readBackRequiresFreshPower() async throws {
+        let api = StubMiCloudAPI(devices: [MiotFixtures.lightRecord], rooms: [], values: MiotFixtures.lightValues)
+        let provider = MiCloudProvider(sessionLoader: { Self.session }, apiFactory: { _ in api },
+                                       specSource: StubSpecSource(), pollInterval: .seconds(60), selectedHomeLoader: { nil })
+        let (log, task) = start(provider)
+        defer { task.cancel() }
+        #expect(await log.wait { await $0.statuses.contains(.connected) })
+        let power = MiotPropKey(did: "123", siid: 2, piid: 1)
+        await api.removeValue(power)
+        if case .failed = await provider.readBack(deviceId: "123") {} else {
+            Issue.record("Missing power must fail despite cached power and fresh brightness")
+        }
+        await api.setValue(power, .bool(true))
+        if case .published = await provider.readBack(deviceId: "123") {} else {
+            Issue.record("Complete properties must publish")
+        }
+        await api.removeValue(MiotPropKey(did: "123", siid: 2, piid: 2))
+        if case .published = await provider.readBack(deviceId: "123") {} else {
+            Issue.record("Fresh power alone must publish")
+        }
+        await provider.shutdown()
+    }
+
     @Test("A failed read-back disconnect clears after the next successful poll")
     func readBackFailureRecoversConnection() async throws {
         let api = StubMiCloudAPI(devices: [MiotFixtures.lightRecord], rooms: [], values: MiotFixtures.lightValues)
