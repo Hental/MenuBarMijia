@@ -297,6 +297,8 @@ describe("MiAccountLogin", () => {
       if (req.url.startsWith("https://lp.example")) {
         polls += 1;
         if (polls === 1) throw new Error("Request timed out");
+        // `format_reqwest_error` appends the `source()` chain / timeout marker to reqwest's bare Display (#256).
+        if (polls === 2) throw new Error(`error sending request for url (${req.url}): operation timed out`);
         return {
           status: 200,
           headers: {} as Record<string, string>,
@@ -314,9 +316,28 @@ describe("MiAccountLogin", () => {
     });
 
     const session = await login.waitForScan(ticket);
+    assert.equal(polls, 3);
     assert.equal(session.userId, "1234567890");
     assert.equal(maskedMiUserId(session.userId), "12****90");
     assert.equal(session.serviceToken, "tok123");
+  });
+
+  it("surfaces non-timeout reqwest transport errors immediately instead of looping (#256)", async () => {
+    const ticket = MiAccountLogin.parseTicket(
+      '&&&START&&&{"loginUrl":"https://account.xiaomi.com/longPolling/login?ticket=abc","qr":"https://account.xiaomi.com/longPolling/qr?ticket=abc","lp":"https://lp.example/poll","timeout":"30","code":0}',
+    );
+    let polls = 0;
+    const login = new MiAccountLogin(async (req) => {
+      polls += 1;
+      throw new Error(
+        `error sending request for url (${req.url}): client error (Connect): dns error: No such host is known.`,
+      );
+    });
+    await assert.rejects(
+      () => login.waitForScan(ticket),
+      /dns error: No such host is known/i,
+    );
+    assert.equal(polls, 1);
   });
 });
 

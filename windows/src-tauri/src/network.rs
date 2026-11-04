@@ -88,6 +88,27 @@ pub(crate) struct NativeHttpResponse {
     pub(crate) body: String,
 }
 
+/// Formats a `reqwest::Error` with its full `std::error::Error::source()` chain and an explicit
+/// timeout marker (#256). `reqwest` 0.12 stopped inlining `source()` into `Display`, so a 15-second
+/// long-poll timeout formatted via `e.to_string()` alone becomes a bare
+/// `error sending request for url (...)` and breaks timeout-retry detection in the frontend.
+pub(crate) fn format_reqwest_error(err: &reqwest::Error) -> String {
+    let mut detail = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !text.is_empty() && !detail.contains(&text) {
+            detail.push_str(": ");
+            detail.push_str(&text);
+        }
+        source = cause.source();
+    }
+    if err.is_timeout() && !detail.to_ascii_lowercase().contains("timed out") && !detail.to_ascii_lowercase().contains("timeout") {
+        detail.push_str(": operation timed out");
+    }
+    detail
+}
+
 #[tauri::command]
 pub(crate) async fn native_http(
     url: String,
@@ -124,7 +145,7 @@ pub(crate) async fn native_http(
         .redirect(policy)
         .timeout(Duration::from_millis(timeout_ms.unwrap_or(15_000)))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format_reqwest_error(&e))?;
 
     let verb = method.unwrap_or_else(|| "GET".to_string()).to_uppercase();
     let mut req = match verb.as_str() {
@@ -158,7 +179,7 @@ pub(crate) async fn native_http(
         req = req.body(b);
     }
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| format_reqwest_error(&e))?;
     let status = resp.status().as_u16();
     // A stopped redirect comes back as a 3xx here; surfacing it as an error is
     // clearer than handing the frontend a response from a host it may not use.
@@ -180,7 +201,7 @@ pub(crate) async fn native_http(
         }
     }
 
-    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let text = resp.text().await.map_err(|e| format_reqwest_error(&e))?;
     Ok(NativeHttpResponse {
         status,
         headers: out_headers,

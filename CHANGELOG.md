@@ -15,6 +15,7 @@
 - **领普平移推窗器（[#223](https://github.com/jryang1997/MenuBarMijia/issues/223)）**：macOS 小米云把 `window-opener` 显示成门窗卡片。点卡片在关上时打开、开着时关闭。打开会再确认一次，关闭直接执行。展开后可以拖开合百分比、暂停，并看到电量和故障。电机指令只用规格里的 Open、Close、Pause，不猜测数值。全关不会带动窗户。
 - **macOS 在官方规格下载失败时仍显示设备（[#185](https://github.com/jryang1997/MenuBarMijia/issues/185)）**：小米云拿不到已发布规格时，用与 Windows `fallbackSpecs.json` 逐字节相同的表猜一个只读规格。灯、空调、风扇这类还能出现在面板上，但开关和滑条不会发出写入。测试会拦住只改一边的情况。
 - **Windows 摄像机组件与画质（[#200](https://github.com/jryang1997/MenuBarMijia/issues/200), [#97](https://github.com/jryang1997/MenuBarMijia/issues/97)）**：安装包内置 `go2rtc` 与最小 LGPL FFmpeg，首次打开摄像机不再依赖 GitHub 下载；兜底下载改为 3 次重试、120 秒超时，并在失败时给出手动放置路径。实时小窗新增「自动 / 流畅 / 高清 / 超清」画质选择（默认高清），与 macOS 对齐。
+- **Windows 扫码登录超过 15 秒不再中断（[#256](https://github.com/jryang1997/MenuBarMijia/issues/256)）**：`reqwest` 0.12 的 `Display` 不再内联底层 `source()`，导致 15 秒长轮询超时只返回 `error sending request for url (...)` 而缺少 `"timed out"` 字样，前端误判为致命错误并在第 15 秒中断扫码。现在 `native_http` 会拼接完整错误原因链与超时标记，前端长轮询在二维码有效期内继续等待扫码确认。
 
 ### 体验
 - **米家灯组折叠为一张卡片（[#189](https://github.com/jryang1997/MenuBarMijia/issues/189)）**：设备列表刷新时通过 `v2/groupv2/query_status` 缓存每个 `group.*` 灯组的成员（同时接受 `member_ship` / `membership` 两种拼写），面板把成员单灯折叠进灯组卡片，不再重复列出；灯组卡片被隐藏、离线或筛选掉时成员灯照常显示。偏好设置新增「灯组内的单灯不重复显示」（默认开启）。全关、场景、搜索与助手仍按包含成员的完整设备集合计算，折叠只影响可见列表。

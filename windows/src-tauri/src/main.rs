@@ -991,4 +991,52 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn native_http_timeout_preserves_timed_out_marker_for_long_polling() {
+        let _guard = ORIGIN_TEST_LOCK.lock().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = std::thread::spawn(move || {
+            if let Ok((_stream, _peer)) = listener.accept() {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        });
+        let origin = format!("http://127.0.0.1:{}", addr.port());
+        {
+            let mut guard = EXTRA_ALLOWED_ORIGINS.write().expect("allowlist lock");
+            guard.clear();
+            guard.insert(origin.clone());
+        }
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![native_http])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("isolated IPC application");
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("isolated IPC window");
+        let response = tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: "native_http".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().expect("local app origin"),
+                body: tauri::ipc::InvokeBody::Json(serde_json::json!({
+                    "url": format!("{origin}/lp/s?k=test"),
+                    "method": "GET",
+                    "timeoutMs": 40
+                })),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        );
+        let _ = server.join();
+        let error = response.expect_err("slow poll must time out");
+        let message = error.as_str().expect("error string").to_ascii_lowercase();
+        assert!(
+            message.contains("timed out") || message.contains("timeout"),
+            "reqwest 0.12 timeout must surface cause to frontend: {message}"
+        );
+    }
 }
