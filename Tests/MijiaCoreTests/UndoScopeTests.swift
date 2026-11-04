@@ -41,12 +41,13 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.selectRoom("a")
         store.turnAllOff()
+        // Freeze the banner so a loaded CI cannot expire it before the undo below.
         store.pauseUndoBannerCountdown()
         let other = try #require(store.devices.first { $0.id == "b" })
         let task = try #require(store.togglePrimary(other))
         _ = await task.value
         _ = try #require(store.undoTurnAllOff())
-        await provider.waitForCommands(3)
+        #expect(await provider.waitForCommands(3), "the undo must restore the room light")
         #expect(store.devices.first { $0.id == "a" }?.isActiveOn == true)
         #expect(store.devices.first { $0.id == "b" }?.isActiveOn == false)
         #expect(!(await provider.commands).contains(.setLightPower(entityId: "light.b", isOn: true)))
@@ -58,11 +59,11 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.turnAllOff()
         store.pauseUndoBannerCountdown()
-        await provider.waitForCommands(2)
+        #expect(await provider.waitForCommands(2))
         await provider.replace(SynthesizedHome(devices: [light("a"), light("c")]))
         await waitForDevices(store) { $0.map(\.id) == ["a", "c"] }
         _ = try #require(store.undoTurnAllOff())
-        await provider.waitForCommands(3)
+        #expect(await provider.waitForCommands(3))
         #expect(store.devices.map(\.id) == ["a", "c"])
         #expect((await provider.commands).filter { $0 == .setLightPower(entityId: "light.b", isOn: true) }.isEmpty)
     }
@@ -134,7 +135,7 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         await provider.pauseNext()
         let request = Task { await store.runAssistantCommand("关闭a") }
-        await provider.waitUntilPaused()
+        #expect(await provider.waitUntilPaused())
         store.selectMiHome("test-new-home")
         var incoming = light("a")
         incoming.name = "new home device"
@@ -153,10 +154,10 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         store.turnAllOff()
         store.pauseUndoBannerCountdown()
-        await provider.waitForCommands(2)
+        #expect(await provider.waitForCommands(2))
         await provider.pauseNext()
         _ = try #require(store.undoTurnAllOff())
-        await provider.waitUntilPaused()
+        #expect(await provider.waitUntilPaused())
         store.switchBackend(.demo)
         let next = try #require(store.provider as? DemoHomeProvider)
         await provider.release()
@@ -171,7 +172,7 @@ struct UndoScopeTests {
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         await provider.pauseNext()
         let request = Task { await store.runAssistantCommand("关闭所有灯") }
-        await provider.waitUntilPaused()
+        #expect(await provider.waitUntilPaused())
         #expect(store.assistantState == .thinking)
         store.switchBackend(.demo)
         #expect(store.assistantState == .idle)
@@ -199,7 +200,7 @@ struct UndoScopeTests {
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
         let request = Task { await store.runAssistantCommand("please prepare this home for a break") }
-        await provider.waitUntilPaused()
+        #expect(await provider.waitUntilPaused())
         #expect(store.assistantState == .thinking)
         store.pendingCloudConsent = PendingCloudConsent(utterance: "打开a", endpoint: "example.invalid", providerTitle: "test")
         store.assistantSuggestions = [AssistantSuggestion(
@@ -229,8 +230,6 @@ private actor GatedUndoProvider: HomeProvider {
     private var gate: CheckedContinuation<Void, Never>?
     private var failReleasedCommand = false
     private(set) var commands: [DeviceCommand] = []
-    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var commandWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(snapshot: SynthesizedHome) {
         let pair = AsyncStream<HomeProviderEvent>.makeStream()
@@ -239,26 +238,32 @@ private actor GatedUndoProvider: HomeProvider {
         continuation.yield(.snapshotUpdated(snapshot))
     }
     nonisolated func events() -> AsyncStream<HomeProviderEvent> { stream }
-    func waitForCommands(_ count: Int) async {
-        guard commands.count < count else { return }
-        await withCheckedContinuation { commandWaiters.append((count, $0)) }
+    /// Bounded poll: a missed command must fail the test instead of suspending a checked
+    /// continuation forever (a suspended continuation also ignores the suite's time limit, which
+    /// turned a missed undo into a 45-minute CI hang).
+    func waitForCommands(_ count: Int, timeout: Duration = .seconds(10)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while commands.count < count {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return true
     }
-    func waitUntilPaused() async {
-        guard gate == nil else { return }
-        await withCheckedContinuation { pauseWaiters.append($0) }
+    func waitUntilPaused(timeout: Duration = .seconds(10)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while gate == nil {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return true
     }
     private func suspend() async {
         await withCheckedContinuation { continuation in
             gate = continuation
-            for waiter in pauseWaiters { waiter.resume() }
-            pauseWaiters.removeAll()
         }
     }
     func execute(_ command: DeviceCommand) async throws {
         commands.append(command)
-        let ready = commandWaiters.filter { $0.count <= commands.count }
-        commandWaiters.removeAll { $0.count <= commands.count }
-        for waiter in ready { waiter.continuation.resume() }
         if shouldPause {
             shouldPause = false
             await suspend()
