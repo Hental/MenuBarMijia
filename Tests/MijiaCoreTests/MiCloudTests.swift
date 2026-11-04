@@ -1185,7 +1185,10 @@ struct MiCloudProviderTests {
 
         #expect(await log.wait { await !$0.snapshots.isEmpty })
         let synthesized = await log.snapshots.first?.devices ?? []
-        #expect(synthesized.count == 20)
+        let lights = synthesized.filter { $0.model.hasPrefix("yeelink.light.model") }
+        #expect(lights.count == 20, "a failed spec load must not drop the lights that did load")
+        #expect(synthesized.contains { $0.model == "lumi.gateway.mgl03" })
+        #expect(synthesized.contains { $0.model == "custom.device.fail" })
         await provider.shutdown()
     }
 

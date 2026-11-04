@@ -21,7 +21,8 @@ let package = Package(
             // `MenuBarMijia_MijiaCore.bundle/Contents/Resources/Localizations`. A new language is a
             // new file here — no Swift change, and `L10n.availableLanguages` picks it up.
             resources: [
-                .copy("Resources/Localizations")
+                .copy("Resources/Localizations"),
+                .copy("Resources/fallbackSpecs.json"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6)

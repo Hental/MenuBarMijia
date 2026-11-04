@@ -353,32 +353,49 @@ public actor MiCloudProvider: HomeProvider {
     }
 
     private func loadMissingSpecs() async {
-        var pending: [String: String?] = [:]
-        for d in devices where specsByModel[d.model] == nil {
-            pending[d.model] = d.specType
+        struct SpecRequest: Sendable {
+            var specType: String?
+            var name: String
+        }
+        var pending: [String: SpecRequest] = [:]
+        for device in devices where specsByModel[device.model] == nil && pending[device.model] == nil {
+            pending[device.model] = SpecRequest(specType: device.specType, name: device.name)
         }
         guard !pending.isEmpty else { return }
         let source = specSource
         let loaded = await withTaskGroup(of: SpecLoadOutcome.self) { group in
-            for (model, specType) in pending {
+            for (model, request) in pending {
+                let specType = request.specType
+                let name = request.name
                 group.addTask {
                     do {
-                        let spec = try await source.spec(model: model, specType: specType)
-                        return SpecLoadOutcome(model: model, spec: spec, errorDescription: nil)
+                        if let spec = try await source.spec(model: model, specType: specType) {
+                            return SpecLoadOutcome(model: model, spec: spec, errorDescription: nil)
+                        }
                     } catch {
-                        return SpecLoadOutcome(model: model, spec: nil, errorDescription: error.localizedDescription)
+                        return SpecLoadOutcome(
+                            model: model,
+                            spec: MiotFallbackSpec.infer(model: model, name: name),
+                            errorDescription: error.localizedDescription
+                        )
                     }
+                    return SpecLoadOutcome(
+                        model: model,
+                        spec: MiotFallbackSpec.infer(model: model, name: name),
+                        errorDescription: nil
+                    )
                 }
             }
             var out: [SpecLoadOutcome] = []
-            for await r in group { out.append(r) }
+            for await result in group { out.append(result) }
             return out
         }
         for outcome in loaded {
             if let spec = outcome.spec {
                 specsByModel[outcome.model] = spec
-            } else if let error = outcome.errorDescription {
-                logger.error("Spec load failed for \(outcome.model, privacy: .public): \(error, privacy: .public)")
+            }
+            if let error = outcome.errorDescription {
+                logger.error("Spec load failed for \(outcome.model, privacy: .public): \(error, privacy: .public); using the read-only fallback")
             }
         }
     }
