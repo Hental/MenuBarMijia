@@ -105,6 +105,27 @@ struct UndoScopeTests {
         }
     }
 
+    @Test("Changing connection while a toggle executes discards its confirmation and habit")
+    func connectionChangeDiscardsPendingToggle() async throws {
+        let (store, provider, suite) = try await makeStore()
+        defer { store.userDefaults.removePersistentDomain(forName: suite) }
+        await provider.pauseNext()
+        let task = try #require(store.togglePrimary(try #require(store.devices.first)))
+        #expect(await provider.waitUntilPaused())
+        store.updateConnection(serverURL: "http://127.0.0.1:1", token: "test-token")
+        let habits = store.userHabitMemory
+        let toast = store.toastNotice?.message
+        #expect(store.waitingDeviceIds.isEmpty)
+        #expect(store.readBackOwner.isEmpty)
+        #expect(store.latestReadBackTicket.isEmpty)
+        #expect(store.readBackInFlightTicket.isEmpty)
+        await provider.release()
+        #expect(await task.value == false)
+        #expect(store.userHabitMemory == habits)
+        #expect(store.toastNotice?.message == toast)
+        #expect(store.grokBallCelebrationUntil == nil)
+    }
+
     @Test("Selecting a home in a private store leaves production preferences alone")
     func homeSelectionUsesItsOwnPreferences() async throws {
         let (store, _, suite) = try await makeStore()
