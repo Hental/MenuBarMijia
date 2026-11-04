@@ -132,6 +132,7 @@ struct MiAccountsProviderTests {
         #expect(await log.wait { events in await events.snapshots.contains { $0.devices.map(\.id) == ["de-plug"] } })
         await deApi.setGetPropsFailure(.sessionExpired)
         await provider.setPollingContext(PollingContext(panelVisible: true))
+        await provider.refreshNow()
         #expect(await log.wait { events in
             guard defaults.string(forKey: MiCloudProvider.selectedHomeKey) == nil else { return false }
             return await events.snapshots.last?.devices.map(\.id) == ["123"]
