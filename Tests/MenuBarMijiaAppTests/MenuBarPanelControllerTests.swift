@@ -38,7 +38,7 @@ struct MenuBarPanelControllerTests {
         #expect(MiSessionStore.save(session, defaults: defaults))
         let mock = MockHomeProvider(snapshot: DemoHomeProvider.defaultHome())
         let store = HomeStore(provider: mock, defaultsSuiteName: suite)
-        for _ in 0..<200 where store.devices.isEmpty {
+        for _ in 0..<200 where !store.miSessionShowsExpired {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(store.miSessionShowsExpired)

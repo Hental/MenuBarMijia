@@ -247,4 +247,57 @@ struct MiSessionExpiryHomeStoreTests {
         store.presentMiReauth()
         #expect(store.isShowingMiReauth)
     }
+
+    @MainActor
+    @Test("One expired account among several warns without slashing the menu bar icon until all expire")
+    func partialAccountExpiryDoesNotBlockControl() throws {
+        let suite = "com.jryang1997.MenuBarMijia.mi-expiry-multi.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        defaults.set(HomeBackend.xiaomiCloud.rawValue, forKey: "home_backend")
+        let expiredAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let farEnd = Date(timeIntervalSince1970: 4_000_000_000)
+        let expiredCN = MiSession(
+            userId: "10010001",
+            cUserId: "c-cn",
+            ssecurity: "s-cn",
+            serviceToken: "tok-cn",
+            region: "cn",
+            expiresAt: expiredAt
+        )
+        let validDE = MiSession(
+            userId: "20020002",
+            cUserId: "c-de",
+            ssecurity: "s-de",
+            serviceToken: "tok-de",
+            region: "de",
+            expiresAt: farEnd
+        )
+        #expect(MiSessionStore.saveAccounts([MiAccount(session: expiredCN), MiAccount(session: validDE)], defaults: defaults))
+
+        let store = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
+        #expect(store.miAccounts.count == 2)
+        #expect(store.miSessionShowsExpired)
+        #expect(!store.miSessionBlocksControl)
+        #expect(store.menuBarSymbolName == "house")
+
+        store.presentMiReauth()
+        #expect(store.miCloudRegion == .cn)
+        store.dismissMiReauth()
+
+        let expiredDE = MiSession(
+            userId: "20020002",
+            cUserId: "c-de",
+            ssecurity: "s-de",
+            serviceToken: "tok-de",
+            region: "de",
+            expiresAt: expiredAt
+        )
+        #expect(MiSessionStore.saveAccounts([MiAccount(session: expiredCN), MiAccount(session: expiredDE)], defaults: defaults))
+        let allExpiredStore = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
+        #expect(allExpiredStore.miSessionShowsExpired)
+        #expect(allExpiredStore.miSessionBlocksControl)
+        #expect(allExpiredStore.menuBarSymbolName == "house.slash")
+    }
 }
