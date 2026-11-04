@@ -130,6 +130,7 @@ fi
 # (the Swift container image does not ship python3).
 if command -v python3 >/dev/null 2>&1; then
     python3 scripts/check_design_tokens.py
+    python3 scripts/check_capability_matrix.py
     python3 - <<'PY'
 import base64
 import re

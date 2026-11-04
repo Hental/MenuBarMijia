@@ -26,5 +26,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check the README capability tables
+      - name: Check capability docs and code anchors
         run: python3 scripts/check_capability_matrix.py
