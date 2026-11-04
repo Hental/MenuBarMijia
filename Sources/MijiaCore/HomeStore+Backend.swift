@@ -199,7 +199,12 @@ extension HomeStore {
 
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
-            if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
+            if selectedMiHomeId != nil, userDefaults.string(forKey: MiCloudProvider.selectedHomeKey) == nil {
+                invalidateUndoContext()
+                selectedMiHomeId = nil
+                selectRoom(nil)
+            }
+            if !hasReceivedInitialSnapshot, snapshot.isInitialLoadComplete { hasReceivedInitialSnapshot = true }
             if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
                 miAccountStatuses = snapshot.accountStatuses
             }
@@ -494,6 +499,7 @@ extension HomeStore {
     }
 
     public func switchBackend(_ backend: HomeBackend) {
+        if backend != .xiaomiCloud { dismissMiReauth() }
         if backend == .demo, homeBackend == .demo, provider is DemoHomeProvider { return }
         if backend != .demo, homeBackend == backend, provider is DualSourceHomeProvider { return }
         invalidateUndoContext()
@@ -532,6 +538,12 @@ extension HomeStore {
         }
     }
 
+    /// Records the backend a QR login starts on. A completion after the user switched away only
+    /// saves the session and leaves the chosen backend alone.
+    public func beginMiLogin() {
+        miLoginStartBackend = homeBackend
+    }
+
     public func completeMiLogin(_ session: MiSession) {
         guard MiSessionStore.upsert(session, defaults: userDefaults) else {
             showToast(
@@ -540,7 +552,6 @@ extension HomeStore {
             )
             return
         }
-        invalidateUndoContext()
         // The primary (first) account drives the summary and the history scope, so signing in a
         // second account must not relabel the panel with the newcomer.
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
@@ -551,6 +562,10 @@ extension HomeStore {
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
+        let superseded = miLoginStartBackend.map { $0 != homeBackend } ?? false
+        miLoginStartBackend = nil
+        if superseded { return }
+        invalidateUndoContext()
         self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty

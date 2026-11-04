@@ -85,6 +85,37 @@ struct MiSessionRejectionTests {
 }
 
 struct MiAccountLoginExpiryTests {
+    @Test("Combined cookies keep expiry attributes with their owner", arguments: [
+        "other=x; Max-Age=99, serviceToken=t; Max-Age=3600",
+        "serviceToken=t; Max-Age=3600, other=x; Max-Age=99",
+        "serviceToken=t; Max-Age=3600; Expires=Wed, 09 Jun 2021 10:18:14 GMT, other=x; Max-Age=99",
+        "serviceToken=t; Max-Age=3600"
+    ])
+    func combinedCookieExpiryBelongsToTarget(_ header: String) throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let response = try #require(HTTPURLResponse(url: URL(string: "https://sts.example")!, statusCode: 200,
+                                                   httpVersion: nil, headerFields: ["Set-Cookie": header]))
+        #expect(MiAccountLogin.parseSetCookieExpiry(named: "serviceToken", in: response, now: now) == now.addingTimeInterval(3600))
+    }
+
+    @Test("Another cookie cannot supply an undated or missing target's expiry", arguments: [
+        "serviceToken=t; Path=/, other=x; Max-Age=99",
+        "other=x; Max-Age=99, serviceToken=t; Path=/",
+        "other=x; Max-Age=99"
+    ])
+    func unrelatedCookieExpiryIsIgnored(_ header: String) throws {
+        let response = try #require(HTTPURLResponse(url: URL(string: "https://sts.example")!, statusCode: 200,
+                                                   httpVersion: nil, headerFields: ["Set-Cookie": header]))
+        #expect(MiAccountLogin.parseSetCookieExpiry(named: "serviceToken", in: response) == nil)
+    }
+
+    @Test("An Expires date retains its weekday comma in combined headers")
+    func combinedCookiePreservesExpiresDate() throws {
+        let response = try #require(HTTPURLResponse(url: URL(string: "https://sts.example")!, statusCode: 200,
+            httpVersion: nil, headerFields: ["Set-Cookie": "other=x; Max-Age=99, serviceToken=t; Expires=Wed, 09 Jun 2021 10:18:14 GMT, last=y; Max-Age=1"]))
+        #expect(MiAccountLogin.parseSetCookieExpiry(named: "serviceToken", in: response) == Date(timeIntervalSince1970: 1_623_233_894))
+    }
+
     @Test("Login captures the serviceToken cookie expiry when the response carries Max-Age")
     func loginCapturesCookieExpiry() async throws {
         let maxAge = 30 * 24 * 60 * 60

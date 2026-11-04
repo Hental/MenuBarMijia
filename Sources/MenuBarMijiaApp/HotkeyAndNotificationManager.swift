@@ -307,6 +307,13 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
 
     // MARK: - 3. Local Keyboard Shortcuts
 
+    static func miReauthKeyDownResult(
+        keyCode: Int, isShowingMiReauth: Bool, isPanelWindow: Bool
+    ) -> Bool? {
+        guard isShowingMiReauth, isPanelWindow else { return nil }
+        return keyCode == kVK_Escape
+    }
+
     private func handleKeyDown(_ event: NSEvent, store: HomeStore) -> Bool {
         let code = Int(event.keyCode)
 
@@ -318,12 +325,15 @@ public final class HotkeyAndNotificationManager: NSObject, @preconcurrency UNUse
 
         // #181: the re-auth QR modal overlay owns keyboard focus while open; Esc dismisses it and
         // other panel navigation / search keys do not fire underneath the modal.
-        if store.isShowingMiReauth,
-           MenuBarPanelController.shared.isPanelWindow(NSApp.keyWindow) {
-            if code == kVK_Escape {
+        if let consumesEvent = Self.miReauthKeyDownResult(
+            keyCode: code,
+            isShowingMiReauth: store.isShowingMiReauth,
+            isPanelWindow: MenuBarPanelController.shared.isPanelWindow(NSApp.keyWindow)
+        ) {
+            if consumesEvent {
                 store.dismissMiReauth()
             }
-            return true
+            return consumesEvent
         }
 
         // Esc collapses the side attachment first; the dashboard retains its other shortcuts.

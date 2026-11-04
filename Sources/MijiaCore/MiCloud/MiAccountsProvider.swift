@@ -13,6 +13,7 @@ public actor MiAccountsProvider: HomeProvider {
     private let followUpDelay: Duration
     private let cameraSessionReleaseDelay: Duration
     private let selectedHomeLoader: @Sendable () -> String?
+    private let clearSelectedHome: @Sendable () -> Void
 
     private var continuation: AsyncStream<HomeProviderEvent>.Continuation?
     private var children: [(account: MiAccount, provider: MiCloudProvider)] = []
@@ -38,6 +39,9 @@ public actor MiAccountsProvider: HomeProvider {
         cameraSessionReleaseDelay: Duration = .milliseconds(2500),
         selectedHomeLoader: @escaping @Sendable () -> String? = {
             UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey)
+        },
+        clearSelectedHome: @escaping @Sendable () -> Void = {
+            UserDefaults.standard.removeObject(forKey: MiCloudProvider.selectedHomeKey)
         }
     ) {
         self.accounts = accounts
@@ -50,6 +54,7 @@ public actor MiAccountsProvider: HomeProvider {
         self.followUpDelay = followUpDelay
         self.cameraSessionReleaseDelay = cameraSessionReleaseDelay
         self.selectedHomeLoader = selectedHomeLoader
+        self.clearSelectedHome = clearSelectedHome
     }
 
     public nonisolated func events() -> AsyncStream<HomeProviderEvent> {
@@ -63,6 +68,9 @@ public actor MiAccountsProvider: HomeProvider {
         guard !accounts.isEmpty else {
             cont.yield(.statusChanged(.disconnected(MiCloudError.notLoggedIn.localizedDescription)))
             return
+        }
+        for account in accounts where account.session.expiryState(at: Date()) == .expired {
+            resetSelection(ownedBy: account.id)
         }
         if children.isEmpty { startChildren() }
         await applyPollingContext()
@@ -115,6 +123,14 @@ public actor MiAccountsProvider: HomeProvider {
         }
     }
 
+    @discardableResult
+    private func resetSelection(ownedBy accountId: String) -> Bool {
+        guard let selection = selectedHomeLoader(),
+              selection.hasPrefix(accountId + "/") || (!selection.contains("/") && accounts.first?.id == accountId) else { return false }
+        clearSelectedHome()
+        return true
+    }
+
     public func shutdown() async {
         for task in forwardTasks { task.cancel() }
         forwardTasks = []
@@ -153,7 +169,7 @@ public actor MiAccountsProvider: HomeProvider {
 
     // MARK: Merging Child Events
 
-    private func handle(_ event: HomeProviderEvent, from accountId: String) {
+    private func handle(_ event: HomeProviderEvent, from accountId: String) async {
         switch event {
         case .statusChanged(let status):
             statuses[accountId] = status
@@ -163,6 +179,9 @@ public actor MiAccountsProvider: HomeProvider {
             }
         case .sessionExpired(let session):
             continuation?.yield(.sessionExpired(session))
+            if resetSelection(ownedBy: accountId) {
+                await refreshNow()
+            }
         case .sourceStatusesChanged:
             break
         case .snapshotUpdated(let home):
@@ -210,6 +229,11 @@ public actor MiAccountsProvider: HomeProvider {
             }
         }
         deviceOwners = owners
+    }
+
+    private func isDisconnected(_ accountId: String) -> Bool {
+        if case .disconnected? = statuses[accountId] { return true }
+        return false
     }
 
     private func isDisconnectedWithNoDevices(_ accountId: String) -> Bool {
@@ -272,6 +296,9 @@ public actor MiAccountsProvider: HomeProvider {
             freshAccounts.contains($0.id) || isDisconnectedWithNoDevices($0.id)
         }
         merged.closesAwayGap = closesAwayGap && allFreshAfterWake
+        merged.isInitialLoadComplete = accounts.allSatisfy {
+            snapshots[$0.id] != nil || isDisconnected($0.id)
+        }
         continuation?.yield(.snapshotUpdated(merged))
     }
 

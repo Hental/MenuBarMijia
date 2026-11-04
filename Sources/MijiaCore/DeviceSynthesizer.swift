@@ -213,6 +213,9 @@ public struct SynthesizedHome: Equatable, Sendable {
     /// A Mi Cloud refresh emits the last values before the poll returns. That snapshot must not
     /// close the away gap, because the door may have opened while polling was paused.
     public var closesAwayGap: Bool = true
+    /// False while a merged snapshot still waits for a source's first snapshot. Backends that
+    /// deliver one snapshot leave it true.
+    public var isInitialLoadComplete: Bool = true
     /// Pairing evidence captured before `SmartDevice` dropped the did / MAC / HA unique id.
     public var deviceIdentities: [String: DeviceSourceIdentity] = [:]
     /// Which provider currently drives each merged card; empty on single-source snapshots.

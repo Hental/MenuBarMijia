@@ -107,6 +107,9 @@ public actor MiCloudProvider: HomeProvider {
             try await discover(api)
             try await poll(api, dids: nil)
             reportConnected()
+        } catch MiCloudError.sessionExpired {
+            clearExpiredSnapshot()
+            report(MiCloudError.sessionExpired)
         } catch {
             report(error)
         }
@@ -128,6 +131,10 @@ public actor MiCloudProvider: HomeProvider {
         if session.expiryState(at: Date()) == .expired {
             api = nil
             continuation?.yield(.statusChanged(.disconnected(MiCloudError.sessionExpired.localizedDescription)))
+            devices = []
+            rooms = []
+            values = [:]
+            emitSnapshot()
             return
         }
         let api = apiFactory(session)
@@ -157,14 +164,7 @@ public actor MiCloudProvider: HomeProvider {
             } catch is CancellationError {
                 return
             } catch MiCloudError.sessionExpired {
-                self.api = nil
-                if account != nil {
-                    // An expired account must not keep showing stale devices in the merged panel.
-                    devices = []
-                    rooms = []
-                    values = [:]
-                    emitSnapshot()
-                }
+                clearExpiredSnapshot()
                 report(MiCloudError.sessionExpired)
                 return
             } catch {
@@ -231,6 +231,16 @@ public actor MiCloudProvider: HomeProvider {
             sleeper.cancel()
         }
         waitTask = nil
+    }
+
+    /// Drops the cached home so an expired account stops contributing devices to the merged panel.
+    private func clearExpiredSnapshot() {
+        api = nil
+        guard account != nil else { return }
+        devices = []
+        rooms = []
+        values = [:]
+        emitSnapshot()
     }
 
     private func report(_ error: any Error) {
@@ -401,10 +411,13 @@ public actor MiCloudProvider: HomeProvider {
     }
 
     /// Reads the selected home's devices only (all homes when none is selected) (#26).
-    private func poll(_ api: any MiCloudAPI, dids: Set<String>?) async throws {
+    @discardableResult
+    private func poll(_ api: any MiCloudAPI, dids: Set<String>?) async throws -> Set<MiotPropKey> {
         let keys = propKeys(of: scopedDevicesAndRooms().devices, dids: dids)
+        var freshKeys: Set<MiotPropKey> = []
         if !keys.isEmpty {
             let fresh = try await api.getProps(keys)
+            freshKeys = Set(fresh.keys)
             // getProps omits items with a non-zero code. A missing door-state must not keep the
             // previous locked/unlocked claim while the device list still says online (#149).
             let requestedLocks = doorStateKeys(requested: keys)
@@ -416,6 +429,7 @@ public actor MiCloudProvider: HomeProvider {
             pollsSinceContextChange += 1
         }
         emitSnapshot()
+        return freshKeys
     }
 
     /// Successful reads replace cached values. A requested `door-state` that this round did not
@@ -573,10 +587,17 @@ public actor MiCloudProvider: HomeProvider {
     public func readBack(deviceId: String) async -> ControlReadBack {
         guard let api else { return .failed }
         // Split wall-switch cards report `100.s2` while property reads are keyed by `100`.
-        let did = devices.first { $0.did == deviceId }?.miotDid ?? deviceId
+        guard let record = devices.first(where: { $0.did == deviceId }),
+              let spec = specsByModel[record.model],
+              let (service, _) = MiotSynthesizer.primary(for: record, spec: spec) else { return .failed }
+        let did = record.miotDid
         do {
             // Only a full poll may clear home-wide staleness; this read refreshes one device.
-            try await poll(api, dids: [did])
+            let fresh = try await poll(api, dids: [did])
+            let powerKeys = service.properties.filter { ["on", "status"].contains($0.shortName) }.map {
+                MiotPropKey(did: did, siid: service.iid, piid: $0.iid)
+            }
+            guard powerKeys.contains(where: { fresh.contains($0) }) else { return .failed }
             return .published
         } catch {
             report(error)

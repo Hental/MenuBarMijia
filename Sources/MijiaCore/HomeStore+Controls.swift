@@ -112,15 +112,19 @@ extension HomeStore {
         }
 
         guard let cmd = command else { return nil }
+        let context = controlContextID
         let isMomentaryButton = device.isMomentaryButton
         if isMomentaryButton {
             return Task {
+                guard self.controlContextID == context else { return false }
                 do {
                     try await self.executeDeviceCommand(cmd)
+                    guard self.controlContextID == context else { return false }
                     self.celebrateGrokBall()
                     self.showToast(L10n.tr("已触发 \(device.name)", "Triggered \(device.name)"), isError: false)
                     return true
                 } catch {
+                    guard self.controlContextID == context else { return false }
                     self.showToast(L10n.tr("\(device.name) 触发失败", "Failed to trigger \(device.name)"), isError: true)
                     return false
                 }
@@ -131,9 +135,13 @@ extension HomeStore {
 
         return Task {
             defer { self.finishReadBack(device.id, ticket: ticket) }
+            guard self.controlContextID == context else { return false }
             do {
                 try await self.executeDeviceCommand(cmd)
-                switch await self.confirmToggleReadBack(deviceId: device.id, requested: updated, ticket: ticket) {
+                guard self.controlContextID == context else { return false }
+                let confirmation = await self.confirmToggleReadBack(deviceId: device.id, requested: updated, ticket: ticket, context: context)
+                guard self.controlContextID == context else { return false }
+                switch confirmation {
                 case .matched:
                     let shown = self.devices.first(where: { $0.id == device.id }) ?? updated
                     self.confirmManualControl(intents: [DeviceIntent(targetId: device.id, operation: .power(updated.isActiveOn))])
@@ -151,6 +159,7 @@ extension HomeStore {
                     return true
                 }
             } catch {
+                guard self.controlContextID == context else { return false }
                 self.showToast(L10n.tr("\(device.name) 响应失败", "\(device.name) failed to respond"), isError: true)
                 return false
             }
@@ -192,6 +201,9 @@ extension HomeStore {
         if readBackInFlightTicket[deviceId] == ticket {
             readBackInFlightTicket[deviceId] = nil
         }
+        if latestReadBackTicket[deviceId] == ticket {
+            latestReadBackTicket[deviceId] = nil
+        }
     }
 
     /// Applies a provider snapshot when one was published. Providers with no property read
@@ -199,7 +211,8 @@ extension HomeStore {
     /// read that still shows the old power is polled once more, because a device often
     /// reports the previous value immediately after a write. That second wait releases the
     /// tap so a newer toggle, such as the next keyboard press, is not discarded.
-    private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64) async -> ReadBackConfirm {
+    private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64, context: UUID) async -> ReadBackConfirm {
+        guard controlContextID == context else { return .superseded }
         if case .cover = requested.kind {
             // Motor control is write-only. Position is reported after the sash moves, so a
             // successful write is the confirmation rather than an instant 0 or 100 reading.
@@ -216,7 +229,9 @@ extension HomeStore {
         }
         let before = snapshotGeneration
         let read = await provider.readBack(deviceId: deviceId)
+        guard controlContextID == context else { return .superseded }
         await settleSnapshot(after: before)
+        guard controlContextID == context else { return .superseded }
         switch read {
         case .failed:
             return .unmatched

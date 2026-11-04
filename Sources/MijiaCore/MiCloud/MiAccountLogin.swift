@@ -232,7 +232,8 @@ public struct MiAccountLogin: Sendable {
         for (k, v) in response.allHeaderFields {
             guard let ks = k as? String, ks.caseInsensitiveCompare("Set-Cookie") == .orderedSame,
                   let vs = v as? String else { continue }
-            rawHeaders.append(vs)
+            let separated = vs.replacingOccurrences(of: #",\s*(?=[^;,=\s]+=)"#, with: "\n", options: .regularExpression)
+            rawHeaders.append(contentsOf: separated.components(separatedBy: "\n"))
         }
         for header in rawHeaders {
             let parts = header.split(separator: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

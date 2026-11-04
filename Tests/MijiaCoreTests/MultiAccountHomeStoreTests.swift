@@ -36,6 +36,7 @@ struct MultiAccountHomeStoreTests {
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let store = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
         defer { store.logoutMiAccount() }
+        store.homeBackend = .xiaomiCloud
 
         store.completeMiLogin(Self.cnSession)
         store.completeMiLogin(Self.deSession)
@@ -122,6 +123,7 @@ struct MultiAccountHomeStoreTests {
         let suite = Self.makeSuite()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let store = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
+        store.homeBackend = .xiaomiCloud
 
         store.completeMiLogin(Self.cnSession)
         store.completeMiLogin(Self.deSession)
@@ -131,6 +133,38 @@ struct MultiAccountHomeStoreTests {
         #expect(store.miSessionMaskedUserId == nil)
         #expect(store.serverHostSummary == "米家云端 (未登录)")
         #expect(store.toastNotice?.message == "已退出米家账号")
+    }
+
+    @Test("Leaving Xiaomi closes reauthentication and a late login preserves the selected backend")
+    func lateReauthDoesNotReplaceBackend() {
+        let suite = Self.makeSuite()
+        let store = HomeStore(provider: MockHomeProvider(), defaultsSuiteName: suite)
+        defer {
+            store.logoutMiAccount()
+            store.userDefaults.removePersistentDomain(forName: suite)
+        }
+        store.homeBackend = .xiaomiCloud
+        store.isShowingMiReauth = true
+        store.beginMiLogin()
+        store.switchBackend(.homeAssistant)
+        #expect(!store.isShowingMiReauth)
+        let toast = store.toastNotice?.message
+        let context = store.controlContextID
+        store.completeMiLogin(Self.cnSession)
+        #expect(store.homeBackend == .homeAssistant)
+        #expect(store.miAccounts.map(\.id).contains(Self.cn.id))
+        #expect(store.toastNotice?.message == toast)
+        #expect(store.controlContextID == context)
+        store.switchBackend(.demo)
+        store.beginMiLogin()
+        store.completeMiLogin(Self.deSession)
+        #expect(store.homeBackend == .xiaomiCloud)
+        #expect(store.miAccounts.count == 2)
+
+        store.beginMiLogin()
+        store.switchBackend(.demo)
+        store.completeMiLogin(Self.cnSession)
+        #expect(store.homeBackend == .demo)
     }
 
     @Test("A legacy bare selected home migrates to the only account on launch")
