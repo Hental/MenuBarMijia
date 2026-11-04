@@ -104,11 +104,7 @@ export class MiAccountLogin {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-        if (
-          msg.includes("timeout") ||
-          msg.includes("timed out") ||
-          msg.startsWith("error sending request for url (")
-        ) {
+        if (msg.includes("timeout") || msg.includes("timed out")) {
           continue;
         }
         throw err;
