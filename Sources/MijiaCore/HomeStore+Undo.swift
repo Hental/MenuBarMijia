@@ -43,13 +43,14 @@ extension HomeStore {
         }
     }
 
+    @discardableResult
     public func executeQuickAction(
         _ action: QuickAction,
         undoBannerDuration: TimeInterval? = nil,
         recordsHabits: Bool = true,
         respectScreenLock: Bool = true
-    ) {
-        if respectScreenLock, rejectControlWhileLocked() { return }
+    ) -> Task<Void, Never>? {
+        if respectScreenLock, rejectControlWhileLocked() { return nil }
         let previousSnapshot = devices
         var commands: [(deviceId: String, command: DeviceCommand)] = []
         var restoreCommands: [DeviceCommand] = []
@@ -149,7 +150,7 @@ extension HomeStore {
 
         guard !commands.isEmpty else {
             showToast(L10n.tr("当前无需执行「\(action.title)」", "No devices need \"\(action.title)\""))
-            return
+            return nil
         }
 
         scheduleUndoBanner(
@@ -160,10 +161,10 @@ extension HomeStore {
             habitReceipt: nil,
             duration: undoBannerDuration
         )
-        guard let bannerId = undoBanner?.id else { return }
+        guard let bannerId = undoBanner?.id else { return nil }
 
         let context = controlContextID
-        Task {
+        return Task {
             var failedDeviceIds: Set<String> = []
             for item in commands {
                 guard context == controlContextID else { return }

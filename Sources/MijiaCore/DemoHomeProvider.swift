@@ -46,6 +46,7 @@ public actor MockHomeProvider: HomeProvider {
     }
 
     public func releaseExecute() {
+        holdNext = false
         executeWaiter?.resume()
         executeWaiter = nil
     }

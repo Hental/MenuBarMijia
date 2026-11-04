@@ -60,9 +60,7 @@ struct AppIntentExecutionTests {
             await Task.yield()
             #expect(!returned)
             await provider.sendSnapshot(SynthesizedHome(devices: [Self.lamp]))
-            for _ in 0..<100 where await provider.commandCount == 0 {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await provider.waitForCommand(1)
             #expect(await provider.commandCount == 1)
             #expect(store.waitingDeviceIds.contains("test-lamp"))
             #expect(store.devices.first?.isActiveOn == false)
@@ -86,19 +84,17 @@ struct AppIntentExecutionTests {
             let intent = RunSceneIntent()
             intent.scene = SceneEntity(scene: Self.scene)
             let failed = Task { try await intent.execute(in: store) }
-            for _ in 0..<100 where await provider.commandCount == 0 {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await provider.waitForCommand(1)
             #expect(await provider.commandCount == 1)
             await provider.complete(failing: true)
-            #expect(try await failed.value == "Scene \"Test scene\" failed")
+            let failedMessage = try await failed.value
+            #expect(failedMessage == "Scene \"Test scene\" failed")
             let succeeded = Task { try await intent.execute(in: store) }
-            for _ in 0..<100 where await provider.commandCount == 1 {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await provider.waitForCommand(2)
             #expect(await provider.commandCount == 2)
             await provider.complete(failing: false)
-            #expect(try await succeeded.value == "Activated scene: Test scene")
+            let succeededMessage = try await succeeded.value
+            #expect(succeededMessage == "Activated scene: Test scene")
         }
     }
 
@@ -121,12 +117,11 @@ struct AppIntentExecutionTests {
             let intent = ToggleDeviceIntent()
             intent.device = DeviceEntity(device: wolDevice)
             let succeeded = Task { try await intent.execute(in: store) }
-            for _ in 0..<100 where await provider.commandCount == 0 {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            await provider.waitForCommand(1)
             #expect(await provider.commandCount == 1)
             await provider.complete(failing: false)
-            #expect(try await succeeded.value == "Triggered Study PC")
+            let succeededMessage = try await succeeded.value
+            #expect(succeededMessage == "Triggered Study PC")
         }
     }
 }
@@ -135,6 +130,7 @@ private actor ControlledIntentProvider: HomeProvider {
     nonisolated let stream: AsyncStream<HomeProviderEvent>
     private let continuation: AsyncStream<HomeProviderEvent>.Continuation
     private var pending: CheckedContinuation<Void, any Error>?
+    private var commandWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private(set) var commandCount = 0
 
     init() {
@@ -148,9 +144,19 @@ private actor ControlledIntentProvider: HomeProvider {
         continuation.yield(.snapshotUpdated(home))
     }
 
+    func waitForCommand(_ count: Int) async {
+        guard commandCount < count || pending == nil else { return }
+        await withCheckedContinuation { commandWaiters.append((count, $0)) }
+    }
+
     func execute(_ command: DeviceCommand) async throws {
         commandCount += 1
-        try await withCheckedThrowingContinuation { pending = $0 }
+        try await withCheckedThrowingContinuation { cont in
+            pending = cont
+            let ready = commandWaiters.filter { $0.count <= commandCount }
+            commandWaiters.removeAll { $0.count <= commandCount }
+            for waiter in ready { waiter.continuation.resume() }
+        }
     }
 
     func complete(failing: Bool) {
