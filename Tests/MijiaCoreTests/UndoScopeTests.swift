@@ -110,7 +110,8 @@ struct UndoScopeTests {
         let (store, provider, suite) = try await makeStore()
         defer { store.userDefaults.removePersistentDomain(forName: suite) }
         await provider.pauseNext()
-        let task = try #require(store.togglePrimary(try #require(store.devices.first)))
+        let device = try #require(store.devices.first)
+        let task = try #require(store.togglePrimary(device))
         #expect(await provider.waitUntilPaused())
         store.updateConnection(serverURL: "http://127.0.0.1:1", token: "test-token")
         let habits = store.userHabitMemory
