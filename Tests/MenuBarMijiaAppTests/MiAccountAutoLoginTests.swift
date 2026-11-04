@@ -4,20 +4,20 @@ import MijiaCore
 
 @MainActor
 struct MiAccountAutoLoginTests {
-    @Test("Automatic QR login requires Xiaomi Cloud and an automatic-login request")
-    func autoLoginRequiresXiaomiCloud() {
+    @Test("Automatic QR login needs an automatic-login request plus Xiaomi Cloud or an expired Mi session")
+    func autoLoginNeedsAReason() {
         #expect(MiAccountSection.shouldAutoStartQRLogin(
-            autoStartsQRLogin: true, homeBackend: .xiaomiCloud
+            autoStartsQRLogin: true, homeBackend: .xiaomiCloud, miSessionShowsExpired: false
+        ))
+        #expect(MiAccountSection.shouldAutoStartQRLogin(
+            autoStartsQRLogin: true, homeBackend: .homeAssistant, miSessionShowsExpired: true
         ))
         #expect(!MiAccountSection.shouldAutoStartQRLogin(
-            autoStartsQRLogin: false, homeBackend: .xiaomiCloud
+            autoStartsQRLogin: false, homeBackend: .xiaomiCloud, miSessionShowsExpired: true
         ))
         for backend in [HomeBackend.homeAssistant, .demo] {
             #expect(!MiAccountSection.shouldAutoStartQRLogin(
-                autoStartsQRLogin: true, homeBackend: backend
-            ))
-            #expect(!MiAccountSection.shouldAutoStartQRLogin(
-                autoStartsQRLogin: false, homeBackend: backend
+                autoStartsQRLogin: true, homeBackend: backend, miSessionShowsExpired: false
             ))
         }
     }

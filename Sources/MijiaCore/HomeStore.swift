@@ -96,6 +96,9 @@ public final class HomeStore {
     public var isShowingSettings: Bool = false
     /// Transient flag for the QR re-auth overlay (#181).
     public var isShowingMiReauth: Bool = false
+    /// The backend a QR login started on. A completion after the user moved elsewhere still saves
+    /// the session, but it must not pull the panel back to a backend the user left.
+    var miLoginStartBackend: HomeBackend?
 
     let userDefaults: UserDefaults
 

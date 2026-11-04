@@ -37,8 +37,10 @@ public struct MiAccountSection: View {
         }
     }
 
-    static func shouldAutoStartQRLogin(autoStartsQRLogin: Bool, homeBackend: HomeBackend) -> Bool {
-        autoStartsQRLogin && homeBackend == .xiaomiCloud
+    static func shouldAutoStartQRLogin(
+        autoStartsQRLogin: Bool, homeBackend: HomeBackend, miSessionShowsExpired: Bool
+    ) -> Bool {
+        autoStartsQRLogin && (homeBackend == .xiaomiCloud || miSessionShowsExpired)
     }
 
     public var body: some View {
@@ -122,7 +124,9 @@ public struct MiAccountSection: View {
         }
         .task {
             guard Self.shouldAutoStartQRLogin(
-                autoStartsQRLogin: autoStartsQRLogin, homeBackend: store.homeBackend
+                autoStartsQRLogin: autoStartsQRLogin,
+                homeBackend: store.homeBackend,
+                miSessionShowsExpired: store.miSessionShowsExpired
             ), case .idle = phase else { return }
             startQRLogin()
         }
@@ -314,6 +318,7 @@ public struct MiAccountSection: View {
 
     private func startQRLogin() {
         loginTask?.cancel()
+        store.beginMiLogin()
         phase = .loadingTicket
         let selectedRegion = store.miCloudRegion.rawValue
         loginTask = Task {

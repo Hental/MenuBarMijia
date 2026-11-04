@@ -91,7 +91,7 @@ public struct ControlCenterPanel: View {
             groupPromptOverlay
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.isShowingMiReauth, store.homeBackend == .xiaomiCloud {
+            if store.isShowingMiReauth {
                 miReauthOverlay
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)

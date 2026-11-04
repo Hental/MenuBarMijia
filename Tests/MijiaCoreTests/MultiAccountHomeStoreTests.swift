@@ -145,6 +145,7 @@ struct MultiAccountHomeStoreTests {
         }
         store.homeBackend = .xiaomiCloud
         store.isShowingMiReauth = true
+        store.beginMiLogin()
         store.switchBackend(.homeAssistant)
         #expect(!store.isShowingMiReauth)
         let toast = store.toastNotice?.message
@@ -155,9 +156,15 @@ struct MultiAccountHomeStoreTests {
         #expect(store.toastNotice?.message == toast)
         #expect(store.controlContextID == context)
         store.switchBackend(.demo)
+        store.beginMiLogin()
         store.completeMiLogin(Self.deSession)
-        #expect(store.homeBackend == .demo)
+        #expect(store.homeBackend == .xiaomiCloud)
         #expect(store.miAccounts.count == 2)
+
+        store.beginMiLogin()
+        store.switchBackend(.demo)
+        store.completeMiLogin(Self.cnSession)
+        #expect(store.homeBackend == .demo)
     }
 
     @Test("A legacy bare selected home migrates to the only account on launch")

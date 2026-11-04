@@ -538,6 +538,12 @@ extension HomeStore {
         }
     }
 
+    /// Records the backend a QR login starts on. A completion after the user switched away only
+    /// saves the session and leaves the chosen backend alone.
+    public func beginMiLogin() {
+        miLoginStartBackend = homeBackend
+    }
+
     public func completeMiLogin(_ session: MiSession) {
         guard MiSessionStore.upsert(session, defaults: userDefaults) else {
             showToast(
@@ -556,11 +562,14 @@ extension HomeStore {
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
-        guard homeBackend == .xiaomiCloud else { return }
+        let superseded = miLoginStartBackend.map { $0 != homeBackend } ?? false
+        miLoginStartBackend = nil
+        if superseded { return }
         invalidateUndoContext()
         self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
+        self.homeBackend = .xiaomiCloud
         self.completeOnboarding()
         rebuildLiveProvider()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
