@@ -1,0 +1,72 @@
+name: Probe macOS test hang
+
+on:
+  push:
+    branches: [debug/macos-hang-probe]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Toolchain info
+        run: xcodebuild -version && swift --version
+      - name: Build tests
+        run: swift build --build-tests
+      - name: Repeat the suite with a stall watchdog
+        shell: bash
+        run: |
+          set -u
+          mkdir -p probe-logs
+          status=0
+          for i in 1 2 3 4 5 6 7 8; do
+            log="probe-logs/suite-$i.log"
+            : > "$log"
+            echo "=== suite run $i started at $(date -u +%H:%M:%S)"
+            swift test --skip-build > "$log" 2>&1 &
+            spid=$!
+            last=-1
+            stalled=0
+            while kill -0 "$spid" 2>/dev/null; do
+              sleep 10
+              size=$(wc -c < "$log" | tr -d ' ')
+              if [ "$size" = "$last" ]; then
+                stalled=$((stalled + 1))
+              else
+                stalled=0
+                last=$size
+              fi
+              if [ "$stalled" -ge 18 ]; then
+                echo "=== stalled ${size} bytes; sampling"
+                tp=$(pgrep -f swiftpm-testing | head -1 || true)
+                if [ -n "$tp" ]; then
+                  sample "$tp" 5 -file "probe-logs/sample-$i.txt" || true
+                fi
+                ps -axo pid,etime,stat,command > "probe-logs/ps-$i.txt" || true
+                echo "=== stalled suite $i"
+                kill -9 "$spid" 2>/dev/null || true
+                pkill -9 -f swiftpm-testing || true
+                sleep 2
+                status=1
+                break
+              fi
+            done
+            wait "$spid" 2>/dev/null || true
+            rc=$?
+            echo "=== suite run $i finished rc=$rc stalled=$stalled"
+            tail -3 "$log" || true
+            if [ "$stalled" -ge 18 ]; then
+              continue
+            fi
+          done
+          exit 0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: probe-logs
+          path: probe-logs
+          if-no-files-found: ignore
