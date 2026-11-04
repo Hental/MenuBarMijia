@@ -112,6 +112,34 @@ struct MiAccountsProviderTests {
         await provider.shutdown()
     }
 
+    @Test("Expiry of the selected account resets its home and restores the other account")
+    func selectedAccountExpiryRestoresAvailableHomes() async throws {
+        let suite = "test.mi.selected-expiry.\(UUID().uuidString)"
+        nonisolated(unsafe) let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(Self.de.id + "/home-de", forKey: MiCloudProvider.selectedHomeKey)
+        let cnApi = StubMiCloudAPI(devices: [MiotFixtures.lightRecord], rooms: [], values: MiotFixtures.lightValues)
+        let deApi = StubMiCloudAPI(devices: [MiDeviceRecord(did: "de-plug", name: "Plug", model: "cuco.plug.v3", isOnline: true)],
+            rooms: [MiRoom(id: "r-de", name: "Bedroom", dids: ["de-plug"], homeId: "home-de", homeName: "Home")],
+            values: [MiotFixtures.key("de-plug", 2, 1): .bool(false)])
+        let provider = MiAccountsProvider(accounts: [Self.cn, Self.de],
+            apiFactory: { $0.region == "de" ? deApi : cnApi }, specSource: StubSpecSource(),
+            pollInterval: .seconds(60),
+            selectedHomeLoader: { defaults.string(forKey: MiCloudProvider.selectedHomeKey) },
+            clearSelectedHome: { defaults.removeObject(forKey: MiCloudProvider.selectedHomeKey) })
+        let (log, task) = consume(provider)
+        defer { task.cancel() }
+        #expect(await log.wait { events in await events.snapshots.contains { $0.devices.map(\.id) == ["de-plug"] } })
+        await deApi.setGetPropsFailure(.sessionExpired)
+        await provider.setPollingContext(PollingContext(panelVisible: true))
+        #expect(await log.wait { events in
+            guard defaults.string(forKey: MiCloudProvider.selectedHomeKey) == nil else { return false }
+            return await events.snapshots.last?.devices.map(\.id) == ["123"]
+        })
+        #expect(defaults.string(forKey: MiCloudProvider.selectedHomeKey) == nil)
+        await provider.shutdown()
+    }
+
     @Test("One expired account does not stop the other")
     func expiredAccountDoesNotStopTheOther() async throws {
         let cnApi = StubMiCloudAPI(

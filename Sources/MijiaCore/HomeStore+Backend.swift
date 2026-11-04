@@ -199,6 +199,11 @@ extension HomeStore {
 
         case .snapshotUpdated(let snapshot):
             snapshotGeneration &+= 1
+            if selectedMiHomeId != nil, userDefaults.string(forKey: MiCloudProvider.selectedHomeKey) == nil {
+                invalidateUndoContext()
+                selectedMiHomeId = nil
+                selectRoom(nil)
+            }
             if !hasReceivedInitialSnapshot { hasReceivedInitialSnapshot = true }
             if !snapshot.accountStatuses.isEmpty, miAccountStatuses != snapshot.accountStatuses {
                 miAccountStatuses = snapshot.accountStatuses

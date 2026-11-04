@@ -676,7 +676,8 @@ public final class HomeStore {
         nonisolated(unsafe) let ud = defaults
         return MiAccountsProvider(
             accounts: accounts,
-            selectedHomeLoader: { ud.string(forKey: MiCloudProvider.selectedHomeKey) }
+            selectedHomeLoader: { ud.string(forKey: MiCloudProvider.selectedHomeKey) },
+            clearSelectedHome: { ud.removeObject(forKey: MiCloudProvider.selectedHomeKey) }
         )
     }
 
