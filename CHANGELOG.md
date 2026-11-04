@@ -10,6 +10,7 @@
 - macOS 当前家庭所属米家账号过期时自动回到全部家庭，并清除同一偏好存储中的选择。
 - macOS 切换到 HA 或演示模式时关闭米家重认证，迟到的扫码结果只保存会话，不抢回后端或显示登录完成提示。
 - **macOS 米家重认证键盘操作**：二维码浮层打开时，Tab、Shift-Tab、空格、回车与输入交给浮层中的原生控件，不再被面板快捷键吞掉；Esc 仍关闭浮层。
+- **macOS 切换后端时关闭米家重认证**：切到 Home Assistant 或演示模式后隐藏扫码浮层，并取消正在等待的扫码任务；仅在米家后端允许浮层自动发起扫码。
 - **领普平移推窗器（[#223](https://github.com/jryang1997/MenuBarMijia/issues/223)）**：macOS 小米云把 `window-opener` 显示成门窗卡片。点卡片在关上时打开、开着时关闭。打开会再确认一次，关闭直接执行。展开后可以拖开合百分比、暂停，并看到电量和故障。电机指令只用规格里的 Open、Close、Pause，不猜测数值。全关不会带动窗户。
 - **macOS 在官方规格下载失败时仍显示设备（[#185](https://github.com/jryang1997/MenuBarMijia/issues/185)）**：小米云拿不到已发布规格时，用与 Windows `fallbackSpecs.json` 逐字节相同的表猜一个只读规格。灯、空调、风扇这类还能出现在面板上，但开关和滑条不会发出写入。测试会拦住只改一边的情况。
 - **Windows 摄像机组件与画质（[#200](https://github.com/jryang1997/MenuBarMijia/issues/200), [#97](https://github.com/jryang1997/MenuBarMijia/issues/97)）**：安装包内置 `go2rtc` 与最小 LGPL FFmpeg，首次打开摄像机不再依赖 GitHub 下载；兜底下载改为 3 次重试、120 秒超时，并在失败时给出手动放置路径。实时小窗新增「自动 / 流畅 / 高清 / 超清」画质选择（默认高清），与 macOS 对齐。
