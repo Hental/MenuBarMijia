@@ -131,6 +131,9 @@ public enum MiotCommandMapper {
             return .setProps([try ctx.write(name, .bool(isOn))])
 
         case .setSelectOption(_, let option):
+            if ctx.property("motor-control") != nil {
+                return .setProps([try ctx.writeListValue("motor-control", description: option)])
+            }
             if let w = try? ctx.writeListValue("mode", description: option) {
                 return .setProps([w])
             }
@@ -152,6 +155,9 @@ public enum MiotCommandMapper {
             return .setProps([ctx.write(volume, .number(min + Swift.max(0, Swift.min(1, level)) * (max - min)))])
 
         case .setNumberValue(_, let value):
+            if ctx.property("target-position") != nil {
+                return .setProps([try ctx.write("target-position", .number(value))])
+            }
             return .setProps([try ctx.write("target-temperature", .number(value))])
 
         case .setClimateSwingMode, .mediaSelectSource,

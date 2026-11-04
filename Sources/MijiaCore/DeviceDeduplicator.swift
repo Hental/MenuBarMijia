@@ -388,6 +388,12 @@ public enum DeviceDeduplicator {
             return score
         case .sensor:
             return 0
+        case .cover(let spec):
+            var score = 0
+            if spec.canMove { score += 2 }
+            if spec.positionWritable { score += 1 }
+            if spec.batteryPercent != nil { score += 1 }
+            return score
         }
     }
 

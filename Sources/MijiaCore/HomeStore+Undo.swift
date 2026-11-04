@@ -186,7 +186,7 @@ extension HomeStore {
     /// Plugs often power a router, fridge or NAS, and 全关 should not send a cleaning vacuum home (#23).
     public nonisolated static func joinsAllOffByDefault(_ device: SmartDevice) -> Bool {
         switch device.kind {
-        case .plug, .vacuum, .camera: return false
+        case .plug, .vacuum, .camera, .cover: return false
         default: return true
         }
     }
@@ -253,7 +253,7 @@ extension HomeStore {
         case .camera(var s):
             s.isOn = false
             return (.setSwitch(entityId: s.entityId, isOn: false), .setSwitch(entityId: s.entityId, isOn: true), .camera(s))
-        case .speaker, .fridge, .sensor:
+        case .speaker, .fridge, .sensor, .cover:
             return nil
         }
     }

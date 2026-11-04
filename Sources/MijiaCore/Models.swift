@@ -490,6 +490,41 @@ public struct SensorSpec: Equatable, Sendable {
     }
 }
 
+/// A window or similar cover. Position is 0 closed … 100 open. Motor words are the spec's own
+/// value-list descriptions, so a write never invents a numeric code the device did not publish.
+public struct CoverSpec: Equatable, Sendable {
+    public var entityId: String
+    public var positionPercent: Int?
+    public var positionWritable: Bool
+    public var openDescription: String?
+    public var closeDescription: String?
+    public var pauseDescription: String?
+    public var batteryPercent: Int?
+    public var faultText: String?
+
+    public init(
+        entityId: String,
+        positionPercent: Int? = nil,
+        positionWritable: Bool = false,
+        openDescription: String? = nil,
+        closeDescription: String? = nil,
+        pauseDescription: String? = nil,
+        batteryPercent: Int? = nil,
+        faultText: String? = nil
+    ) {
+        self.entityId = entityId
+        self.positionPercent = positionPercent
+        self.positionWritable = positionWritable
+        self.openDescription = openDescription
+        self.closeDescription = closeDescription
+        self.pauseDescription = pauseDescription
+        self.batteryPercent = batteryPercent
+        self.faultText = faultText
+    }
+
+    public var canMove: Bool { openDescription != nil && closeDescription != nil }
+}
+
 public enum DeviceKind: Equatable, Sendable {
     case light(LightSpec)
     case climate(ClimateSpec)
@@ -501,6 +536,7 @@ public enum DeviceKind: Equatable, Sendable {
     case tv(TVSpec)
     case camera(CameraSpec)
     case sensor(SensorSpec)
+    case cover(CoverSpec)
 
     /// Dedicated sensors sort ahead of air purifiers and AC return-air thermistors (#103).
     public var environmentReadingPriority: Int {
@@ -522,6 +558,7 @@ public enum DeviceKind: Equatable, Sendable {
         case .vacuum(let spec): return spec.actionsWritable
         case .tv: return true
         case .speaker, .fridge, .sensor: return false
+        case .cover(let spec): return spec.canMove
         }
     }
 
@@ -547,6 +584,8 @@ public enum DeviceKind: Equatable, Sendable {
             return true
         case .sensor:
             return false
+        case .cover(let spec):
+            return spec.canMove || spec.positionWritable
         }
     }
 }
@@ -613,6 +652,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         case .tv(let s): [s.mediaEntityId]
         case .camera(let s): [s.entityId, s.motionDetectionEntityId, s.streamEntityId]
         case .sensor: []
+        case .cover(let s): [s.entityId]
         }
         return entityIds.compactMap { id in
             guard let id else { return nil }
@@ -641,6 +681,7 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         case .tv(let s): return s.state != "off" && s.state != "standby"
         case .camera(let s): return s.isOn
         case .fridge, .sensor: return false
+        case .cover(let s): return (s.positionPercent ?? 0) > 0
         }
     }
 
@@ -667,6 +708,9 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
         case (.vacuum(var spec), .vacuum(let want)):
             spec.status = want.status
             next.kind = .vacuum(spec)
+        case (.cover(var spec), .cover(let want)):
+            spec.positionPercent = want.positionPercent
+            next.kind = .cover(spec)
         case (.tv(var spec), .tv(let want)):
             spec.state = want.state
             spec.isScreenOff = want.isScreenOff
@@ -701,6 +745,9 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
             return s.powerWatts != nil || s.energyKwh != nil || s.childLockEntityId != nil
         case .sensor:
             return false
+        case .cover(let spec):
+            return spec.positionWritable || spec.pauseDescription != nil
+                || spec.batteryPercent != nil || spec.faultText != nil
         }
     }
 
@@ -817,6 +864,8 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
                 return "thermometer.medium"
             }
             return "sensor.fill"
+        case .cover(let s):
+            return (s.positionPercent ?? 0) > 0 ? "window.vertical.open" : "window.vertical.closed"
         }
     }
 
@@ -970,6 +1019,14 @@ public struct SmartDevice: Identifiable, Equatable, Sendable {
                 return text
             }
             return L10n.tr("在线", "Online")
+        case .cover(let s):
+            if let fault = s.faultText, !fault.isEmpty { return fault }
+            if let pos = s.positionPercent {
+                if pos <= 0 { return L10n.tr("已关上", "Closed") }
+                if pos >= 100 { return L10n.tr("已打开", "Open") }
+                return L10n.tr("开 \(pos)%", "Open \(pos)%")
+            }
+            return L10n.tr("可控制", "Ready")
         }
     }
 

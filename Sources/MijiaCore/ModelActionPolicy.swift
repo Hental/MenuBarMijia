@@ -214,6 +214,8 @@ public enum ModelActionPolicy {
             return .anyPower
         case .vacuum:
             return .powerOn
+        case .window:
+            return .powerOn
         case .climate where device.name.contains("热水器"):
             guard case .climate(let spec) = device.kind else { return nil }
             return .powerOnOrHotter(setpoint: spec.targetTemperature)

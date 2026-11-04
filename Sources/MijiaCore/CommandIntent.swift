@@ -118,7 +118,7 @@ public struct PendingCloudConsent: Equatable, Sendable {
 // MARK: - Device Category Used by Both Resolvers
 
 public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
-    case light, climate, heater, fan, airPurifier, dehumidifier, diffuser, plug, vacuum, speaker, tv, fridge, camera, sensor
+    case light, climate, heater, fan, airPurifier, dehumidifier, diffuser, plug, vacuum, speaker, tv, fridge, camera, sensor, window
     private static let heaterNameHints = ["电暖", "暖气", "取暖", "暖风"]
     private static let airPurifierNameHints = ["净化", "空净", "新风", "加湿"]
 
@@ -148,6 +148,7 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
         case .fridge: self = .fridge
         case .camera: self = .camera
         case .sensor: self = .sensor
+        case .cover: self = .window
         }
     }
 
@@ -155,7 +156,7 @@ public enum IntentDeviceCategory: String, Equatable, Sendable, CaseIterable {
     public var isAssistantControllable: Bool {
         switch self {
         case .light, .climate, .heater, .fan, .airPurifier, .dehumidifier, .diffuser, .plug, .vacuum, .tv, .camera: return true
-        case .speaker, .fridge, .sensor: return false
+        case .speaker, .fridge, .sensor, .window: return false
         }
     }
 }
@@ -727,6 +728,9 @@ public struct IntentCatalog: Sendable {
         case .camera(let s):
             return s.isOn ? "开" : "关"
         case .speaker, .fridge, .sensor: return ""
+        case .cover(let s):
+            if let pos = s.positionPercent { return "开\(pos)%" }
+            return "未知"
         }
     }
 }
