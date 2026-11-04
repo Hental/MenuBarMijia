@@ -12,7 +12,8 @@ import MijiaCore
 /// - icon + text from `HomeStore.menuBarSymbolName` / `menuBarText`, with the listening waveform and
 ///   the live transcript while `SpeechInputController` records;
 /// - tooltip and accessibility label from `MenuBarStatusSummary`;
-/// - a left click toggles the panel; holding either button for 0.5 s starts hold-to-talk;
+/// - a left click toggles the panel, holding the left button starts hold-to-talk, and a right click
+///   opens the app menu;
 /// - the panel closes on an outside click or when the app deactivates (unless dictation is running);
 /// - it becomes key, so arrow keys, Esc, ⌘, and its text fields behave as they did before;
 /// - it is anchored under the item's own screen and stays on screen across display changes;
@@ -36,6 +37,8 @@ final class MenuBarPanelController: NSObject {
     static let didHideNotification = Notification.Name("MenuBarMijia.panelDidHide")
 
     private static let topGap: CGFloat = 6
+    /// Fallback for hosts that do not expose an event number when AppKit dismisses a menu.
+    private static let contextMenuSyntheticClickTail: TimeInterval = 0.08
     private static let screenMargin: CGFloat = 8
     /// Press-and-hold on the icon starts dictation instead of toggling the panel. 0.5 s is long
     /// enough that an ordinary slow click toggles the panel instead of dictating.
@@ -50,15 +53,47 @@ final class MenuBarPanelController: NSObject {
     /// Tests switch this off so `swift test` shows the window without stealing key status or focus
     /// from the terminal; the app keeps it on, which is what makes the panel key like the extra was.
     var presentsActively = true
+    /// Page-routing boundary used by the status menu; the app delegates to the existing Settings owner.
+    var showSettings: (SettingsTab?) -> Void = { SettingsWindowOpener.shared.show(tab: $0) }
+    /// Backend-routing boundary used by tests; production falls through to the installed store.
+    var switchHomeBackend: ((HomeBackend) -> Void)?
+    /// Injectable so menu-action tests can verify Quit without terminating the test runner.
+    var terminateApplication: () -> Void = { NSApplication.shared.terminate(nil) }
+    /// Update route for the status menu; production falls through to the installed store.
+    var performUpdateCheck: (() -> Void)?
+    /// Event-boundary seams keep gesture routing testable without creating a process-wide NSApp.
+    var statusContextMenuPresenter: ((NSMenu) -> Void)?
+    var statusItemToggle: (() -> Void)?
+    var statusItemEventNumber: () -> Int? = {
+        MenuBarPanelController.statusEventNumber(for: NSApplication.shared.currentEvent)
+    }
+
+    /// Reads the current event's number only when it is a mouse event. `NSEvent.eventNumber` raises
+    /// `NSInternalInconsistencyException` for keyboard events, which reach the status item when the
+    /// context menu is dismissed with Escape or the item is activated by keyboard navigation.
+    static func statusEventNumber(for event: NSEvent?) -> Int? {
+        guard let event else { return nil }
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp, .mouseMoved,
+             .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+             .mouseEntered, .mouseExited:
+            return event.eventNumber
+        default:
+            return nil
+        }
+    }
 
     private weak var store: HomeStore?
     private var labelTimer: Timer?
     private var pressTimer: Timer?
     private var pressStartedAt: TimeInterval = 0
     private var pressTriggered = false
-    /// Only a left click toggles; a right click exists solely to start dictation.
     private var pressAllowsToggle = true
     private var suppressReleaseUntil: TimeInterval = 0
+    private var suppressContextMenuUntil: TimeInterval = 0
+    private var contextMenuDismissalEventNumber: Int?
+    private var acceptsStandalonePostMenuMouseUp = false
     /// What the status button currently shows; kept after a sync so diagnostics and tests can read it.
     private(set) var labelSymbol: String?
     private var labelShowsHazard = false
@@ -69,7 +104,8 @@ final class MenuBarPanelController: NSObject {
     private var globalMouseMonitor: Any?
     private var didInstall = false
 
-    override init() {
+    init(statusItem: NSStatusItem? = nil) {
+        self.statusItem = statusItem
         super.init()
     }
 
@@ -149,9 +185,9 @@ final class MenuBarPanelController: NSObject {
             button.imagePosition = .imageLeading
             button.target = self
             button.action = #selector(handleStatusItemPress)
-            // Send every press/release so a short click toggles and a hold tracks dictation instead
-            // of AppKit acting on mouse-down alone.
-            _ = button.sendAction(on: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp])
+            // `NSControl.sendAction(on:)` only honors primary-button tracking masks. Secondary
+            // clicks arrive through the status-item secondary action or the event monitors below.
+            _ = button.sendAction(on: [.leftMouseDown, .leftMouseUp])
         }
         configureStatusItemLongPress(on: item)
         statusItem = item
@@ -173,6 +209,223 @@ final class MenuBarPanelController: NSObject {
         typealias SetSelFn = @convention(c) (AnyObject, Selector, Selector) -> Void
         let imp = unsafeBitCast(method_getImplementation(method), to: SetSelFn.self)
         imp(item, setLongSel, #selector(handleStatusItemNativeLongPress(_:)))
+    }
+
+    // MARK: - Status Item Context Menu
+
+    struct StatusConnectionMenuState {
+        let isDemo: Bool
+        let includesHomeAssistant: Bool
+        let includesXiaomiCloud: Bool
+        let preferredLiveBackend: HomeBackend
+
+        init(
+            homeBackend: HomeBackend,
+            hasHASource: Bool,
+            hasMiSource: Bool,
+            preferredLiveBackend: HomeBackend
+        ) {
+            isDemo = homeBackend == .demo
+            includesHomeAssistant = !isDemo && (
+                hasHASource || (!hasMiSource && homeBackend == .homeAssistant)
+            )
+            includesXiaomiCloud = !isDemo && (
+                hasMiSource || (!hasHASource && homeBackend == .xiaomiCloud)
+            )
+            self.preferredLiveBackend = preferredLiveBackend
+        }
+    }
+
+    private var statusConnectionMenuState: StatusConnectionMenuState {
+        guard let store else {
+            return StatusConnectionMenuState(
+                homeBackend: .homeAssistant,
+                hasHASource: false,
+                hasMiSource: false,
+                preferredLiveBackend: .homeAssistant
+            )
+        }
+        return StatusConnectionMenuState(
+            homeBackend: store.homeBackend,
+            hasHASource: store.hasHASource,
+            hasMiSource: store.hasMiSource,
+            preferredLiveBackend: store.preferredLiveBackend
+        )
+    }
+
+    /// Creates a new menu for each presentation so a runtime language change is reflected at once.
+    func makeStatusContextMenu(connectionState: StatusConnectionMenuState? = nil) -> NSMenu {
+        let menu = NSMenu()
+        let state = connectionState ?? statusConnectionMenuState
+        let connections = NSMenuItem(
+            title: L10n.tr("家居连接", "Connections"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        let connectionsMenu = NSMenu()
+
+        let liveConnections = NSMenuItem(
+            title: L10n.tr("实时连接", "Live Connections"),
+            action: #selector(switchBackendFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        liveConnections.target = self
+        liveConnections.representedObject = state.preferredLiveBackend.rawValue
+        liveConnections.state = state.isDemo ? .off : .on
+        connectionsMenu.addItem(liveConnections)
+
+        let demo = NSMenuItem(
+            title: HomeBackend.demo.title,
+            action: #selector(switchBackendFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        demo.target = self
+        demo.representedObject = HomeBackend.demo.rawValue
+        demo.state = state.isDemo ? .on : .off
+        connectionsMenu.addItem(demo)
+
+        connectionsMenu.addItem(.separator())
+        let homeAssistant = NSMenuItem(
+            title: HomeBackend.homeAssistant.title,
+            action: nil,
+            keyEquivalent: ""
+        )
+        homeAssistant.state = state.includesHomeAssistant ? .on : .off
+        homeAssistant.isEnabled = false
+        connectionsMenu.addItem(homeAssistant)
+
+        let xiaomiCloud = NSMenuItem(
+            title: HomeBackend.xiaomiCloud.title,
+            action: nil,
+            keyEquivalent: ""
+        )
+        xiaomiCloud.state = state.includesXiaomiCloud ? .on : .off
+        xiaomiCloud.isEnabled = false
+        connectionsMenu.addItem(xiaomiCloud)
+
+        connectionsMenu.addItem(.separator())
+        let connectionSettings = NSMenuItem(
+            title: L10n.tr("打开连接设置…", "Open Connection Settings…"),
+            action: #selector(openConnectionSettingsFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        connectionSettings.target = self
+        connectionsMenu.addItem(connectionSettings)
+        connections.submenu = connectionsMenu
+        menu.addItem(connections)
+
+        let settings = NSMenuItem(
+            title: L10n.tr("设置…", "Settings…"),
+            action: #selector(openSettingsFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        settings.target = self
+        menu.addItem(settings)
+
+        let updates = NSMenuItem(
+            title: L10n.tr("检查更新…", "Check for Updates…"),
+            action: #selector(openUpdatesFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        updates.target = self
+        menu.addItem(updates)
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(
+            title: L10n.tr("退出 MenuBarMijia", "Quit MenuBarMijia"),
+            action: #selector(quitFromStatusMenu(_:)),
+            keyEquivalent: ""
+        )
+        quit.target = self
+        menu.addItem(quit)
+        return menu
+    }
+
+    private func showStatusContextMenu() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now >= suppressContextMenuUntil else {
+            restoreStatusItemHighlight()
+            return
+        }
+        // Keep the release timer alive once hold-to-talk has started. Opening AppKit's modal menu
+        // here can consume the left-button release and strand both recording and `pressTriggered`.
+        guard !pressTriggered else { return }
+
+        // A pop-up menu runs a modal event loop. Suppress every duplicate/synthetic status-item
+        // action while it is open. Its dismissal event is remembered below so the next distinct
+        // primary mouse-up can be recognized even if the out-of-process host omits mouse-down.
+        pressAllowsToggle = false
+        stopPressTimer()
+        suppressContextMenuUntil = .infinity
+        suppressReleaseUntil = .infinity
+
+        let menu = makeStatusContextMenu()
+        if let statusContextMenuPresenter {
+            // Tests replace only AppKit's blocking menu tracker; keep its visual state real.
+            setStatusItemHighlighted(true)
+            statusContextMenuPresenter(menu)
+        } else if let statusItem {
+            Self.presentStatusMenu(menu, on: statusItem)
+        }
+
+        let dismissedAt = ProcessInfo.processInfo.systemUptime
+        restoreStatusItemHighlight()
+        contextMenuDismissalEventNumber = statusItemEventNumber()
+        // Escape and keyboard activation expose no mouse event number, but the next physical click
+        // can still arrive as a mouse-up only on macOS 26. Arm the fallback either way and keep the
+        // time-based tail for hosts that omit the dismissal event number.
+        acceptsStandalonePostMenuMouseUp = true
+        suppressContextMenuUntil = dismissedAt + 0.15
+        suppressReleaseUntil = contextMenuDismissalEventNumber == nil
+            ? dismissedAt + Self.contextMenuSyntheticClickTail
+            : 0
+    }
+
+    /// Uses `NSStatusItem.menu` so AppKit owns the menu's click tracking and pressed appearance.
+    /// `performClick` is synchronous for status-menu tracking, so restoring the previous menu after
+    /// it returns keeps ordinary primary clicks routed to the controller.
+    static func presentStatusMenu(_ menu: NSMenu, on statusItem: NSStatusItem) {
+        guard let button = statusItem.button else { return }
+        let previousMenu = statusItem.menu
+        statusItem.menu = menu
+        defer { statusItem.menu = previousMenu }
+        button.performClick(nil)
+    }
+
+    @objc func openSettingsFromStatusMenu(_ sender: Any?) {
+        showSettings(nil)
+    }
+
+    @objc func switchBackendFromStatusMenu(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let rawValue = item.representedObject as? String,
+              let backend = HomeBackend(rawValue: rawValue) else { return }
+        if let switchHomeBackend {
+            switchHomeBackend(backend)
+        } else {
+            guard let store else { return }
+            if backend != .demo, store.homeBackend != .demo { return }
+            store.switchBackend(backend)
+        }
+    }
+
+    @objc func openConnectionSettingsFromStatusMenu(_ sender: Any?) {
+        showSettings(.connection)
+    }
+
+    @objc func openUpdatesFromStatusMenu(_ sender: Any?) {
+        showSettings(.about)
+        // This is an explicit check; the About tab's `checkForUpdatesIfNeeded()` skips automatic
+        // checks that are disabled or recent, so do not rely on it.
+        if let performUpdateCheck {
+            performUpdateCheck()
+        } else if let store {
+            Task { await store.checkForUpdates() }
+        }
+    }
+
+    @objc func quitFromStatusMenu(_ sender: Any?) {
+        terminateApplication()
     }
 
     // MARK: - Menu Bar Label (#54)
@@ -339,6 +592,7 @@ final class MenuBarPanelController: NSObject {
         } else {
             panel.orderFront(nil)
         }
+        setStatusItemHighlighted(true)
         grokBallSidecar?.synchronize()
         // Re-showing an already visible panel (hotkey while open, URL scheme, intent) must not replay
         // the drop-in animation.
@@ -352,6 +606,7 @@ final class MenuBarPanelController: NSObject {
         grokBallSidecar?.hide()
         store?.dismissGrokBallStage()
         panel.orderOut(nil)
+        restoreStatusItemHighlight()
         store?.setPanelVisible(false)
         // The SwiftUI tree stays alive, exactly like a `.window`-style `MenuBarExtra`: scroll
         // position, the search field text and layout-editing state survive a close/reopen. The drop-in
@@ -453,58 +708,142 @@ final class MenuBarPanelController: NSObject {
 
     // MARK: - Status Item Gesture
 
-    /// A short left click toggles the panel and holding either button for 0.5 s starts dictation.
+    /// A short left click toggles the panel, a left hold starts dictation, and a right click opens
+    /// the native context menu.
     /// On macOS 26+, the system menu bar (`NSMenuBarNavigationSceneExtension`) hosts status items
     /// out-of-process: it delivers holds via `setLongPressAction:` (`_performSecondaryAction:type:`)
     /// and delivers short clicks as a synthesized mouseDown+mouseUp pair upon release. Combining
     /// button actions, `setLongPressAction:`, and mouse-down monitors covers both in-process and
     /// out-of-process menu bar hosts.
     @objc func handleStatusItemPress() {
-        switch NSApp.currentEvent?.type {
+        handleStatusItemEvent(
+            eventType: NSApp.currentEvent?.type,
+            pressedMouseButtons: NSEvent.pressedMouseButtons
+        )
+    }
+
+    func handleStatusItemEvent(eventType: NSEvent.EventType?, pressedMouseButtons: Int) {
+        let eventNumber = statusItemEventNumber()
+        switch eventType {
         case .leftMouseDown?:
-            guard ProcessInfo.processInfo.systemUptime >= suppressReleaseUntil, !pressTriggered else { return }
+            if isContextMenuDismissalEvent(eventNumber) {
+                restoreStatusItemHighlight()
+                return
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard !pressTriggered else { return }
+            if now < suppressReleaseUntil {
+                // The menu-bar host can synthesize a primary pair after dismissing the context
+                // menu; it has no physical left-button bit. Keep filtering that pair, but let the
+                // user's next real click cancel the time-based tail immediately.
+                guard (pressedMouseButtons & 0x1) != 0 else { return }
+                suppressReleaseUntil = 0
+            }
+            // Only an accepted down consumes the pending post-menu click; a rejected synthetic pair
+            // must leave it armed for the host's next mouse-up-only delivery.
+            clearPostMenuPrimaryMouseUp()
             pressAllowsToggle = true
+            setStatusItemHighlighted(true)
             beginPress()
         case .rightMouseDown?:
-            guard ProcessInfo.processInfo.systemUptime >= suppressReleaseUntil, !pressTriggered else { return }
-            pressAllowsToggle = false
-            beginPress()
-        case .leftMouseUp?, .rightMouseUp?:
+            showStatusContextMenu()
+        case .rightMouseUp?:
+            restoreStatusItemHighlight()
+            return
+        case .leftMouseUp?:
+            defer { restoreStatusItemHighlight() }
+            if isContextMenuDismissalEvent(eventNumber) {
+                return
+            }
             // On macOS 26+ (NSSceneStatusItem), `-[NSStatusItem _performOneShotAction:]` synthesizes
             // both `leftMouseDown` and `leftMouseUp` back-to-back at the moment the press begins while
             // the physical mouse button is still held down. Only finish immediately when the button is
             // no longer physically pressed; otherwise let `pressTimer` track the hold threshold and
             // eventual release.
-            if (NSEvent.pressedMouseButtons & 0x3) == 0 {
-                finishPress()
+            if (pressedMouseButtons & 0x1) == 0 {
+                if isStatusItemPressActive {
+                    finishPress()
+                } else if acceptsStandalonePostMenuMouseUp,
+                          ProcessInfo.processInfo.systemUptime >= suppressReleaseUntil {
+                    clearPostMenuPrimaryMouseUp()
+                    pressAllowsToggle = false
+                    suppressReleaseUntil = ProcessInfo.processInfo.systemUptime + 0.15
+                    performStatusItemToggle()
+                }
             }
         default:
-            if !pressTriggered, ProcessInfo.processInfo.systemUptime >= suppressReleaseUntil {
-                togglePanel()
+            let now = ProcessInfo.processInfo.systemUptime
+            // Keyboard and accessibility activation never produce the mouse-up this fallback waits
+            // for. Past the dismissal grace, drop the stale fallback so the key still toggles; the
+            // grace window keeps Escape and the menu's own synthetic tail from opening the panel.
+            if acceptsStandalonePostMenuMouseUp, now >= suppressContextMenuUntil {
+                clearPostMenuPrimaryMouseUp()
+            }
+            if !acceptsStandalonePostMenuMouseUp,
+               !pressTriggered,
+               now >= suppressReleaseUntil {
+                performStatusItemToggle()
+            }
+            if pressedMouseButtons == 0 {
+                restoreStatusItemHighlight()
             }
         }
     }
 
     @objc func handleStatusItemNativeLongPress(_ sender: Any?) {
+        handleStatusItemNativeLongPressEvent(
+            eventType: NSApp.currentEvent?.type,
+            pressedMouseButtons: NSEvent.pressedMouseButtons
+        )
+    }
+
+    func handleStatusItemNativeLongPressEvent(
+        eventType: NSEvent.EventType?,
+        pressedMouseButtons: Int
+    ) {
+        if eventType == .rightMouseDown || (pressedMouseButtons & 0x2) != 0 {
+            showStatusContextMenu()
+            return
+        }
+
         let now = ProcessInfo.processInfo.systemUptime
+        guard now >= suppressReleaseUntil else { return }
+        clearPostMenuPrimaryMouseUp()
+        if (pressedMouseButtons & 0x1) != 0 {
+            setStatusItemHighlighted(true)
+        }
         if !pressTriggered {
             pressTriggered = true
             pressAllowsToggle = false
             pressStartedAt = now
             beginHoldToTalk()
         }
-        if (NSEvent.pressedMouseButtons & 0x3) != 0 {
+        if (pressedMouseButtons & 0x1) != 0 {
             startPressTimerIfNeeded()
         } else {
             finishPress()
         }
     }
 
-    private func beginHoldDetectionFromMonitor() {
+    /// `handleMouseDown` routes a status-item hit here. Internal so gesture tests can exercise the
+    /// monitor path without a live menu-bar window.
+    ///
+    /// `allowsPostMenuToggle` is true only when the press landed on the button itself; the wider
+    /// hold-tracking tolerance must not consume the pending post-menu click.
+    func beginHoldDetectionFromMonitor(allowsPostMenuToggle: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
         guard now >= suppressReleaseUntil, !pressTriggered else { return }
+        setStatusItemHighlighted(true)
         if pressTimer == nil {
-            pressAllowsToggle = false
+            // The first physical press after the context menu closed is the click that dismissed it.
+            // Its release must toggle the panel even when the host forwards this down to the monitor
+            // but not to the button, so consume the pending fallback and let the press toggle.
+            if allowsPostMenuToggle, acceptsStandalonePostMenuMouseUp {
+                clearPostMenuPrimaryMouseUp()
+                pressAllowsToggle = true
+            } else {
+                pressAllowsToggle = false
+            }
             pressStartedAt = now
             startPressTimerIfNeeded()
         }
@@ -533,7 +872,7 @@ final class MenuBarPanelController: NSObject {
     }
 
     @objc private func handlePressTick(_ timer: Timer) {
-        if (NSEvent.pressedMouseButtons & 0x3) != 0 {
+        if (NSEvent.pressedMouseButtons & 0x1) != 0 {
             guard !pressTriggered,
                   ProcessInfo.processInfo.systemUptime - pressStartedAt >= Self.holdThreshold else { return }
             // Keep ticking so the release still stops dictation.
@@ -555,16 +894,68 @@ final class MenuBarPanelController: NSObject {
             pressAllowsToggle = false
             suppressReleaseUntil = now + 0.45
             endHoldToTalk()
+            restoreStatusItemHighlight()
             return
         }
 
         // AppKit can deliver both the up action and the timer fallback for one release.
-        guard now >= suppressReleaseUntil else { return }
+        guard now >= suppressReleaseUntil else {
+            restoreStatusItemHighlight()
+            return
+        }
         if pressAllowsToggle {
             pressAllowsToggle = false
             suppressReleaseUntil = now + 0.15
+            performStatusItemToggle()
+        }
+        restoreStatusItemHighlight()
+    }
+
+    private func performStatusItemToggle() {
+        if let statusItemToggle {
+            statusItemToggle()
+        } else {
             togglePanel()
         }
+    }
+
+    /// `NSStatusBarButton` normally clears its pressed appearance after dispatching an action.
+    /// Because this controller receives both mouse-down and mouse-up actions (and can enter a modal
+    /// menu loop), AppKit can leave the cell highlighted after the physical button is released.
+    private func clearStatusItemHighlight() {
+        setStatusItemHighlighted(false)
+    }
+
+    /// Keeps the status item selected while its control-center panel remains visible, and otherwise
+    /// preserves the transient pressed appearance only for an active primary gesture.
+    private func restoreStatusItemHighlight() {
+        setStatusItemHighlighted(isPanelVisible || isStatusItemPressActive)
+    }
+
+    private func setStatusItemHighlighted(_ highlighted: Bool) {
+        Self.setStatusItemHighlight(on: statusItem?.button, highlighted: highlighted)
+    }
+
+    static func setStatusItemHighlight(on button: NSButton?, highlighted: Bool) {
+        button?.highlight(highlighted)
+    }
+
+    static func clearStatusItemHighlight(on button: NSButton?) {
+        setStatusItemHighlight(on: button, highlighted: false)
+    }
+
+    private func isContextMenuDismissalEvent(_ eventNumber: Int?) -> Bool {
+        guard let eventNumber, let contextMenuDismissalEventNumber else { return false }
+        return eventNumber == contextMenuDismissalEventNumber
+    }
+
+    private func clearPostMenuPrimaryMouseUp() {
+        acceptsStandalonePostMenuMouseUp = false
+        contextMenuDismissalEventNumber = nil
+    }
+
+    var isStatusItemPressActive: Bool {
+        pressTimer != nil || pressTriggered
     }
 
     private func stopPressTimer() {
@@ -681,13 +1072,23 @@ final class MenuBarPanelController: NSObject {
             MainActor.assumeIsolated {
                 let point = event.window?.convertPoint(toScreen: event.locationInWindow)
                     ?? event.locationInWindow
-                self?.handleMouseDown(in: event.window, at: point)
+                self?.handleMouseDown(
+                    in: event.window,
+                    at: point,
+                    eventType: event.type,
+                    pressedMouseButtons: NSEvent.pressedMouseButtons
+                )
             }
             return event
         }
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] event in
             MainActor.assumeIsolated {
-                self?.handleMouseDown(in: nil, at: NSEvent.mouseLocation)
+                self?.handleMouseDown(
+                    in: nil,
+                    at: NSEvent.mouseLocation,
+                    eventType: event.type,
+                    pressedMouseButtons: NSEvent.pressedMouseButtons
+                )
             }
         }
     }
@@ -701,13 +1102,28 @@ final class MenuBarPanelController: NSObject {
 
     /// A click need not activate another app (desktop, nonactivating panels, other status items).
     /// Keep our own controls and status button working, and never swallow the original click.
-    func handleMouseDown(in window: NSWindow?, at screenPoint: NSPoint) {
+    func handleMouseDown(
+        in window: NSWindow?,
+        at screenPoint: NSPoint,
+        eventType: NSEvent.EventType = .leftMouseDown,
+        pressedMouseButtons: Int = NSEvent.pressedMouseButtons
+    ) {
         if let button = statusItem?.button,
            let statusWindow = button.window {
             let statusRect = statusWindow.convertToScreen(button.convert(button.bounds, to: nil))
-            if window === statusWindow || statusRect.insetBy(dx: -6, dy: -6).contains(screenPoint) {
-                if (NSEvent.pressedMouseButtons & 0x3) != 0 {
-                    beginHoldDetectionFromMonitor()
+            if window === statusWindow || Self.isStatusItemHit(
+                statusRect: statusRect,
+                point: screenPoint,
+                eventType: eventType
+            ) {
+                if eventType == .rightMouseDown {
+                    showStatusContextMenu()
+                } else if eventType == .leftMouseDown, (pressedMouseButtons & 0x1) != 0 {
+                    // The 6 pt tolerance serves hold tracking. A post-menu click must land on the
+                    // button itself, or a neighboring status item could toggle this panel.
+                    beginHoldDetectionFromMonitor(
+                        allowsPostMenuToggle: statusRect.contains(screenPoint)
+                    )
                 }
                 return
             }
@@ -733,6 +1149,19 @@ final class MenuBarPanelController: NSObject {
             || pressTimer != nil
             || HotkeyAndNotificationManager.shared.isHotkeyPhysicallyDown { return }
         hidePanel()
+    }
+
+    /// Primary hold tracking gets a small tolerance for host/window coordinate drift. Secondary
+    /// clicks stay inside the real item so an adjacent menu-bar item cannot open this app's menu.
+    static func isStatusItemHit(
+        statusRect: NSRect,
+        point: NSPoint,
+        eventType: NSEvent.EventType
+    ) -> Bool {
+        if eventType == .rightMouseDown {
+            return statusRect.contains(point)
+        }
+        return statusRect.insetBy(dx: -6, dy: -6).contains(point)
     }
 
     func handleApplicationResignActive() {
