@@ -63,6 +63,9 @@ extension HomeStore {
             setSpeakerVolume(dev.id, percent: max(0, min(100, s.volumePercent + delta * 10)))
         case .tv(let s):
             setSpeakerVolume(dev.id, percent: max(0, min(100, s.volumePercent + delta * 10)))
+        case .cover(let s) where s.positionWritable:
+            let current = s.positionPercent ?? 0
+            setCoverPosition(dev.id, percent: max(0, min(100, current + delta * 10)))
         default:
             if delta < 0 {
                 expandedDeviceId = nil

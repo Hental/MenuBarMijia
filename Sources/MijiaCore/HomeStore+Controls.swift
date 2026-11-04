@@ -96,6 +96,16 @@ extension HomeStore {
             s.isOn.toggle()
             updated.kind = .camera(s)
             command = .setSwitch(entityId: s.entityId, isOn: s.isOn)
+        case .cover(var s):
+            guard let open = s.openDescription, let close = s.closeDescription,
+                  let pos = s.positionPercent else {
+                toggleExpanded(device.id)
+                return nil
+            }
+            let shouldOpen = pos == 0
+            s.positionPercent = shouldOpen ? 100 : 0
+            updated.kind = .cover(s)
+            command = .setSelectOption(entityId: s.entityId, option: shouldOpen ? open : close)
         case .speaker, .fridge, .sensor:
             toggleExpanded(device.id)
             return nil
@@ -190,6 +200,13 @@ extension HomeStore {
     /// reports the previous value immediately after a write. That second wait releases the
     /// tap so a newer toggle, such as the next keyboard press, is not discarded.
     private func confirmToggleReadBack(deviceId: String, requested: SmartDevice, ticket: UInt64) async -> ReadBackConfirm {
+        if case .cover = requested.kind {
+            // Motor control is write-only. Position is reported after the sash moves, so a
+            // successful write is the confirmation rather than an instant 0 or 100 reading.
+            applyConfirmedPower(from: requested, deviceId: deviceId)
+            lockOptimistic(deviceId, duration: .seconds(8))
+            return .matched
+        }
         if case .tv(let spec) = requested.kind, LGWebOSProtocol.isLGEntity(spec.mediaEntityId) {
             // The LAN client confirms TV writes; the cloud has no row for this device, and a
             // stale provider snapshot must not revert the accepted power.
@@ -435,6 +452,45 @@ extension HomeStore {
             habitIntents: [.init(targetId: deviceId, operation: .fanSpeed(preset))]
         )
     }
+    public func setCoverMotor(_ deviceId: String, description: String) {
+        guard !rejectControlWhileLocked() else { return }
+        guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
+              case .cover(var s) = devices[idx].kind else { return }
+        let previous = devices[idx]
+        let opening = s.openDescription.map { description.caseInsensitiveCompare($0) == .orderedSame } ?? false
+        let closing = s.closeDescription.map { description.caseInsensitiveCompare($0) == .orderedSame } ?? false
+        if opening || closing {
+            guard allowManualControl(opening ? .power(true) : .power(false), for: previous) else { return }
+        }
+        if opening { s.positionPercent = 100 }
+        if closing { s.positionPercent = 0 }
+        devices[idx].kind = .cover(s)
+        if opening || closing { lockOptimistic(deviceId, duration: .seconds(8)) }
+        dispatchImmediate(
+            deviceId: deviceId,
+            fallback: previous,
+            command: .setSelectOption(entityId: s.entityId, option: description)
+        )
+    }
+
+    /// A drag is the confirmation. One-tap open still asks via `setCoverMotor` / `togglePrimary`.
+    public func setCoverPosition(_ deviceId: String, percent: Int) {
+        guard !rejectControlWhileLocked() else { return }
+        guard let idx = devices.firstIndex(where: { $0.id == deviceId }),
+              case .cover(var s) = devices[idx].kind, s.positionWritable else { return }
+        let previous = devices[idx]
+        let clamped = max(0, min(100, percent))
+        s.positionPercent = clamped
+        devices[idx].kind = .cover(s)
+        lockOptimistic(deviceId, duration: .seconds(8))
+        dispatchDebounced(
+            key: "\(deviceId).cover",
+            deviceId: deviceId,
+            fallback: previous,
+            command: .setNumberValue(entityId: s.entityId, value: Double(clamped))
+        )
+    }
+
 
     public func setPlugChildLock(_ deviceId: String, locked: Bool) {
         guard !rejectControlWhileLocked() else { return }

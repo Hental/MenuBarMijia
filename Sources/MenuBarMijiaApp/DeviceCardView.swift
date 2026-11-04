@@ -717,8 +717,17 @@ public struct DeviceCardView: View {
             cameraDrawer(spec)
         case .sensor:
             EmptyView()
+        case .cover(let spec):
+            CoverDetailDrawer(
+                device: device,
+                spec: spec,
+                store: store,
+                accent: accent,
+                statusColor: statusColor
+            )
         }
     }
+
 
     // MARK: - 1. Light Detail Controls
 

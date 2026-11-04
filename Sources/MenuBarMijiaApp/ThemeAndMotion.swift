@@ -145,6 +145,7 @@ public enum DevicePalette {
         case .fridge: return DesignTokens.Orb.fridge
         case .camera: return DesignTokens.Orb.camera
         case .sensor: return DesignTokens.Orb.sensor
+        case .cover: return DesignTokens.Orb.cover
         }
     }
 }

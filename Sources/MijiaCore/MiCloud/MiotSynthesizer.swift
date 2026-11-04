@@ -47,6 +47,7 @@ public enum MiotSynthesizer {
         ("air-fresh", buildAirPurifier),
         ("humidifier", buildAirPurifier),
         ("vacuum", buildVacuum),
+        ("window-opener", buildCover),
         ("fridge", buildFridge),
         ("camera-control", buildCamera),
         ("video-doorbell", buildCamera),
@@ -444,6 +445,48 @@ public enum MiotSynthesizer {
             actionsWritable: actionsWritable
         ))
     }
+    static func buildCover(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
+        let current = r.ref("current-position", in: s)
+        let target = r.ref("target-position", in: s)
+        let fault = r.ref("device-fault", in: s)
+        let battery = r.first("battery-level", in: r.spec.services(named: "battery"))
+        let motor = s.properties.first { $0.shortName == "motor-control" && $0.isWritable }
+        let items = motor?.valueList ?? []
+        let positionSource = current ?? target
+        let position = positionSource?.value?.doubleValue.map {
+            percent(fromRaw: $0, property: positionSource!.property)
+        }
+        let faultCode = fault?.value?.intValue
+        let faultText: String? = {
+            guard let faultCode, faultCode != 0 else { return nil }
+            return fault?.property.description(forValue: faultCode) ?? "\(faultCode)"
+        }()
+        return .cover(CoverSpec(
+            entityId: MiotAddress.make(did: r.did, siid: s.iid),
+            positionPercent: position,
+            positionWritable: s.property(named: "target-position")?.isWritable == true,
+            openDescription: coverMotorDescription(in: items, word: .open),
+            closeDescription: coverMotorDescription(in: items, word: .close),
+            pauseDescription: coverMotorDescription(in: items, word: .pause),
+            batteryPercent: battery?.value?.intValue,
+            faultText: faultText
+        ))
+    }
+
+    enum CoverMotorWord { case open, close, pause }
+
+    /// Exact value-list words only. A substring match could turn "Not Open" into an open command.
+    static func coverMotorDescription(in items: [MiotValueListItem], word: CoverMotorWord) -> String? {
+        let aliases: Set<String> = switch word {
+        case .open: ["open", "打开"]
+        case .close: ["close", "关闭"]
+        case .pause: ["pause", "stop", "暂停"]
+        }
+        return items.first { item in
+            aliases.contains(item.description.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }?.description
+    }
+
 
     static func buildCamera(_ r: MiotReader, _ s: MiotService) -> DeviceKind {
         let on = r.ref("on", in: s)
