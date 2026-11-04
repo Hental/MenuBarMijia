@@ -499,6 +499,7 @@ extension HomeStore {
     }
 
     public func switchBackend(_ backend: HomeBackend) {
+        if backend != .xiaomiCloud { dismissMiReauth() }
         if backend == .demo, homeBackend == .demo, provider is DemoHomeProvider { return }
         if backend != .demo, homeBackend == backend, provider is DualSourceHomeProvider { return }
         invalidateUndoContext()
@@ -545,7 +546,6 @@ extension HomeStore {
             )
             return
         }
-        invalidateUndoContext()
         // The primary (first) account drives the summary and the history scope, so signing in a
         // second account must not relabel the panel with the newcomer.
         miAccounts = MiSessionStore.loadAccounts(defaults: userDefaults)
@@ -556,10 +556,11 @@ extension HomeStore {
         if let region = MiCloudRegion(rawValue: session.region.lowercased()) {
             self.miCloudRegion = region
         }
+        guard homeBackend == .xiaomiCloud else { return }
+        invalidateUndoContext()
         self.hasHASource = !KeychainHelper.loadToken(defaults: userDefaults)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
-        self.homeBackend = .xiaomiCloud
         self.completeOnboarding()
         rebuildLiveProvider()
         showToast(L10n.tr("已登录米家账号 (\(session.maskedUserId))", "Signed in to Xiaomi Home (\(session.maskedUserId))"))
