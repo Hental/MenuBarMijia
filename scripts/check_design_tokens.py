@@ -11,7 +11,7 @@ sys.stderr.reconfigure(encoding='utf-8')
 root = Path(__file__).resolve().parent.parent
 surfaces = (
     'AssistantCommandBar', 'AutomationSettingsSection', 'ClimatePanelModule',
-    'ControlCenterPanel', 'DeviceCardView', 'EnergySettingsSection',
+    'ControlCenterPanel', 'ControlCenterPanelChrome', 'ControlCenterPanelLayout', 'DeviceCardView', 'EnergySettingsSection',
     'HotkeyShortcutRecorder', 'MiAccountSection', 'SensorCardView',
     'SettingsWindowView', 'SettingsCategoryPicker', 'ThemeAndMotion', 'UpdateSection', 'PanelDesign',
 )
