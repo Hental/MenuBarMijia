@@ -9,6 +9,6 @@ let package = Package(
     .target(name: "os", dependencies: ["ThreadingShim"], path: "Shims/os"),
     .target(name: "Security", path: "Shims/Security"),
     .target(name: "CryptoKit", dependencies: [.product(name: "Crypto", package: "swift-crypto")], path: "Shims/CryptoKit"),
-    .target(name: "MijiaCore", dependencies: ["os", "Security", "CryptoKit"], path: ".work/MijiaCore", resources: [.copy("Resources/Localizations")], swiftSettings: [.swiftLanguageMode(.v6)]),
+    .target(name: "MijiaCore", dependencies: ["os", "Security", "CryptoKit"], path: ".work/MijiaCore", resources: [.copy("Resources/Localizations"), .copy("Resources/fallbackSpecs.json")], swiftSettings: [.swiftLanguageMode(.v6)]),
     .testTarget(name: "MijiaCoreTests", dependencies: ["MijiaCore"], path: ".work/MijiaCoreTests", swiftSettings: [.swiftLanguageMode(.v6)])
   ])
