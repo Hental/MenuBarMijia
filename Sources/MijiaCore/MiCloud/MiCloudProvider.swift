@@ -107,6 +107,9 @@ public actor MiCloudProvider: HomeProvider {
             try await discover(api)
             try await poll(api, dids: nil)
             reportConnected()
+        } catch MiCloudError.sessionExpired {
+            clearExpiredSnapshot()
+            report(MiCloudError.sessionExpired)
         } catch {
             report(error)
         }
@@ -161,14 +164,7 @@ public actor MiCloudProvider: HomeProvider {
             } catch is CancellationError {
                 return
             } catch MiCloudError.sessionExpired {
-                self.api = nil
-                if account != nil {
-                    // An expired account must not keep showing stale devices in the merged panel.
-                    devices = []
-                    rooms = []
-                    values = [:]
-                    emitSnapshot()
-                }
+                clearExpiredSnapshot()
                 report(MiCloudError.sessionExpired)
                 return
             } catch {
@@ -235,6 +231,16 @@ public actor MiCloudProvider: HomeProvider {
             sleeper.cancel()
         }
         waitTask = nil
+    }
+
+    /// Drops the cached home so an expired account stops contributing devices to the merged panel.
+    private func clearExpiredSnapshot() {
+        api = nil
+        guard account != nil else { return }
+        devices = []
+        rooms = []
+        values = [:]
+        emitSnapshot()
     }
 
     private func report(_ error: any Error) {
