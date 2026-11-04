@@ -20,8 +20,31 @@ public enum MiotFallbackSpec {
 
     /// Bytes of the bundled table, so a test can prove it still matches the Windows file.
     static func bundledData() -> Data? {
-        guard let url = Bundle.module.url(forResource: "fallbackSpecs", withExtension: "json") else { return nil }
-        return try? Data(contentsOf: url)
+        var urls: [URL] = []
+        if let url = Bundle.module.url(forResource: "fallbackSpecs", withExtension: "json", subdirectory: "Resources") {
+            urls.append(url)
+        }
+        if let url = Bundle.module.url(forResource: "fallbackSpecs", withExtension: "json") {
+            urls.append(url)
+        }
+        if let root = Bundle.module.resourceURL {
+            urls.append(root.appendingPathComponent("Resources/fallbackSpecs.json"))
+            urls.append(root.appendingPathComponent("fallbackSpecs.json"))
+        }
+        for base in L10n.translationSearchBases {
+            urls.append(base.appendingPathComponent("Resources/fallbackSpecs.json"))
+            urls.append(base.appendingPathComponent("fallbackSpecs.json"))
+            for name in L10n.resourceDirectoryNames(in: base) {
+                let bundle = base.appendingPathComponent(name)
+                urls.append(bundle.appendingPathComponent("Resources/fallbackSpecs.json"))
+                urls.append(bundle.appendingPathComponent("Contents/Resources/Resources/fallbackSpecs.json"))
+                urls.append(bundle.appendingPathComponent("Contents/Resources/fallbackSpecs.json"))
+            }
+        }
+        for url in urls {
+            if let data = try? Data(contentsOf: url), !data.isEmpty { return data }
+        }
+        return nil
     }
 
     private struct Document: Decodable {
