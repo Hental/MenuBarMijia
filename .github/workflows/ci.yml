@@ -221,7 +221,10 @@ jobs:
         env:
           # 快照不一致时把差异图写到固定目录，便于作为 artifact 下载（#46）。
           SNAPSHOT_ARTIFACTS: "${{ github.workspace }}/snapshot-failed"
-        run: swift test
+          # A deadlocked test samples its stacks and fails here instead of burning the 45-minute
+          # job timeout in silence.
+          SWIFT_TEST_STALL_SECONDS: "300"
+        run: bash scripts/ci_swift_test.sh
       - name: Trim Swift build cache
         if: success()
         run: |
