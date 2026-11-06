@@ -409,6 +409,81 @@ struct AssistantTests {
         }
     }
 
+    @Test("Kimi Code endpoints send temperature 1 while timeouts and token budgets stay default")
+    func kimiCodeRequestShape() async throws {
+        // api.kimi.com/coding only allows temperature = 1 ("only 1 is allowed for this model").
+        let reply = #"{"actions":[{"device":"d1","op":"power","value":true}],"reply":"已打开书房吸顶灯"}"#
+        let responseData = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": reply]]]])
+
+        let resolver = ModelIntentResolver(
+            config: AssistantConfig(baseURL: "https://api.kimi.com/coding/v1", model: "kimi-for-coding-highspeed", apiKey: "sk-kimi-test"),
+            transport: { request in
+                #expect(request.url?.absoluteString == "https://api.kimi.com/coding/v1/chat/completions")
+                let body = try #require(request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+                #expect(body["model"] as? String == "kimi-for-coding-highspeed")
+                #expect(body["temperature"] as? Int == 1)
+                #expect(body["max_tokens"] as? Int == 800)
+                #expect(request.timeoutInterval == 10)
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (responseData, response)
+            }
+        )
+        let plan = try await resolver.resolve("打开书房灯", devices: Self.devices, scenes: Self.scenes)
+        #expect(plan.intents == [DeviceIntent(targetId: "dev_study_ceiling", operation: .power(true))])
+
+        let proactiveData = try JSONSerialization.data(
+            withJSONObject: ["choices": [["message": ["content": #"{"suggestions":[]}"#]]]]
+        )
+        let proactiveResolver = ModelIntentResolver(
+            config: AssistantConfig(baseURL: "https://api.kimi.ai/coding/v1", model: "kimi-for-coding", apiKey: "sk-kimi-test"),
+            transport: { request in
+                #expect(request.url?.absoluteString == "https://api.kimi.ai/coding/v1/chat/completions")
+                let body = try #require(request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+                #expect(body["temperature"] as? Int == 1)
+                #expect(body["max_tokens"] as? Int == 600)
+                #expect(request.timeoutInterval == 10)
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (proactiveData, response)
+            }
+        )
+        let suggestions = try await proactiveResolver.recommendProactiveSuggestions(
+            devices: Self.devices,
+            scenes: Self.scenes,
+            context: AssistantContext(timeSummary: "夜晚 22:30")
+        )
+        #expect(suggestions == [])
+
+        let deepSeekResolver = ModelIntentResolver(
+            config: AssistantConfig(baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-deepseek-test"),
+            transport: { request in
+                let body = try #require(request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+                #expect(body["temperature"] as? Int == 0)
+                #expect(body["max_tokens"] as? Int == 800)
+                #expect(request.timeoutInterval == 10)
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (responseData, response)
+            }
+        )
+        _ = try await deepSeekResolver.resolve("打开书房灯", devices: Self.devices, scenes: Self.scenes)
+
+        let deepSeekProactive = ModelIntentResolver(
+            config: AssistantConfig(baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-deepseek-test"),
+            transport: { request in
+                let body = try #require(request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+                #expect(body["temperature"] as? Int == 0)
+                #expect(body["max_tokens"] as? Int == 600)
+                #expect(request.timeoutInterval == 10)
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (proactiveData, response)
+            }
+        )
+        _ = try await deepSeekProactive.recommendProactiveSuggestions(
+            devices: Self.devices,
+            scenes: Self.scenes,
+            context: AssistantContext(timeSummary: "夜晚 22:30")
+        )
+    }
+
     // MARK: - HomeStore integration
 
     @MainActor
@@ -684,6 +759,7 @@ struct AssistantTests {
             "dashscope",
             "zhipu_glm",
             "moonshot_kimi",
+            "moonshot_kimi_coding_plan",
             "openai",
             "gemini",
             "groq",
@@ -696,8 +772,20 @@ struct AssistantTests {
         #expect(AssistantProviderPreset.infer(baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1") == .dashScope)
         #expect(AssistantProviderPreset.infer(baseURL: "https://open.bigmodel.cn/api/paas/v4") == .zhipuGLM)
         #expect(AssistantProviderPreset.infer(baseURL: "https://api.moonshot.cn/v1") == .moonshotKimi)
+        #expect(AssistantProviderPreset.infer(baseURL: "https://api.kimi.com/coding/v1") == .kimiCodingPlan)
+        #expect(AssistantProviderPreset.infer(baseURL: "https://api.kimi.ai/coding/v1") == .kimiCodingPlan)
+        #expect(AssistantProviderPreset.infer(baseURL: "https://api.kimi.com/v1") == .custom)
         #expect(AssistantProviderPreset.infer(baseURL: "https://api.groq.com/openai/v1") == .groq)
         #expect(AssistantProviderPreset.infer(baseURL: "http://localhost:11434/v1") == .ollama)
+
+        #expect(AssistantProviderPreset.kimiCodingPlan.title == "Kimi Coding Plan")
+        #expect(AssistantProviderPreset.kimiCodingPlan.shortTitle == "Kimi Coding Plan")
+        #expect(AssistantProviderPreset.kimiCodingPlan.defaultBaseURL == "https://api.kimi.com/coding/v1")
+        #expect(AssistantProviderPreset.kimiCodingPlan.defaultModel == "kimi-for-coding-highspeed")
+        #expect(AssistantProviderPreset.kimiCodingPlan.recommendedModels == ["kimi-for-coding-highspeed", "kimi-for-coding"])
+        #expect(AssistantProviderPreset.kimiCodingPlan.envVarNames.isEmpty)
+        #expect(AssistantProviderPreset.kimiCodingPlan.codexBarProviderIds.isEmpty)
+        #expect(!AssistantProviderPreset.kimiCodingPlan.supportsKeyImport)
 
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-multi-\(UUID().uuidString).json")
@@ -708,7 +796,8 @@ struct AssistantTests {
           "version": 1,
           "providers": [
             { "id": "openrouter", "enabled": true, "apiKey": "sk-or-test" },
-            { "id": "typesafe", "enabled": true, "apiKey": "ts-native-test" }
+            { "id": "typesafe", "enabled": true, "apiKey": "ts-native-test" },
+            { "id": "moonshot", "enabled": true, "apiKey": "sk-moonshot-test" }
           ]
         }
         """
@@ -718,6 +807,9 @@ struct AssistantTests {
         #expect(AssistantConfig.loadAmbientAPIKey(forBaseURL: "https://api.typesafe.ai/v1", configURL: tempURL) == "ts-native-test")
         // DeepSeek is not in the fake CodexBar config, so it must NOT leak the OpenRouter key
         #expect(AssistantConfig.loadAmbientAPIKey(forBaseURL: "https://api.deepseek.com/v1", configURL: tempURL) == nil)
+        #expect(AssistantConfig.loadAmbientAPIKey(forBaseURL: "https://api.moonshot.cn/v1", configURL: tempURL) == "sk-moonshot-test")
+        #expect(AssistantConfig.loadAmbientAPIKey(forBaseURL: "https://api.kimi.com/coding/v1", configURL: tempURL) == nil)
+        #expect(AssistantConfig.ambientKeySourceLabel(forBaseURL: "https://api.kimi.com/coding/v1", configURL: tempURL) == nil)
     }
 
     @Test("Explicitly saved localhost:3425 and 127.0.0.1:3425 custom endpoints survive save/load round-trip and share effective config between Test AI and command execution")

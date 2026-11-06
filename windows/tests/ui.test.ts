@@ -931,6 +931,50 @@ describe("AI key stays with the server it was saved for (#19)", () => {
   });
 });
 
+describe("Kimi Coding Plan preset", () => {
+  function keyField(): HTMLInputElement {
+    return element("#settings-api-key") as HTMLInputElement;
+  }
+
+  it("reopening settings shows the preset with the saved URL, model, and key", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      assistantBaseURL: "https://api.kimi.com/coding/v1",
+      assistantModel: "kimi-for-coding-highspeed",
+      openRouterApiKey: "sk-code",
+      assistantKeyEndpoint: "api.kimi.com",
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click("#btn-settings");
+    const pill = document.querySelector('[data-ai-preset="moonshot_kimi_coding_plan"]');
+    assert.equal(pill?.classList.contains("is-active"), true);
+    assert.equal((element("#settings-base-url") as HTMLInputElement).value, "https://api.kimi.com/coding/v1");
+    assert.equal((element("#settings-model") as HTMLInputElement).value, "kimi-for-coding-highspeed");
+    assert.equal(keyField().value, "sk-code");
+  });
+
+  it("clicking the preset fills the documented defaults and keeps the saved key with its own host", async () => {
+    localStorage.setItem("menumijia.windows.settings.v2", JSON.stringify({
+      connectionMode: "demo",
+      hasCompletedOnboarding: true,
+      assistantBaseURL: "https://openrouter.ai/api/v1",
+      openRouterApiKey: "sk-or-saved",
+    }));
+    new MenuMijiaWindowsApp(element("#app"));
+    await click("#btn-settings");
+    assert.equal(keyField().value, "sk-or-saved");
+
+    await click('[data-ai-preset="moonshot_kimi_coding_plan"]');
+    assert.equal((element("#settings-base-url") as HTMLInputElement).value, "https://api.kimi.com/coding/v1");
+    assert.equal((element("#settings-model") as HTMLInputElement).value, "kimi-for-coding-highspeed");
+    assert.equal(keyField().value, "");
+
+    await click('[data-ai-preset="openrouter_jev"]');
+    assert.equal(keyField().value, "sk-or-saved");
+  });
+});
+
 describe("First cloud AI request asks once (#20)", () => {
   function fakeModel(): string[] {
     const urls: string[] = [];

@@ -35,6 +35,8 @@ struct AssistantEndpointTests {
         #expect(golden.presets.count >= 30)
         for item in golden.presets {
             #expect(AssistantProviderPreset.infer(baseURL: item.url).rawValue == item.preset, "\(item.url)")
+            let expectedIsKimiCode = item.preset == "moonshot_kimi_coding_plan"
+            #expect((AssistantEndpoint(item.url)?.isKimiCodeEndpoint ?? false) == expectedIsKimiCode, "\(item.url)")
         }
         for item in golden.keyTransport {
             let allows = AssistantConfig(baseURL: item.url, model: "m", apiKey: "k").allowsSendingAPIKey

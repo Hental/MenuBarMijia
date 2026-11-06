@@ -9,6 +9,8 @@ public struct AssistantEndpoint: Equatable, Sendable {
     /// Lowercased host without IPv6 brackets or a trailing dot.
     public let host: String
     public let port: Int?
+    /// URL path such as `/coding/v1`; empty when the URL has no path.
+    public let path: String
 
     /// Parses a user-typed endpoint. A missing scheme means https (`api.deepseek.com/v1`).
     public init?(_ raw: String) {
@@ -33,6 +35,7 @@ public struct AssistantEndpoint: Equatable, Sendable {
         self.scheme = scheme
         self.host = host
         self.port = components.port
+        self.path = components.path
     }
 
     /// Host plus explicit port. A custom endpoint's key is bound to this value.
@@ -44,6 +47,15 @@ public struct AssistantEndpoint: Equatable, Sendable {
     /// `domain` itself or one of its subdomains: `api.openrouter.ai` matches `openrouter.ai`, `openrouter.ai.evil.com` does not.
     public func hostMatches(domain: String) -> Bool {
         host == domain || host.hasSuffix("." + domain)
+    }
+
+    /// Kimi Code's coding API (https://www.kimi.com/code/docs/kimi-code/models.html) only accepts the
+    /// model-default temperature (1). The documented `/coding` path segment is required — host-only
+    /// matching would also catch unrelated `api.kimi.com` endpoints.
+    public var isKimiCodeEndpoint: Bool {
+        guard hostMatches(domain: "kimi.com") || hostMatches(domain: "kimi.ai") else { return false }
+        let lowerPath = path.lowercased()
+        return lowerPath == "/coding" || lowerPath.hasPrefix("/coding/")
     }
 
     /// Traffic never leaves this computer.

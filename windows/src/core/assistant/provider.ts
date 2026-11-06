@@ -69,6 +69,14 @@ export const ASSISTANT_PROVIDER_PRESETS: ReadonlyArray<AssistantProviderPresetIn
     keyPlaceholder: "粘贴 Moonshot Kimi API Key (sk-...)",
   },
   {
+    id: "moonshot_kimi_coding_plan",
+    title: "Kimi Coding Plan",
+    shortTitle: "Kimi Coding Plan",
+    defaultBaseURL: "https://api.kimi.com/coding/v1",
+    defaultModel: "kimi-for-coding-highspeed",
+    keyPlaceholder: "粘贴 Kimi Coding Plan API Key (sk-...)",
+  },
+  {
     id: "openai",
     title: "OpenAI",
     shortTitle: "OpenAI",
@@ -115,6 +123,8 @@ export interface AssistantEndpoint {
   /** Lowercased host without IPv6 brackets or a trailing dot. */
   readonly host: string;
   readonly port: number | null;
+  /** Lowercased URL path such as `/coding/v1`; "" when the URL has no path. */
+  readonly path: string;
 }
 
 /** Parses a user-typed endpoint. A missing scheme means https (`api.deepseek.com/v1`). Mirrors macOS `AssistantEndpoint`. */
@@ -134,7 +144,8 @@ export function parseAssistantEndpoint(raw: string): AssistantEndpoint | null {
   if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
   host = host.replace(/\.+$/, "");
   if (!host) return null;
-  return { scheme, host, port: url.port ? Number(url.port) : null };
+  const path = url.pathname === "/" ? "" : url.pathname.toLowerCase();
+  return { scheme, host, port: url.port ? Number(url.port) : null, path };
 }
 
 /** `domain` itself or one of its subdomains: `api.openrouter.ai` matches, `openrouter.ai.evil.com` does not. */
@@ -185,6 +196,18 @@ export function endpointAllowsSendingSecrets(baseURL: string): boolean {
   return endpoint.scheme === "https" || isLocalNetworkEndpoint(endpoint);
 }
 
+/**
+ * Kimi Code's coding API (https://www.kimi.com/code/docs/kimi-code/models.html) only accepts the
+ * model-default temperature (1). The documented `/coding` path segment is required — host-only
+ * matching would also catch unrelated `api.kimi.com` endpoints.
+ */
+export function isKimiCodeEndpoint(baseURL: string): boolean {
+  const endpoint = parseAssistantEndpoint(baseURL);
+  if (!endpoint) return false;
+  if (!endpointHostMatches(endpoint, "kimi.com") && !endpointHostMatches(endpoint, "kimi.ai")) return false;
+  return endpoint.path === "/coding" || endpoint.path.startsWith("/coding/");
+}
+
 /** True when the endpoint may run without an API key (this computer or the local network). */
 export function isLocalAssistantEndpoint(baseURL: string): boolean {
   const endpoint = parseAssistantEndpoint(baseURL);
@@ -220,6 +243,7 @@ export function inferAssistantPreset(baseURL: string): AssistantProviderPresetIn
   if (host === "dashscope.aliyuncs.com" || host === "dashscope-intl.aliyuncs.com") return presetById("dashscope");
   if (is("bigmodel.cn")) return presetById("zhipu_glm");
   if (is("moonshot.cn") || is("moonshot.ai")) return presetById("moonshot_kimi");
+  if (isKimiCodeEndpoint(baseURL)) return presetById("moonshot_kimi_coding_plan");
   if (is("openai.com")) return presetById("openai");
   if (host === "generativelanguage.googleapis.com") return presetById("gemini");
   if (is("groq.com")) return presetById("groq");

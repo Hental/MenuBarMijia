@@ -228,7 +228,7 @@ public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
                 ["role": "system", "content": Self.systemPrompt(catalog: catalog, context: context)],
                 ["role": "user", "content": utterance]
             ],
-            "temperature": 0,
+            "temperature": isKimiCodeEndpoint ? 1 : 0,
             "max_tokens": 800,
             "stream": false
         ]
@@ -397,7 +397,7 @@ public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
                 ["role": "system", "content": system],
                 ["role": "user", "content": userState]
             ],
-            "temperature": 0,
+            "temperature": isKimiCodeEndpoint ? 1 : 0,
             "max_tokens": 600,
             "stream": false
         ]
@@ -426,6 +426,11 @@ public struct ModelIntentResolver: Sendable, AssistantCommandResolving {
             return String(trimmedModel.dropFirst("typesafe/".count))
         }
         return trimmedModel.isEmpty ? "jev-latest" : trimmedModel
+    }
+
+    /// Kimi Code's coding endpoints only accept the model-default temperature (1).
+    private var isKimiCodeEndpoint: Bool {
+        AssistantEndpoint(config.baseURL)?.isKimiCodeEndpoint ?? false
     }
 
     private func effectiveAPIKey() -> String {

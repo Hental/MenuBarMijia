@@ -29,6 +29,7 @@ import {
   endpointAllowsSendingSecrets,
   inferAssistantPreset,
   IntentValidator,
+  isKimiCodeEndpoint,
   partitionHabitReceipt,
   resolveGrokBallEmotion,
 } from "../src/core/assistant.js";
@@ -1347,6 +1348,7 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
         "dashscope",
         "zhipu_glm",
         "moonshot_kimi",
+        "moonshot_kimi_coding_plan",
         "openai",
         "gemini",
         "groq",
@@ -1414,6 +1416,91 @@ describe("LocalIntentParser, DelayPhrase, UndoPhrase, and ModelIntentResolver", 
     assert.deepEqual(dsPlan.intents, [
       { targetId: "dev_ceiling", operation: { kind: "lightEffect", effect: "Night" } },
     ]);
+  });
+
+  it("sends temperature 1 to Kimi Code endpoints while other request fields stay default", async () => {
+    // api.kimi.com/coding only accepts temperature = 1 ("only 1 is allowed for this model").
+    const reply = '{"actions":[{"device":"d1","op":"power","value":true}],"reply":"已打开书房吸顶灯"}';
+    const kimiResolver = new ModelIntentResolver(
+      { baseURL: "https://api.kimi.com/coding/v1", model: "kimi-for-coding-highspeed", apiKey: "sk-kimi-test" },
+      async (req) => {
+        assert.equal(req.url, "https://api.kimi.com/coding/v1/chat/completions");
+        const body = JSON.parse(req.body ?? "{}") as Record<string, unknown>;
+        assert.equal(body["model"], "kimi-for-coding-highspeed");
+        assert.equal(body["temperature"], 1);
+        assert.equal("max_tokens" in body, false);
+        assert.equal(req.timeoutMs, undefined);
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ choices: [{ message: { content: reply } }] }),
+        };
+      }
+    );
+    const kimiPlan = await kimiResolver.resolve("打开书房灯", devices, []);
+    assert.deepEqual(kimiPlan.intents, [
+      { targetId: "dev_ceiling", operation: { kind: "power", isOn: true } },
+    ]);
+
+    const kimiProactive = new ModelIntentResolver(
+      { baseURL: "https://api.kimi.ai/coding/v1", model: "kimi-for-coding", apiKey: "sk-kimi-test" },
+      async (req) => {
+        assert.equal(req.url, "https://api.kimi.ai/coding/v1/chat/completions");
+        const body = JSON.parse(req.body ?? "{}") as Record<string, unknown>;
+        assert.equal(body["temperature"], 1);
+        assert.equal(body["max_tokens"], 600);
+        assert.equal(req.timeoutMs, undefined);
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ choices: [{ message: { content: '{"suggestions":[]}' } }] }),
+        };
+      }
+    );
+    const kimiSuggestions = await kimiProactive.recommendProactiveSuggestions(devices, [], {
+      timeSummary: "夜晚 22:30",
+      environmentSummary: "",
+      activeDevicesSummary: "",
+      habitSummary: "",
+    });
+    assert.deepEqual(kimiSuggestions, []);
+
+    const deepSeekResolver = new ModelIntentResolver(
+      { baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-deepseek-test" },
+      async (req) => {
+        const body = JSON.parse(req.body ?? "{}") as Record<string, unknown>;
+        assert.equal(body["temperature"], 0);
+        assert.equal("max_tokens" in body, false);
+        assert.equal(req.timeoutMs, undefined);
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ choices: [{ message: { content: reply } }] }),
+        };
+      }
+    );
+    await deepSeekResolver.resolve("打开书房灯", devices, []);
+
+    const deepSeekProactive = new ModelIntentResolver(
+      { baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-deepseek-test" },
+      async (req) => {
+        const body = JSON.parse(req.body ?? "{}") as Record<string, unknown>;
+        assert.equal(body["temperature"], 0);
+        assert.equal(body["max_tokens"], 600);
+        assert.equal(req.timeoutMs, undefined);
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ choices: [{ message: { content: '{"suggestions":[]}' } }] }),
+        };
+      }
+    );
+    await deepSeekProactive.recommendProactiveSuggestions(devices, [], {
+      timeSummary: "夜晚 22:30",
+      environmentSummary: "",
+      activeDevicesSummary: "",
+      habitSummary: "",
+    });
   });
 
   it("matches the cross-platform golden JSON corpus shared with MijiaCoreTests", () => {
@@ -1819,6 +1906,8 @@ describe("AI provider detection and key transport (#19)", () => {
     assert.ok(golden.presets.length >= 30);
     for (const item of golden.presets) {
       assert.equal(inferAssistantPreset(item.url).id, item.preset, item.url);
+      const expectedIsKimiCode = item.preset === "moonshot_kimi_coding_plan";
+      assert.equal(isKimiCodeEndpoint(item.url), expectedIsKimiCode, item.url);
     }
     for (const item of golden.keyTransport) {
       assert.equal(endpointAllowsSendingSecrets(item.url), item.allowsKey, item.url);

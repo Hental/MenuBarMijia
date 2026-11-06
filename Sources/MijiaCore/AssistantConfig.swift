@@ -10,6 +10,7 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
     case dashScope = "dashscope"
     case zhipuGLM = "zhipu_glm"
     case moonshotKimi = "moonshot_kimi"
+    case kimiCodingPlan = "moonshot_kimi_coding_plan"
     case openAI = "openai"
     case gemini = "gemini"
     case groq = "groq"
@@ -34,6 +35,8 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
             return L10n.tr("智谱 GLM (BigModel)", "Zhipu GLM (BigModel)")
         case .moonshotKimi:
             return L10n.tr("Moonshot Kimi (月之暗面)", "Moonshot Kimi")
+        case .kimiCodingPlan:
+            return "Kimi Coding Plan"
         case .openAI:
             return "OpenAI"
         case .gemini:
@@ -56,6 +59,7 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         case .dashScope: return L10n.tr("通义千问", "Qwen")
         case .zhipuGLM: return L10n.tr("智谱 GLM", "Zhipu GLM")
         case .moonshotKimi: return "Kimi"
+        case .kimiCodingPlan: return "Kimi Coding Plan"
         case .openAI: return "OpenAI"
         case .gemini: return "Gemini"
         case .groq: return "Groq"
@@ -73,6 +77,7 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         case .dashScope: return "https://dashscope.aliyuncs.com/compatible-mode/v1"
         case .zhipuGLM: return "https://open.bigmodel.cn/api/paas/v4"
         case .moonshotKimi: return "https://api.moonshot.cn/v1"
+        case .kimiCodingPlan: return "https://api.kimi.com/coding/v1"
         case .openAI: return "https://api.openai.com/v1"
         case .gemini: return "https://generativelanguage.googleapis.com/v1beta/openai"
         case .groq: return "https://api.groq.com/openai/v1"
@@ -90,6 +95,7 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         case .dashScope: return "qwen-plus"
         case .zhipuGLM: return "glm-4-flash"
         case .moonshotKimi: return "kimi-k2-0711-preview"
+        case .kimiCodingPlan: return "kimi-for-coding-highspeed"
         case .openAI: return "gpt-4o-mini"
         case .gemini: return "gemini-2.5-flash"
         case .groq: return "llama-3.3-70b-versatile"
@@ -114,6 +120,8 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
             return ["glm-4-flash", "glm-4-plus"]
         case .moonshotKimi:
             return ["kimi-k2-0711-preview", "moonshot-v1-8k"]
+        case .kimiCodingPlan:
+            return ["kimi-for-coding-highspeed", "kimi-for-coding"]
         case .openAI:
             return ["gpt-4o-mini", "gpt-4.1-mini"]
         case .gemini:
@@ -143,6 +151,8 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
             return L10n.tr("粘贴智谱开放平台 API Key", "Paste Zhipu BigModel API Key")
         case .moonshotKimi:
             return L10n.tr("粘贴 Moonshot Kimi API Key (sk-...)", "Paste Moonshot Kimi API Key (sk-...)")
+        case .kimiCodingPlan:
+            return L10n.tr("粘贴 Kimi Coding Plan API Key (sk-...)", "Paste Kimi Coding Plan API Key (sk-...)")
         case .openAI:
             return L10n.tr("粘贴 OpenAI API Key (sk-...)", "Paste OpenAI API Key (sk-...)")
         case .gemini:
@@ -165,6 +175,8 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         case .dashScope: return ["DASHSCOPE_API_KEY"]
         case .zhipuGLM: return ["ZHIPU_API_KEY", "GLM_API_KEY"]
         case .moonshotKimi: return ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+        // The coding plan has no ambient source of its own; Moonshot's variables must not leak into it.
+        case .kimiCodingPlan: return []
         case .openAI: return ["OPENAI_API_KEY"]
         case .gemini: return ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
         case .groq: return ["GROQ_API_KEY"]
@@ -183,6 +195,8 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         case .dashScope: return ["dashscope", "qwen", "bailian"]
         case .zhipuGLM: return ["zhipu", "glm", "bigmodel"]
         case .moonshotKimi: return ["moonshot", "kimi"]
+        // No CodexBar ids: a Moonshot/"kimi" entry there is a Moonshot key, not a coding-plan key.
+        case .kimiCodingPlan: return []
         case .openAI: return ["openai", "codex"]
         case .gemini: return ["gemini", "google"]
         case .groq: return ["groq"]
@@ -208,6 +222,7 @@ public enum AssistantProviderPreset: String, CaseIterable, Identifiable, Sendabl
         if host == "dashscope.aliyuncs.com" || host == "dashscope-intl.aliyuncs.com" { return .dashScope }
         if endpoint.hostMatches(domain: "bigmodel.cn") { return .zhipuGLM }
         if endpoint.hostMatches(domain: "moonshot.cn") || endpoint.hostMatches(domain: "moonshot.ai") { return .moonshotKimi }
+        if endpoint.isKimiCodeEndpoint { return .kimiCodingPlan }
         if endpoint.hostMatches(domain: "openai.com") { return .openAI }
         if host == "generativelanguage.googleapis.com" { return .gemini }
         if endpoint.hostMatches(domain: "groq.com") { return .groq }

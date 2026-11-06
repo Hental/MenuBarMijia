@@ -9,6 +9,7 @@ import {
   endpointAllowsSendingSecrets,
   endpointHostMatches,
   INSECURE_ENDPOINT_MESSAGE,
+  isKimiCodeEndpoint,
   parseAssistantEndpoint,
   type AssistantConfig,
 } from "./provider.js";
@@ -116,11 +117,13 @@ export class ModelIntentResolver {
       return proactiveSuggestionsFromSystemOne(resp.body, devices, scenes);
     }
     const url = this.endpointURL("/chat/completions");
+    const proactiveBody = buildProactiveChatRequestBody(this.config.model, context, catalog);
+    if (isKimiCodeEndpoint(this.config.baseURL)) proactiveBody["temperature"] = 1;
     const resp = await this.transport({
       url,
       method: "POST",
       headers,
-      body: JSON.stringify(buildProactiveChatRequestBody(this.config.model, context, catalog)),
+      body: JSON.stringify(proactiveBody),
     });
     if (resp.status !== 200) {
       throw new Error(this.friendlyHttpError(resp.status));
@@ -329,7 +332,7 @@ export class ModelIntentResolver {
           { role: "system", content: prompt },
           { role: "user", content: utterance },
         ],
-        temperature: 0,
+        temperature: isKimiCodeEndpoint(this.config.baseURL) ? 1 : 0,
       }),
     });
 
